@@ -1,0 +1,23 @@
+version: "3.9"
+services:
+  citadel:
+    build:
+      context: .
+      args:
+        PROFILE: ${PROFILE:-citadel}
+        TARGET_UID: ${UID:-1000}
+        TARGET_GID: ${GID:-1000}
+    image: daftcitadel:${PROFILE:-citadel}
+    environment:
+      - DISPLAY=${DISPLAY}
+      - CITADEL_HOME=/home/daftpunk/DaftCitadel
+      - PULSE_SERVER=${PULSE_SERVER:-unix:/tmp/pulse-native}
+    volumes:
+      - citadel-data:/home/daftpunk/DaftCitadel
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XDG_RUNTIME_DIR:-/run/user/1000}/pulse:/tmp/pulse-native:ro
+    devices:
+      - /dev/snd:/dev/snd
+    command: ["/bin/bash"]
+volumes:
+  citadel-data:
