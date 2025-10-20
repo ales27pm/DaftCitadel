@@ -1,0 +1,35 @@
+QMainWindow {
+    background-color: #0b0b11;
+}
+QPushButton {
+    background-color: #ff4d00;
+    color: #ffffff;
+    border: 1px solid #00e5ff;
+    padding: 8px 14px;
+    font-family: "Orbitron";
+    font-size: 15px;
+    letter-spacing: 1px;
+}
+QPushButton:hover {
+    background-color: #ff6f1a;
+}
+QComboBox, QSpinBox, QListWidget {
+    background-color: #141426;
+    color: #00e5ff;
+    border: 1px solid #00e5ff;
+    selection-background-color: #1f1f33;
+}
+QPlainTextEdit {
+    background-color: #080810;
+    color: #0dffef;
+    font-family: "JetBrains Mono", "Courier New", monospace;
+    font-size: 12px;
+}
+QLabel {
+    color: #00e5ff;
+    font-family: "Orbitron";
+    font-size: 14px;
+}
+QSplitter::handle {
+    background-color: #00e5ff;
+}

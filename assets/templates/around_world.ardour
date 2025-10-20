@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Session version="7001" name="Daft_around_world" sample-rate="48000" meter-denominator="4" meter-numerator="4" tempo="120000">
+  <Metadata>
+    <Description>Around the World template with filtered Surge bass, vocoder pads, and TR-909 drums.</Description>
+  </Metadata>
+  <Routes>
+    <Route name="TR-909 Kit" default-type="audio" remote-control-id="5">
+      <Processor id="0" name="a-FluidSynth" type="instrument"/>
+      <Processor id="1" name="Calf Compressor" type="lv2"/>
+    </Route>
+    <Route name="Surge Bass" default-type="audio" remote-control-id="6">
+      <Processor id="0" name="Surge XT" type="vst3"/>
+      <Processor id="1" name="ValhallaSupermassive" type="vst3"/>
+    </Route>
+    <Route name="Vocoder Pads" default-type="audio" remote-control-id="7">
+      <Processor id="0" name="TAL-Vocoder" type="lv2"/>
+      <Processor id="1" name="Calf Rotary Speaker" type="lv2"/>
+    </Route>
+    <Route name="FX Bus" default-type="bus" remote-control-id="8">
+      <Processor id="0" name="Dragonfly Plate Reverb" type="lv2"/>
+      <Processor id="1" name="Calf Stereo Tools" type="lv2"/>
+    </Route>
+  </Routes>
+</Session>
