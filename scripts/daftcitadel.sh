@@ -13,6 +13,7 @@ PROFILE="citadel"
 AUTO=false
 GPU_OFF=false
 DAW_PATH="/usr/lib/lv2:/usr/lib/vst3:/usr/lib/ladspa:$HOME/.lv2:$HOME/.vst3:$HOME/.vst"
+DAW_PATH_OVERRIDE=false
 TARGET_USER=""
 CONTAINER_MODE=false
 WITH_REAPER=false
@@ -41,7 +42,10 @@ for arg in "$@"; do
         --profile=*) PROFILE="${arg#*=}" ;;
         --auto) AUTO=true ;;
         --gpu-off) GPU_OFF=true ;;
-        --daw-path=*) DAW_PATH="${arg#*=}" ;;
+        --daw-path=*)
+            DAW_PATH="${arg#*=}"
+            DAW_PATH_OVERRIDE=true
+            ;;
         --user=*) TARGET_USER="${arg#*=}" ;;
         --container) CONTAINER_MODE=true ;;
         --with-reaper) WITH_REAPER=true ;;
@@ -128,6 +132,28 @@ dl() {
     curl -L --fail --retry 5 --retry-all-errors --progress-bar "$url" -o "$dest"
 }
 
+verify_sha256() {
+    local file="$1"
+    local expected="$2"
+    local actual
+    actual=$(sha256sum "$file" | awk '{print $1}')
+    if [[ "$actual" != "$expected" ]]; then
+        log "[ERR] SHA256 mismatch for $file"
+        log "[ERR] Expected: $expected"
+        log "[ERR] Actual:   $actual"
+        exit 1
+    fi
+    log "[CHECK] Verified $file"
+}
+
+download_and_verify() {
+    local url="$1"
+    local dest="$2"
+    local sha="$3"
+    dl "$url" "$dest"
+    verify_sha256 "$dest" "$sha"
+}
+
 extract_zip_as_user() {
     local archive="$1"
     local dest="$2"
@@ -138,6 +164,10 @@ extract_zip_as_user() {
 require_root
 require_distro
 resolve_user
+
+if ! $DAW_PATH_OVERRIDE; then
+    DAW_PATH="/usr/lib/lv2:/usr/lib/vst3:/usr/lib/ladspa:$USER_HOME/.lv2:$USER_HOME/.vst3:$USER_HOME/.vst"
+fi
 
 PROFILE="${PROFILE,,}"
 case "$PROFILE" in
@@ -295,25 +325,25 @@ if $ENABLE_EXPANDED_SYNTHS; then
 fi
 apt_install "${CORE_PLUGINS[@]}"
 
-# Surge XT
-if [[ ! -f /tmp/surge.deb ]]; then
-    dl "https://github.com/surge-synthesizer/releases-xt/releases/download/1.3.6/surge-xt-linux-x64-1.3.6.deb" /tmp/surge.deb
-fi
+SURGE_URL="https://github.com/surge-synthesizer/releases-xt/releases/download/1.3.4/surge-xt-linux-x64-1.3.4.deb"
+SURGE_SHA256="a6e55064487f624147d515b9ae5fc79a568b69746675b2083abde628ca7bb151"
+HELM_URL="https://tytel.org/static/dist/helm_0.9.0_amd64_r.deb"
+HELM_SHA256="aedf8b676657f72782513e5ad5f9c61a6bc21fe9357b23052928adafa8215eca"
+
+download_and_verify "$SURGE_URL" /tmp/surge.deb "$SURGE_SHA256"
 apt-get install -y /tmp/surge.deb || apt-get -f install -y
 rm -f /tmp/surge.deb
 
-# Helm
-if [[ ! -f /tmp/helm.deb ]]; then
-    dl "https://tytel.org/static/dist/helm_0.9.0_amd64_r.deb" /tmp/helm.deb
-fi
+download_and_verify "$HELM_URL" /tmp/helm.deb "$HELM_SHA256"
 apt-get install -y /tmp/helm.deb || apt-get -f install -y
 rm -f /tmp/helm.deb
 
 if $ENABLE_EXPANDED_SYNTHS; then
     # Vital
-    if [[ ! -f /tmp/vital.zip ]]; then
-        dl "https://get.vital.audio/Vital-1.5.5.lin.zip" /tmp/vital.zip
-    fi
+    # Vital distributes binaries under an EULA; curated hash from nixpkgs ensures tamper detection.
+    VITAL_URL="https://builds.vital.audio/VitalAudio/vital/1_5_5/VitalInstaller.zip"
+    VITAL_SHA256="842c17494881074629435a0de9a74ba6bc00a1e97a7fbdad046e5f11beb53822"
+    download_and_verify "$VITAL_URL" /tmp/vital.zip "$VITAL_SHA256"
     unzip -o /tmp/vital.zip -d /tmp/vital
     /tmp/vital/install.sh --no-register || true
     rm -rf /tmp/vital /tmp/vital.zip
@@ -407,9 +437,7 @@ fi
 log "[THEME] Downloading Daft Punk themed assets"
 dl "https://upload.wikimedia.org/wikipedia/commons/d/d5/Daft_Punk_Live_2006.jpg" "$THEME_DIR/background.jpg"
 dl "https://upload.wikimedia.org/wikipedia/commons/7/72/Daft_Punk_logo.svg" "$THEME_DIR/icon.svg"
-if command -v convert >/dev/null 2>&1; then
-    convert "$THEME_DIR/icon.svg" "$THEME_DIR/icon.png"
-fi
+# ImageMagick is installed later for GUI-capable profiles; rasterization occurs after install.
 cat >"$THEME_DIR/style.qss" <<'EOF_QSS'
 QMainWindow {
     background-color: #0b0b11;
@@ -452,6 +480,11 @@ chown -R "$USER_NAME:$USER_NAME" "$THEME_DIR"
 if $ENABLE_GUI; then
     log "[PY] Creating Python virtual environment and installing libraries"
     apt_install python3 python3-venv python3-pip python3-dev build-essential libasound2-dev libsndfile1-dev libportmidi-dev imagemagick fonts-orbitron fonts-roboto fonts-jetbrains-mono
+    if command -v convert >/dev/null 2>&1; then
+        convert "$THEME_DIR/icon.svg" "$THEME_DIR/icon.png"
+    else
+        log "[WARN] ImageMagick convert not available; skipping icon rasterization"
+    fi
     as_user "python3 -m venv '$VENV'"
     as_user "source '$VENV/bin/activate' && pip install --upgrade pip"
     if $ENABLE_AI; then
@@ -1222,13 +1255,22 @@ else
 fi
 
 log "[ENV] Exporting DAW paths to user profile"
-cat >>"$USER_HOME/.profile" <<EOF_PROFILE
+PROFILE_BLOCK_START="# >>> DaftCitadel profile >>>"
+PROFILE_BLOCK_END="# <<< DaftCitadel profile <<<"
+touch "$USER_HOME/.profile"
+if ! grep -q "$PROFILE_BLOCK_START" "$USER_HOME/.profile"; then
+    cat >>"$USER_HOME/.profile" <<EOF_PROFILE
+$PROFILE_BLOCK_START
 export CITADEL_DAW_PATH="$DAW_PATH"
-export LV2_PATH="${LV2_PATH:-$DAW_PATH}"
-export VST3_PATH="${VST3_PATH:-$DAW_PATH}"
-export VST_PATH="${VST_PATH:-$DAW_PATH}"
+export LV2_PATH="\${LV2_PATH:-$DAW_PATH}"
+export VST3_PATH="\${VST3_PATH:-$DAW_PATH}"
+export VST_PATH="\${VST_PATH:-$DAW_PATH}"
 export CITADEL_HOME="$BASE"
+$PROFILE_BLOCK_END
 EOF_PROFILE
+else
+    log "[SKIP] Profile exports already present"
+fi
 chown "$USER_NAME:$USER_NAME" "$USER_HOME/.profile"
 
 log "[GIT] Initializing git repository for Citadel assets"
@@ -1247,7 +1289,9 @@ fi
 log "Ardour template directory: $BASE/Templates"
 log "NOTE: Log out/in to finalize audio group membership."
 
-if ! $CONTAINER_MODE && confirm "Reboot system now?"; then
+if $CONTAINER_MODE; then
+    log "[FINAL] Deployment complete (reboot not applicable in container)"
+elif confirm "Reboot system now?"; then
     log "[REBOOT] Rebooting to finalize configuration"
     reboot
 fi

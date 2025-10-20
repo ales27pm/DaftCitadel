@@ -24,10 +24,10 @@ sudo ./daft_apex_allinone.sh --auto        # streamlined stack
 
 Additional flags that can be applied to any wrapper or to `scripts/daftcitadel.sh` directly:
 
-- `--gpu-off` &mdash; skips CUDA tooling.
-- `--daw-path=PATH` &mdash; overrides plugin discovery paths exported to the login profile.
-- `--with-reaper` &mdash; installs the Reaper evaluation build without prompting.
-- `--skip-assets` &mdash; skips large sample and preset downloads (useful for constrained environments).
+- `--gpu-off` &mdash; skip CUDA tooling.
+- Use `--daw-path=PATH` to override the plugin discovery paths exported to the login profile.
+- Pass `--with-reaper` to include the Reaper evaluation build without prompting.
+- Add `--skip-assets` when you want to omit large sample and preset downloads (useful for constrained environments).
 
 All runs log to `~/daft_citadel.log` and emit a profile manifest at `~/DaftCitadel/citadel_profile.json` for the GUI to consume.
 
@@ -65,7 +65,7 @@ $CITADEL_HOME/.venv/bin/python $CITADEL_HOME/citadel_gui.py
 
 ## Repository layout
 
-```
+```text
 .
 ├── Dockerfile
 ├── docker-compose.yml
