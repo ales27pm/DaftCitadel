@@ -40,6 +40,7 @@ dl(){ local url="$1" dest="$2"; echo "[DL] $url -> $dest" | tee -a "$LOG"; mkdir
 # --- Preflight ---
 echo "[SYS] Updating…" | tee -a "$LOG"
 apt-get update -y
+apt_install software-properties-common
 apt-get upgrade -y
 add-apt-repository -y universe
 add-apt-repository -y multiverse
