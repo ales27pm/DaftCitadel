@@ -569,7 +569,7 @@ as_user "rm -rf ~/.cache/ardour*/plugin_metadata ~/.cache/lv2 2>/dev/null"
 as_user "cd '$BASE' && { [ -d .git ] || git init >/dev/null 2>&1; } && if [ -n \"\$(git status --porcelain)\" ]; then git add . && git commit -m 'Citadel Forge v5.3' >/dev/null 2>&1; fi"
 
 # --- Final ---
-cat <<'MSG'
+cat <<MSG
 
 ────────────────────────────────────────────────────────
 [CITADEL ONLINE]
