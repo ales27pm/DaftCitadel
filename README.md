@@ -68,6 +68,10 @@ $CITADEL_HOME/.venv/bin/python $CITADEL_HOME/citadel_gui.py
 ```text
 .
 ├── Dockerfile
+├── assets/
+│   ├── python/                # PySide6 GUI + trainer sources
+│   ├── templates/             # Ardour session templates
+│   └── theme/                 # Citadel Qt stylesheet
 ├── docker-compose.yml
 ├── scripts/
 │   └── daftcitadel.sh         # unified installer

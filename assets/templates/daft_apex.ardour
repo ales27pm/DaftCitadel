@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Session version="7001" name="Daft_Apex" sample-rate="48000" meter-denominator="4" meter-numerator="4" tempo="124000">
+  <Metadata>
+    <Description>Streamlined Daft Apex template with Surge and Helm layers.</Description>
+  </Metadata>
+  <Routes>
+    <Route name="Helm Bass" default-type="audio" remote-control-id="1">
+      <Processor id="0" name="Helm" type="vst3"/>
+      <Processor id="1" name="Dragonfly Hall Reverb" type="lv2"/>
+    </Route>
+    <Route name="Surge Lead" default-type="audio" remote-control-id="2">
+      <Processor id="0" name="Surge XT" type="vst3"/>
+      <Processor id="1" name="Calf Filter" type="lv2"/>
+    </Route>
+    <Route name="Beat Bus" default-type="audio" remote-control-id="3">
+      <Processor id="0" name="a-FluidSynth" type="instrument"/>
+      <Processor id="1" name="Calf Compressor" type="lv2"/>
+    </Route>
+  </Routes>
+</Session>
