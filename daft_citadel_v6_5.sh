@@ -104,7 +104,12 @@ log "[IGNITION] Citadel v6.5 Deployment - $(date)"
 log "[SYS] Updating system packages"
 apt-get update -y
 apt-get upgrade -y
-add-apt-repository -y universe multiverse restricted
+if ! command -v add-apt-repository >/dev/null 2>&1; then
+    apt_install software-properties-common
+fi
+for component in universe multiverse restricted; do
+    add-apt-repository -y "$component"
+done
 apt-get update -y
 
 log "[AUDIO] Installing PipeWire/JACK and configuring realtime"
