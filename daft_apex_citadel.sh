@@ -20,7 +20,7 @@ confirm() { $AUTO && return 0; read -r -p "$1 [y/N]: " a; [[ "${a,,}" =~ ^y(es)?
 grep -qi Ubuntu /etc/os-release || { echo "[ERR] Target: Ubuntu 24.04+."; exit 1; }
 
 # --- Resolve invoking user ---
-USER_NAME="${SUDO_USER:-$(logname 2>/dev/null || true)}"
+USER_NAME="${SUDO_USER:-$(logname 2>/dev/null || echo "")}" 
 [[ -n "${USER_NAME:-}" ]] || { echo "[ERR] Cannot resolve non-root username."; exit 1; }
 USER_HOME="$(getent passwd "$USER_NAME" | cut -d: -f6)"
 [[ -d "$USER_HOME" ]] || { echo "[ERR] Cannot resolve home for $USER_NAME."; exit 1; }
@@ -52,8 +52,20 @@ apt_install pipewire pipewire-jack pipewire-pulse wireplumber \
             ubuntustudio-pipewire-config dbus-user-session
 
 getent group realtime >/dev/null || groupadd -r realtime
-usermod -a -G audio "$USER_NAME" || true
-usermod -a -G realtime "$USER_NAME" || true
+if ! id -nG "$USER_NAME" | grep -q "\baudio\b"; then
+  if usermod -a -G audio "$USER_NAME"; then
+    echo "[AUDIO] Added $USER_NAME to audio group" | tee -a "$LOG"
+  else
+    echo "[WARN] Failed to add $USER_NAME to audio group" | tee -a "$LOG"
+  fi
+fi
+if ! id -nG "$USER_NAME" | grep -q "\brealtime\b"; then
+  if usermod -a -G realtime "$USER_NAME"; then
+    echo "[AUDIO] Added $USER_NAME to realtime group" | tee -a "$LOG"
+  else
+    echo "[WARN] Failed to add $USER_NAME to realtime group" | tee -a "$LOG"
+  fi
+fi
 
 mkdir -p /etc/security/limits.d
 cat >/etc/security/limits.d/audio.conf <<'EOF2'
@@ -63,14 +75,37 @@ cat >/etc/security/limits.d/audio.conf <<'EOF2'
 @realtime -  memlock    unlimited
 EOF2
 
-loginctl enable-linger "$USER_NAME" || true
+if command -v loginctl >/dev/null 2>&1; then
+  LINGER_STATE=$(loginctl show-user "$USER_NAME" -p Linger 2>/dev/null | cut -d= -f2 || echo "")
+  if [[ "$LINGER_STATE" != "yes" ]]; then
+    if loginctl enable-linger "$USER_NAME"; then
+      echo "[SYS] Enabled linger for $USER_NAME" | tee -a "$LOG"
+    else
+      echo "[WARN] Could not enable linger for $USER_NAME" | tee -a "$LOG"
+    fi
+  fi
+else
+  echo "[WARN] loginctl not available; skipping linger enable." | tee -a "$LOG"
+fi
 as_user "mkdir -p ~/.config/daftcitadel ~/.config/autostart"
 cat >"$USER_HOME/.config/daftcitadel/first-login.sh" <<'EOS'
 #!/usr/bin/env bash
 set -euo pipefail
-systemctl --user enable --now pipewire pipewire-pulse wireplumber || true
-pw-metadata -n settings 0 clock.force-quantum 64 || true
-rm -f "$HOME/.config/autostart/daftcitadel-first-login.desktop" "$HOME/.config/daftcitadel/first-login.sh" || true
+if command -v systemctl >/dev/null 2>&1; then
+  if ! systemctl --user enable --now pipewire pipewire-pulse wireplumber; then
+    echo "[WARN] Unable to enable PipeWire services" >&2
+  fi
+else
+  echo "[WARN] systemctl unavailable; cannot enable PipeWire services" >&2
+fi
+if command -v pw-metadata >/dev/null 2>&1; then
+  if ! pw-metadata -n settings 0 clock.force-quantum 64; then
+    echo "[WARN] Unable to set PipeWire quantum" >&2
+  fi
+else
+  echo "[WARN] pw-metadata not found; skipping quantum configuration" >&2
+fi
+rm -f "$HOME/.config/autostart/daftcitadel-first-login.desktop" "$HOME/.config/daftcitadel/first-login.sh"
 EOS
 chmod +x "$USER_HOME/.config/daftcitadel/first-login.sh"
 cat >"$USER_HOME/.config/autostart/daftcitadel-first-login.desktop" <<EOD
@@ -85,12 +120,44 @@ chown -R "$USER_NAME:$USER_NAME" "$USER_HOME/.config/daftcitadel" "$USER_HOME/.c
 
 # --- Kernel & memory tuning ---
 echo "[TUNE] governor=performance, swappiness=1" | tee -a "$LOG"
-for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do [[ -w "$g" ]] && echo performance > "$g" || true; done
+count=0
+for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+  if [[ -w "$g" ]] && echo performance > "$g" 2>/dev/null; then
+    ((count++))
+  fi
+done
+if [[ $count -eq 0 ]]; then
+  echo "[WARN] Could not set CPU governor to performance (may require manual configuration)." | tee -a "$LOG"
+fi
 sysctl_set vm.swappiness 1
 
 # --- GPU / CUDA (non-intrusive) ---
-if ! $GPU_OFF && lspci | grep -qi nvidia; then
-  echo "[GPU] NVIDIA → install CUDA toolkit (keep your driver)" | tee -a "$LOG"
+gpu_detect() {
+  GPU_METHOD=""
+  if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+    GPU_METHOD="nvidia-smi"
+    return 0
+  fi
+  if [[ -e /proc/driver/nvidia/version ]]; then
+    GPU_METHOD="/proc/driver/nvidia"
+    return 0
+  fi
+  local drivers=(/sys/bus/pci/devices/*/driver)
+  for drv in "${drivers[@]}"; do
+    [[ -e "$drv" ]] || continue
+    if readlink "$drv" 2>/dev/null | grep -qi nvidia; then
+      GPU_METHOD="$drv"
+      return 0
+    fi
+  done
+  if command -v lspci >/dev/null 2>&1 && lspci | grep -qi nvidia; then
+    GPU_METHOD="lspci"
+    return 0
+  fi
+  return 1
+}
+if ! $GPU_OFF && gpu_detect; then
+  echo "[GPU] NVIDIA detected via $GPU_METHOD → install CUDA toolkit (keep your driver)" | tee -a "$LOG"
   apt_install nvidia-cuda-toolkit
   as_user 'grep -q CUDA_VISIBLE_DEVICES ~/.bashrc || echo "export CUDA_VISIBLE_DEVICES=0" >> ~/.bashrc'
 else
@@ -99,14 +166,24 @@ fi
 
 # --- DAWs & hosts ---
 echo "[DAW] Ardour, LMMS, Carla, tools…" | tee -a "$LOG"
-apt_install ardour lmms carla carla-lv2 carla-vst \
-            qjackctl pulseaudio-utils p7zip-full unzip zip wget curl git pv
+if dpkg -l | grep -q "^ii  ardour"; then
+  echo "[DAW] Core DAW packages already installed; skipping." | tee -a "$LOG"
+else
+  apt_install ardour lmms carla carla-lv2 carla-vst \
+              qjackctl pulseaudio-utils p7zip-full unzip zip wget curl git pv
+fi
 
 # Optional: Reaper
 REAPER_URL="https://www.reaper.fm/files/7.x/reaper712_linux_x86_64.tar.xz"
+REAPER_SHA="b9686aac85fa7b8912a04cf99884232304977d7b615ce607b1a2b4dd19f18fd4"
 if $AUTO; then INSTALL_REAPER=false; else confirm "[OPT] Install Reaper as alt DAW?" && INSTALL_REAPER=true || INSTALL_REAPER=false; fi
 if $INSTALL_REAPER; then
   TMP=/tmp/reaper.tar.xz; dl "$REAPER_URL" "$TMP"
+  if ! echo "$REAPER_SHA  $TMP" | sha256sum -c -; then
+    echo "[ERR] Reaper checksum mismatch" | tee -a "$LOG"
+    rm -f "$TMP"
+    exit 1
+  fi
   mkdir -p /opt/reaper && tar -xJf "$TMP" --strip-components=1 -C /opt/reaper
   ln -sf /opt/reaper/reaper /usr/local/bin/reaper
   rm -f "$TMP"
@@ -119,14 +196,40 @@ apt_install yoshimi zynaddsubfx hydrogen \
 
 # --- Plugins (official .debs) ---
 echo "[PLUGINS] Surge XT & Helm…" | tee -a "$LOG"
-SURGE_DEB="/tmp/surge-xt-linux-x64-1.3.4.deb"
-dl "https://github.com/surge-synthesizer/releases-xt/releases/download/1.3.4/surge-xt-linux-x64-1.3.4.deb" "$SURGE_DEB"
-apt-get install -y "$SURGE_DEB" || apt-get -f install -y
-rm -f "$SURGE_DEB"
-HELM_DEB="/tmp/helm_0.9.0_amd64_r.deb"
-dl "https://tytel.org/static/dist/helm_0.9.0_amd64_r.deb" "$HELM_DEB"
-apt-get install -y "$HELM_DEB" || apt-get -f install -y
-rm -f "$HELM_DEB"
+if dpkg -l | grep -q "^ii  surge-xt"; then
+  echo "[PLUGINS] Surge XT already installed; skipping." | tee -a "$LOG"
+else
+  SURGE_DEB="/tmp/surge-xt-linux-x64-1.3.4.deb"
+  SURGE_SHA="a6e55064487f624147d515b9ae5fc79a568b69746675b2083abde628ca7bb151"
+  dl "https://github.com/surge-synthesizer/releases-xt/releases/download/1.3.4/surge-xt-linux-x64-1.3.4.deb" "$SURGE_DEB"
+  if ! echo "$SURGE_SHA  $SURGE_DEB" | sha256sum -c -; then
+    echo "[ERR] Surge XT checksum mismatch" | tee -a "$LOG"
+    rm -f "$SURGE_DEB"
+    exit 1
+  fi
+  if ! apt-get install -y "$SURGE_DEB"; then
+    apt-get install -f -y
+    apt-get install -y "$SURGE_DEB"
+  fi
+  rm -f "$SURGE_DEB"
+fi
+if dpkg -l | grep -q "^ii  helm"; then
+  echo "[PLUGINS] Helm already installed; skipping." | tee -a "$LOG"
+else
+  HELM_DEB="/tmp/helm_0.9.0_amd64_r.deb"
+  HELM_SHA="aedf8b676657f72782513e5ad5f9c61a6bc21fe9357b23052928adafa8215eca"
+  dl "https://tytel.org/static/dist/helm_0.9.0_amd64_r.deb" "$HELM_DEB"
+  if ! echo "$HELM_SHA  $HELM_DEB" | sha256sum -c -; then
+    echo "[ERR] Helm checksum mismatch" | tee -a "$LOG"
+    rm -f "$HELM_DEB"
+    exit 1
+  fi
+  if ! apt-get install -y "$HELM_DEB"; then
+    apt-get install -f -y
+    apt-get install -y "$HELM_DEB"
+  fi
+  rm -f "$HELM_DEB"
+fi
 
 # --- SoundFonts & FluidSynth ---
 echo "[MIDI] FluidSynth + GM SoundFonts…" | tee -a "$LOG"
@@ -141,8 +244,18 @@ echo "[PY] venv + libs…" | tee -a "$LOG"
 apt_install python3 python3-venv python3-pip python3-dev build-essential \
             libasound2-dev libsndfile1-dev libportmidi-dev
 as_user "python3 -m venv '$VENV'"
-as_user "'$VENV/bin/pip' install --upgrade pip"
-as_user "'$VENV/bin/pip' install torch mido midiutil music21 pygame isobar || '$VENV/bin/pip' install git+https://github.com/ideoforms/isobar.git#egg=isobar"
+cat >"$BASE/requirements.txt" <<'REQ'
+torch==2.3.1
+mido==1.3.0
+midiutil==1.2.1
+music21==9.1.0
+pygame==2.5.2
+PySide6==6.7.1
+isobar==0.2.1
+REQ
+chown "$USER_NAME:$USER_NAME" "$BASE/requirements.txt"
+as_user "'$VENV/bin/pip' install --upgrade pip setuptools wheel"
+as_user "'$VENV/bin/pip' install -r '$BASE/requirements.txt' || '$VENV/bin/pip' install git+https://github.com/ideoforms/isobar.git@v1.3.0#egg=isobar"
 
 # --- Citadel hub (quick riff) ---
 cat >"$BASE/citadel_hub.py" <<'PY'
@@ -203,6 +316,9 @@ def parse_sequences():
                 if isinstance(el, note.Note): toks.append(str(el.pitch))
                 elif isinstance(el, chord.Chord): toks.append(".".join(n.nameWithOctave for n in el.pitches))
         except Exception as e: print(f"[WARN] parse {p}: {e}")
+    if not toks:
+        print("[WARN] No note tokens extracted; using fallback C-major scale for training.")
+        toks=["C4","D4","E4","F4","G4","A4","B4"]
     vocab=sorted(set(toks)); tok2i={t:i for i,t in enumerate(vocab)}; i2tok={i:t for t,i in tok2i.items()}
     seq=[tok2i[t] for t in toks]; X,Y=[],[]
     for i in range(0,len(seq)-33): X.append(seq[i:i+32]); Y.append(seq[i+1:i+33])
@@ -237,10 +353,23 @@ def sample(style="da_funk", bars=16, tempo=124):
         out.append(nxt); seq=seq[1:]+[nxt]
     trk,t=0,0; mf=MIDIFile(1); mf.addTempo(trk,0,tempo)
     for idx in out:
-        tok=i2tok[idx]
+        tok=i2tok.get(idx)
+        if tok is None:
+            print(f"[WARN] Unknown token index {idx}; skipping")
+            continue
         if "." in tok:
-            for nm in tok.split("."): mf.addNote(trk,0,note.Note(nm).pitch.midi,t,0.25,100)
-        else: mf.addNote(trk,0,note.Note(tok).pitch.midi,t,0.25,100)
+            for nm in tok.split("."):
+                try:
+                    mf.addNote(trk,0,note.Note(nm).pitch.midi,t,0.25,100)
+                except (ValueError, AttributeError) as exc:
+                    print(f"[WARN] Invalid token '{nm}': {exc}")
+                    continue
+        else:
+            try:
+                mf.addNote(trk,0,note.Note(tok).pitch.midi,t,0.25,100)
+            except (ValueError, AttributeError) as exc:
+                print(f"[WARN] Invalid token '{tok}': {exc}")
+                continue
         t+=0.25
     outp=MIDIS/f"daft_gen_{style}.mid"
     with open(outp,"wb") as f: mf.writeFile(f)
@@ -278,8 +407,7 @@ XML
 chown "$USER_NAME:$USER_NAME" "$BASE/Templates/daft_chain.ardour"
 
 # --- GUI (PySide6) ---
-echo "[GUI] Installing PySide6 + app…" | tee -a "$LOG"
-as_user "'$VENV/bin/pip' install PySide6"
+echo "[GUI] App setup (PySide6 already installed)…" | tee -a "$LOG"
 cat > "$BASE/citadel_gui.py" <<'PY'
 import json, os, subprocess, sys
 from pathlib import Path
@@ -297,9 +425,18 @@ def load_cfg():
     return {"quantum": 64}
 def save_cfg(d): CFG.write_text(json.dumps(d, indent=2))
 def run_user(cmd, env=None):
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
-    for line in p.stdout or []: yield line.rstrip()
-    p.wait(); yield f"[exit {p.returncode}]"
+    try:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+        try:
+            for line in p.stdout or []:
+                yield line.rstrip()
+            p.wait(timeout=120)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            yield f"[TIMEOUT] Command exceeded 120s: {' '.join(cmd)}"
+        yield f"[exit {p.returncode}]"
+    except Exception as exc:
+        yield f"[ERROR] {exc}"
 class Log(QtWidgets.QPlainTextEdit):
     def __init__(self): super().__init__(); self.setReadOnly(True); self.setMaximumBlockCount(10000)
     def ln(self, s): self.appendPlainText(s)
@@ -396,20 +533,22 @@ cat >"$USER_HOME/.local/share/applications/citadel-gui.desktop" <<DESK
 [Desktop Entry]
 Type=Application
 Name=Daft Citadel (GUI)
-Exec=$VENV/bin/python $BASE/citadel_gui.py
+Exec="$VENV/bin/python" "$BASE/citadel_gui.py"
 Icon=multimedia-volume-control
 Terminal=false
 Categories=AudioVideo;Audio;Midi;Music;
 DESK
 chown "$USER_NAME:$USER_NAME" "$USER_HOME/.local/share/applications/citadel-gui.desktop"
-as_user "update-desktop-database ~/.local/share/applications || true"
+as_user "if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database ~/.local/share/applications; fi"
 
 # --- Clean plugin env (separate per format) ---
 PATCH="$USER_HOME/fix_citadel_paths.sh"
 cat > "$PATCH" <<'SH'
 set -euo pipefail
 PROF="$HOME/.profile"
-sed -i '/^# Citadel DAW plugin paths/,$d' "$PROF" || true
+if ! sed -i '/^# Citadel DAW plugin paths/,$d' "$PROF" 2>/dev/null; then
+  echo "[WARN] Unable to clean existing plugin path block in $PROF" >&2
+fi
 cat >> "$PROF" <<'ENV'
 # Citadel DAW plugin paths (separated by format)
 export LV2_PATH="${LV2_PATH:-/usr/lib/lv2:~/.lv2}"
@@ -423,16 +562,19 @@ chown "$USER_NAME:$USER_NAME" "$PATCH"
 as_user "bash ~/fix_citadel_paths.sh"
 
 # --- Clear stale plugin caches once (avoid LV2 parsing noise) ---
-as_user "rm -rf ~/.cache/ardour*/plugin_metadata ~/.cache/lv2 2>/dev/null || true"
+as_user "rm -rf ~/.cache/ardour*/plugin_metadata ~/.cache/lv2 2>/dev/null"
 
 # --- Git init ---
-as_user "cd '$BASE' && git init >/dev/null 2>&1 || true && git add . && git commit -m 'Citadel Forge v5.3' >/dev/null 2>&1 || true"
+as_user "cd '$BASE' && { [ -d .git ] || git init >/dev/null 2>&1; } && if [ -n \"\$(git status --porcelain)\" ]; then git add . && git commit -m 'Citadel Forge v5.3' >/dev/null 2>&1; fi"
 
 # --- Final ---
-cat <<MSG
+cat <<'MSG'
 
 ────────────────────────────────────────────────────────
 [CITADEL ONLINE]
+────────────────────────────────────────────────────────
+Installation complete!
+
 Base:     $BASE
 GUI:      $VENV/bin/python $BASE/citadel_gui.py  (launcher: 'Daft Citadel (GUI)')
 Train:    $VENV/bin/python $BASE/daft_midi_trainer.py --train
@@ -441,9 +583,9 @@ Ardour:   ardour --new "DaftCitadel" --template $BASE/Templates/daft_chain.ardou
 NOTE: Log out and back in (or reboot) once to finish user audio setup.
       Then launch "Daft Citadel (GUI)" from your app menu.
 ────────────────────────────────────────────────────────
-MSG
 
-After install (one-time)
-1.Log out/in (activates the user audio services).
-2.Open Daft Citadel (GUI). Click Start / Repair Audio, then Generate Quick Riff → Preview.
-3.Click Open Ardour (Daft Template) to start recording/mixing at 124 BPM / 4-4.
+After install (one-time):
+1. Log out/in (activates the user audio services).
+2. Open Daft Citadel (GUI). Click Start / Repair Audio, then Generate Quick Riff → Preview.
+3. Click Open Ardour (Daft Template) to start recording/mixing at 124 BPM / 4-4.
+MSG
