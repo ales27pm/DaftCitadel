@@ -14,7 +14,19 @@ for a in "$@"; do
     --gpu-off) GPU_OFF=true ;;
   esac
 done
-yesno(){ $AUTO && return 0; read -r -p "$1 [y/N]: " A; [[ "${A,,}" =~ ^y(es)?$ ]]; }
+yesno(){
+  if $AUTO; then
+    return 0
+  fi
+  if [[ -t 0 ]]; then
+    local A
+    read -r -p "$1 [y/N]: " A
+    [[ "${A,,}" =~ ^y(es)?$ ]]
+  else
+    echo "[WARN] Skipping interactive prompt (no TTY); rerun with --auto for unattended mode." >&2
+    return 1
+  fi
+}
 
 # ---------- root & distro ----------
 [[ $EUID -eq 0 ]] || { echo "[ERR] Run as root (sudo)."; exit 1; }
@@ -42,11 +54,24 @@ say "[IGNITION] $(date)"
 
 # ---------- system update ----------
 say "[SYS] Updating apt…"
-apt-get update -y
-apt-get upgrade -y
-add-apt-repository -y universe
-add-apt-repository -y multiverse
-apt-get update -y
+if ! apt-get update -y; then
+  say "[ERR] apt update failed"
+  exit 1
+fi
+if ! apt-get upgrade -y; then
+  say "[WARN] apt upgrade encountered issues (continuing)"
+fi
+command -v add-apt-repository >/dev/null 2>&1 || apt_install software-properties-common
+if ! add-apt-repository -y universe; then
+  say "[WARN] enabling universe repository failed"
+fi
+if ! add-apt-repository -y multiverse; then
+  say "[WARN] enabling multiverse repository failed"
+fi
+if ! apt-get update -y; then
+  say "[ERR] apt update (post-repo) failed"
+  exit 1
+fi
 
 # ---------- audio: pipewire/jack + realtime ----------
 say "[AUDIO] PipeWire/JACK + realtime"
@@ -94,12 +119,14 @@ sysctl_set vm.swappiness 1
 sysctl_set fs.inotify.max_user_watches 524288
 
 # ---------- GPU (optional) ----------
-if ! $GPU_OFF && lspci | grep -qi nvidia; then
+if ! $GPU_OFF && command -v lspci >/dev/null 2>&1 && lspci | grep -qi nvidia; then
   say "[GPU] NVIDIA detected: installing CUDA toolkit (keeps current driver)"
-  apt_install nvidia-cuda-toolkit
-  as_user 'grep -q CUDA_VISIBLE_DEVICES ~/.bashrc || echo "export CUDA_VISIBLE_DEVICES=0" >> ~/.bashrc'
+  if ! apt_install nvidia-cuda-toolkit; then
+    say "[WARN] CUDA toolkit install failed"
+  fi
+  as_user 'grep -q "^export CUDA_VISIBLE_DEVICES=" ~/.bashrc || echo "export CUDA_VISIBLE_DEVICES=0" >> ~/.bashrc'
 else
-  say "[GPU] CPU mode or no NVIDIA"
+  say "[GPU] CPU mode, no NVIDIA, or lspci unavailable"
 fi
 
 # ---------- DAWs & tools ----------
@@ -126,18 +153,19 @@ rm -f "$HELM"
 # ---------- soundfonts & preview ----------
 say "[MIDI] FluidSynth + soundfonts"
 apt_install fluidsynth fluid-soundfont-gm fluid-soundfont-gs
-as_user 'grep -q "alias fsynth=" ~/.bashrc || echo "alias fsynth='\''fluidsynth -a pulseaudio /usr/share/sounds/sf2/FluidR3_GM.sf2'\''" >> ~/.bashrc'
+as_user "grep -q '^alias fsynth=' ~/.bashrc || echo 'alias fsynth="fluidsynth -a pulseaudio /usr/share/sounds/sf2/FluidR3_GM.sf2"' >> ~/.bashrc"
 
 # ---------- plugin paths (separated) ----------
 say "[ENV] Setting clean plugin paths"
 PATCH="$USER_HOME/.profile"
-as_user "sed -i '/^# Citadel plugin paths/,$d' '$PATCH' || true"
+as_user "if grep -q '^# BEGIN Citadel plugin paths' '$PATCH'; then sed -i '/^# BEGIN Citadel plugin paths/,/^# END Citadel plugin paths/d' '$PATCH'; fi"
 cat >> "$PATCH" <<'ENV'
-# Citadel plugin paths
+# BEGIN Citadel plugin paths
 export LV2_PATH="${LV2_PATH:-/usr/lib/lv2:$HOME/.lv2}"
 export VST3_PATH="${VST3_PATH:-/usr/lib/vst3:$HOME/.vst3}"
 export VST_PATH="${VST_PATH:-/usr/lib/vst:$HOME/.vst}"
 export LADSPA_PATH="${LADSPA_PATH:-/usr/lib/ladspa:$HOME/.ladspa}"
+# END Citadel plugin paths
 ENV
 
 # ---------- filesystem scaffold & venv ----------
@@ -145,8 +173,10 @@ say "[FS] Creating project layout"
 as_user "mkdir -p '$BASE'/{Presets/{Surge,Helm,Daft},Samples/{909,Daft},Projects,MIDIs,Models,Templates,Scripts,Docs}"
 say "[PY] venv + libs"
 apt_install python3 python3-venv python3-pip python3-dev build-essential libasound2-dev libsndfile1-dev libportmidi-dev
-as_user "python3 -m venv '$VENV' && '$VENV/bin/pip' install --upgrade pip"
-as_user "'$VENV/bin/pip' install PySide6 torch mido midiutil music21 pygame isobar || '$VENV/bin/pip' install git+https://github.com/ideoforms/isobar.git#egg=isobar"
+as_user "python3 -m venv '$VENV'" || { say "[ERR] Failed to create python venv"; exit 1; }
+as_user "'$VENV/bin/pip' install --upgrade pip" || { say "[ERR] Failed to upgrade pip"; exit 1; }
+as_user "'$VENV/bin/pip' install PySide6 torch mido midiutil music21 pygame" || { say "[ERR] Failed to install core python packages"; exit 1; }
+as_user "'$VENV/bin/pip' install isobar || '$VENV/bin/pip' install git+https://github.com/ideoforms/isobar.git#egg=isobar"
 
 # ---------- quick riff generator ----------
 cat >"$BASE/citadel_hub.py" <<'PY'
@@ -163,8 +193,12 @@ def gen(style="da_funk", bars=16):
     pool=[36,38,40,41,43,45,47] if style=="da_funk" else [60,62,64,65,67,69,71]
     seq=[random.choice(pool)+(random.choice([-12,12]) if random.random()<0.25 else 0) for _ in range(bars*4)]
     out=BASE/"MIDIs"/f"citadel_{style}_{int(time.time())}.mid"; make_midi(out, seq); print(f"[RIFF] {out}")
-    try: subprocess.run(["fluidsynth","-a","pulseaudio",SF2,str(out)], check=True)
-    except Exception as e: print("[WARN] preview:", e)
+    try:
+        subprocess.run(["fluidsynth","-a","pulseaudio",SF2,str(out)], check=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        print("[WARN] preview timeout")
+    except Exception as e:
+        print("[WARN] preview:", e)
 if __name__=="__main__": gen()
 PY
 chown "$USER_NAME:$USER_NAME" "$BASE/citadel_hub.py"
@@ -210,13 +244,21 @@ def train(E=20,lr=1e-3):
 def gen(style="da_funk",bars=16,tempo=124):
     chk=MODELS/"daft_lstm.pth"
     if not chk.exists(): print("[ERR] train first"); sys.exit(1)
-    pay=torch.load(chk,map_location="cpu"); i2t=pay["i2t"]; V=pay["V"]
+    try:
+        pay=torch.load(chk,map_location="cpu")
+    except Exception as e:
+        print(f"[ERR] checkpoint invalid: {e}")
+        sys.exit(1)
+    for key in ("s","V","i2t"):
+        if key not in pay:
+            print(f"[ERR] checkpoint missing key: {key}")
+            sys.exit(1)
+    i2t=pay["i2t"]; V=pay["V"]
     d=torch.device("cuda" if torch.cuda.is_available() else "cpu"); m=LSTM(V).to(d).eval(); m.load_state_dict(pay["s"])
     seed="C2" if style=="da_funk" else "C4"; seed_idx=next((i for i,t in i2t.items() if t==seed),0)
     seq=[seed_idx]*32; h=m.init(1,d); out=[]
     for _ in range(bars*4):
         x=torch.tensor([seq],device=d); y,_=m.f(x,h); p=torch.softmax(y[0,-1],dim=0).detach().cpu().numpy()
-        import numpy as np
         nxt=int(np.random.choice(len(p),p=p/p.sum())); out.append(nxt); seq=seq[1:]+[nxt]
     from midiutil import MIDIFile; M=MIDIFile(1); M.addTempo(0,0,tempo); t=0
     from music21 import note as m21n
@@ -419,11 +461,13 @@ chown "$USER_NAME:$USER_NAME" "$BASE/citadel_gui.py"
 
 # ---------- launcher ----------
 as_user "mkdir -p ~/.local/share/applications"
+VENV_BIN_PATH="$VENV/bin/python"
+GUI_SCRIPT="$BASE/citadel_gui.py"
 cat > "$USER_HOME/.local/share/applications/citadel-gui.desktop" <<DESK
 [Desktop Entry]
 Type=Application
 Name=Daft Citadel (GUI)
-Exec=$VENV/bin/python $BASE/citadel_gui.py
+Exec=$VENV_BIN_PATH $GUI_SCRIPT
 Icon=multimedia-volume-control
 Terminal=false
 Categories=AudioVideo;Audio;Midi;Music;
