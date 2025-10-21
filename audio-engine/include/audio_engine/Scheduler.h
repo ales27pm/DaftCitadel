@@ -42,8 +42,13 @@ class RealTimeScheduler {
                                             });
 
     for (auto it = events_.begin(); it != split; ++it) {
-      if (it->callback) {
+      if (!it->callback) {
+        continue;
+      }
+      try {
         it->callback();
+      } catch (...) {
+        // Swallow exceptions to keep the audio thread responsive.
       }
     }
 

@@ -8,7 +8,7 @@ inspired by the routing and dependency injection patterns implemented in
 configuration. We reuse the same ideas by centralising sample-rate/transport configuration
 inside the native `SceneGraph`, exposing deterministic scheduling to JavaScript.
 
-```
+```text
 React Native (TypeScript) ── TurboModules ──> Platform Bridges (JNI / Objective-C++)
                                                 │
                                                 ▼
@@ -21,26 +21,27 @@ lanes that align to buffer boundaries for deterministic playback.
 ## Initialization Flow
 
 1. **JavaScript bootstrap**: `AudioEngine` in `src/audio/AudioEngine.ts` validates that the
-   TurboModule is loaded, then calls `initialize(sampleRate, framesPerBuffer)`.
-2. **Platform bridge**: Android calls `AudioEngineBridge::initialize`, iOS invokes the same
-   static method from Objective-C++. Both allocate a `SceneGraph` that preps DSP nodes at the
-   requested sample rate.
-3. **Scene graph**: The graph primes DSP nodes with `prepare`, sets the initial tempo and
-   allocates a stack-based scratch buffer sized to the render quantum (default 128 frames).
+   TurboModule is loaded and calls `initialize(sampleRate, framesPerBuffer)`.
+2. **Platform bridge**: Android and iOS both forward initialization to
+   `AudioEngineBridge::initialize`, which allocates a `SceneGraph` configured with the actual
+   render quantum supplied by React Native.
+3. **Scene graph**: The graph primes DSP nodes with `prepare`, sizes stack-backed scratch
+   buffers to the reported buffer length, and constructs a reusable topological ordering of the
+   signal graph.
 4. **Automation**: When JavaScript publishes automation lanes, the TurboModule forwards each
-   entry to `SceneGraph::scheduleAutomation`, which queues the callback in the lock-free
-   scheduler.
+   automation point to `SceneGraph::scheduleAutomation`, which queues callbacks in the bounded
+   scheduler so parameter updates execute on the exact frame requested.
 
 ## Threading Model
 
 | Thread          | Responsibilities                                                                                        | Real-time Constraints                                                    |
 | --------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| Audio render    | `SceneGraph::render` mixes connected nodes into an output buffer and drains the scheduler.              | No dynamic allocation; bounded vectors avoid unbounded queue growth.     |
-| Control / UI    | React Native publishes automation lanes, node configuration, and tempo changes via TurboModule methods. | Uses mutex-protected bridge objects (Android & iOS) without blocking RT. |
+| Audio render    | `SceneGraph::render` mixes connected nodes into an output buffer and drains the scheduler.              | Non-blocking try-lock guards against control mutations; render returns silence on contention. |
+| Control / UI    | React Native publishes automation lanes, node configuration, and tempo changes via TurboModule methods. | Uses short-lived mutexes on mutation paths; render keeps playing even if a lock is contended. |
 | Asset / tooling | Shell automation from `scripts/daftcitadel.sh` can prepare plugins and assets.                          | External to the engine; informs configuration defaults only.             |
 
-The render thread never locks user-facing mutexes. Control APIs acquire a bridge-level mutex
-once per transaction to mutate the scene graph safely.
+The render thread attempts to acquire the bridge mutex with `std::try_to_lock`; on contention it
+renders silence for the current quantum, preventing audio drop-outs caused by blocking locks.
 
 ## DSP Nodes and Routing
 

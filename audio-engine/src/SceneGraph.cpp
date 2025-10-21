@@ -8,8 +8,11 @@
 
 namespace daft::audio {
 
-SceneGraph::SceneGraph(double sampleRate)
-    : sampleRate_(sampleRate), clock_(sampleRate, 128), scheduler_(clock_) {}
+SceneGraph::SceneGraph(double sampleRate, std::uint32_t framesPerBuffer)
+    : sampleRate_(sampleRate),
+      framesPerBuffer_(framesPerBuffer),
+      clock_(sampleRate, framesPerBuffer),
+      scheduler_(clock_) {}
 
 bool SceneGraph::addNode(const std::string& id, std::unique_ptr<DSPNode> node) {
   if (!node) {
@@ -19,6 +22,7 @@ bool SceneGraph::addNode(const std::string& id, std::unique_ptr<DSPNode> node) {
   const auto result = nodes_.emplace(id, std::move(node));
   if (result.second) {
     nodeBuffers_.try_emplace(id);
+    rebuildTopology();
   }
   return result.second;
 }
@@ -31,6 +35,7 @@ void SceneGraph::removeNode(const std::string& id) {
                                       return conn.source == id || conn.destination == id;
                                     }),
                      connections_.end());
+  rebuildTopology();
 }
 
 bool SceneGraph::connect(const std::string& source, const std::string& destination) {
@@ -40,7 +45,15 @@ bool SceneGraph::connect(const std::string& source, const std::string& destinati
   if (destination != kOutputBusId && !nodes_.count(destination)) {
     return false;
   }
+  const auto duplicate = std::find_if(connections_.begin(), connections_.end(),
+                                      [&](const Connection& conn) {
+                                        return conn.source == source && conn.destination == destination;
+                                      }) != connections_.end();
+  if (duplicate) {
+    return false;
+  }
   connections_.push_back({source, destination});
+  rebuildTopology();
   return true;
 }
 
@@ -50,11 +63,13 @@ void SceneGraph::disconnect(const std::string& source, const std::string& destin
                                       return conn.source == source && conn.destination == destination;
                                     }),
                      connections_.end());
+  rebuildTopology();
 }
 
 void SceneGraph::render(AudioBufferView outputBuffer) {
   if (outputBuffer.channelCount() > kMaxChannels || outputBuffer.frameCount() > kMaxFrames) {
-    throw std::runtime_error("Output buffer exceeds supported dimensions");
+    outputBuffer.fill(0.0F);
+    return;
   }
   scheduler_.dispatchDueEvents();
   outputBuffer.fill(0.0F);
@@ -62,86 +77,40 @@ void SceneGraph::render(AudioBufferView outputBuffer) {
   const auto channelCount = outputBuffer.channelCount();
   const auto frameCount = outputBuffer.frameCount();
 
-  for (auto& [id, buffer] : nodeBuffers_) {
-    (void)id;
-    buffer.configure(channelCount, frameCount);
-    buffer.view(channelCount).fill(0.0F);
-  }
+  ensureNodeBuffers(channelCount, frameCount);
 
-  std::unordered_map<std::string, std::vector<std::string>> inbound;
-  std::vector<std::string> outputSources;
-  inbound.reserve(nodes_.size());
-
-  std::unordered_set<std::string> nodesWithOutgoing;
-
-  for (const auto& connection : connections_) {
-    nodesWithOutgoing.insert(connection.source);
-    if (connection.destination == kOutputBusId) {
-      outputSources.push_back(connection.source);
-    } else {
-      inbound[connection.destination].push_back(connection.source);
-    }
-  }
-
-  if (outputSources.empty()) {
-    for (const auto& [nodeId, _] : nodes_) {
-      if (nodesWithOutgoing.count(nodeId) == 0U) {
-        outputSources.push_back(nodeId);
-      }
-    }
-  }
-
-  std::unordered_set<std::string> visiting;
-  std::unordered_set<std::string> rendered;
-
-  auto renderNode = [&](const std::string& nodeId, const auto& self) -> AudioBufferView {
-    if (rendered.count(nodeId) > 0U) {
-      auto bufferIt = nodeBuffers_.find(nodeId);
-      if (bufferIt == nodeBuffers_.end()) {
-        throw std::runtime_error("Buffer missing for node");
-      }
-      return bufferIt->second.view(channelCount);
-    }
-
-    if (visiting.count(nodeId) > 0U) {
-      throw std::runtime_error("Cycle detected in scene graph");
-    }
-
+  for (const auto& nodeId : renderOrder_) {
     const auto nodeIt = nodes_.find(nodeId);
     if (nodeIt == nodes_.end()) {
-      throw std::runtime_error("Node missing during render");
+      continue;
     }
-
     auto bufferIt = nodeBuffers_.find(nodeId);
     if (bufferIt == nodeBuffers_.end()) {
-      throw std::runtime_error("Buffer missing for node");
+      continue;
     }
-
-    visiting.insert(nodeId);
 
     auto view = bufferIt->second.view(channelCount);
     view.fill(0.0F);
 
-    if (const auto inboundIt = inbound.find(nodeId); inboundIt != inbound.end()) {
+    if (const auto inboundIt = inboundEdges_.find(nodeId); inboundIt != inboundEdges_.end()) {
       for (const auto& sourceId : inboundIt->second) {
-        auto sourceView = self(sourceId, self);
-        view.addBufferInPlace(sourceView);
+        if (auto sourceIt = nodeBuffers_.find(sourceId); sourceIt != nodeBuffers_.end()) {
+          view.addBufferInPlace(sourceIt->second.view(channelCount));
+        }
       }
     }
 
     nodeIt->second->process(view);
-
-    visiting.erase(nodeId);
-    rendered.insert(nodeId);
-    return view;
-  };
-
-  for (const auto& sourceId : outputSources) {
-    auto view = renderNode(sourceId, renderNode);
-    outputBuffer.addBufferInPlace(view);
   }
 
-  clock_.advance();
+  for (const auto& sourceId : outputSources_) {
+    if (auto it = nodeBuffers_.find(sourceId); it != nodeBuffers_.end()) {
+      outputBuffer.addBufferInPlace(it->second.view(channelCount));
+    }
+  }
+
+  framesPerBuffer_ = static_cast<std::uint32_t>(frameCount);
+  clock_.advanceBy(static_cast<std::uint32_t>(frameCount));
 }
 
 void SceneGraph::scheduleAutomation(const std::string& nodeId, std::function<void(DSPNode&)> cb,
@@ -157,6 +126,94 @@ void SceneGraph::scheduleAutomation(const std::string& nodeId, std::function<voi
   if (!ok) {
     throw std::runtime_error("Scheduler queue is full");
   }
+}
+
+void SceneGraph::rebuildTopology() {
+  inboundEdges_.clear();
+  outputSources_.clear();
+  renderOrder_.clear();
+
+  if (nodes_.empty()) {
+    return;
+  }
+
+  std::unordered_map<std::string, std::size_t> indegree;
+  indegree.reserve(nodes_.size());
+  for (const auto& [id, _] : nodes_) {
+    indegree.emplace(id, 0U);
+  }
+
+  std::unordered_map<std::string, std::vector<std::string>> adjacency;
+  adjacency.reserve(nodes_.size());
+
+  std::unordered_set<std::string> sourcesFeedingOutput;
+
+  for (const auto& connection : connections_) {
+    if (!nodes_.count(connection.source)) {
+      continue;
+    }
+    if (connection.destination == kOutputBusId) {
+      sourcesFeedingOutput.insert(connection.source);
+      continue;
+    }
+    if (!nodes_.count(connection.destination)) {
+      continue;
+    }
+    adjacency[connection.source].push_back(connection.destination);
+    inboundEdges_[connection.destination].push_back(connection.source);
+    ++indegree[connection.destination];
+  }
+
+  std::vector<std::string> queue;
+  queue.reserve(nodes_.size());
+  for (const auto& [id, degree] : indegree) {
+    if (degree == 0U) {
+      queue.push_back(id);
+    }
+  }
+
+  std::size_t index = 0;
+  while (index < queue.size()) {
+    const auto current = queue[index++];
+    renderOrder_.push_back(current);
+
+    if (const auto adjIt = adjacency.find(current); adjIt != adjacency.end()) {
+      for (const auto& dest : adjIt->second) {
+        auto degIt = indegree.find(dest);
+        if (degIt != indegree.end() && degIt->second > 0U) {
+          --degIt->second;
+          if (degIt->second == 0U) {
+            queue.push_back(dest);
+          }
+        }
+      }
+    }
+  }
+
+  for (const auto& [id, degree] : indegree) {
+    if (degree > 0U && std::find(renderOrder_.begin(), renderOrder_.end(), id) == renderOrder_.end()) {
+      renderOrder_.push_back(id);
+    }
+  }
+
+  if (!sourcesFeedingOutput.empty()) {
+    outputSources_.assign(sourcesFeedingOutput.begin(), sourcesFeedingOutput.end());
+  } else {
+    outputSources_.clear();
+    for (const auto& [id, _] : nodes_) {
+      if (!adjacency.count(id)) {
+        outputSources_.push_back(id);
+      }
+    }
+  }
+}
+
+void SceneGraph::ensureNodeBuffers(std::size_t channelCount, std::size_t frameCount) {
+  for (const auto& [id, _] : nodes_) {
+    auto& buffer = nodeBuffers_[id];
+    buffer.configure(channelCount, frameCount);
+  }
+  clock_.setFramesPerBuffer(static_cast<std::uint32_t>(frameCount));
 }
 
 }  // namespace daft::audio

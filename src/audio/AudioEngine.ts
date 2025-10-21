@@ -10,21 +10,24 @@ export type NodeConfiguration = {
 export class AudioEngine {
   private readonly sampleRate: number;
   private readonly framesPerBuffer: number;
-  private readonly graphId: string;
   private readonly clock: ClockSyncService;
 
   constructor(params: {
     sampleRate: number;
     framesPerBuffer: number;
     bpm: number;
-    graphId?: string;
   }) {
     if (!isNativeModuleAvailable()) {
       throw new Error('AudioEngine native module is unavailable');
     }
+    if (params.sampleRate <= 0) {
+      throw new Error('sampleRate must be positive');
+    }
+    if (params.framesPerBuffer <= 0) {
+      throw new Error('framesPerBuffer must be positive');
+    }
     this.sampleRate = params.sampleRate;
     this.framesPerBuffer = params.framesPerBuffer;
-    this.graphId = params.graphId ?? 'default';
     this.clock = new ClockSyncService(
       params.sampleRate,
       params.framesPerBuffer,
@@ -38,12 +41,9 @@ export class AudioEngine {
 
   public async init(): Promise<void> {
     await NativeAudioEngine.initialize(this.sampleRate, this.framesPerBuffer);
-    await NativeAudioEngine.createSceneGraph(this.graphId);
-    await NativeAudioEngine.setTempo(this.graphId, this.clock.describe().bpm);
   }
 
   public async dispose(): Promise<void> {
-    await NativeAudioEngine.destroySceneGraph(this.graphId);
     await NativeAudioEngine.shutdown();
   }
 
@@ -54,31 +54,21 @@ export class AudioEngine {
 
     await Promise.all(
       nodes.map((node) =>
-        NativeAudioEngine.addNode(this.graphId, node.id, node.type, node.options ?? {}),
+        NativeAudioEngine.addNode(node.id, node.type, node.options ?? {}),
       ),
     );
   }
 
   public async connect(source: string, destination: string): Promise<void> {
-    await NativeAudioEngine.connectNodes(this.graphId, source, destination);
+    await NativeAudioEngine.connectNodes(source, destination);
   }
 
   public async disconnect(source: string, destination: string): Promise<void> {
-    await NativeAudioEngine.disconnectNodes(this.graphId, source, destination);
-  }
-
-  public async start(): Promise<void> {
-    await NativeAudioEngine.start(this.graphId);
-    await NativeAudioEngine.setTransportState(this.graphId, true, 0);
-  }
-
-  public async stop(): Promise<void> {
-    await NativeAudioEngine.setTransportState(this.graphId, false, 0);
-    await NativeAudioEngine.stop(this.graphId);
+    await NativeAudioEngine.disconnectNodes(source, destination);
   }
 
   public async publishAutomation(nodeId: string, lane: AutomationLane): Promise<void> {
-    await publishAutomationLane(this.graphId, nodeId, lane);
+    await publishAutomationLane(nodeId, lane);
   }
 }
 
