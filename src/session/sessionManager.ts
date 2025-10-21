@@ -12,7 +12,7 @@ import {
   SessionStorageAdapter,
   SessionStorageError,
 } from './storage';
-import { AsyncMutex } from './util';
+import { AsyncMutex, deepClone } from './util';
 
 export interface AudioEngineBridge {
   applySessionUpdate(session: Session): Promise<void>;
@@ -28,6 +28,7 @@ export class SessionManager {
   private readonly mutex = new AsyncMutex();
   private readonly history: SessionHistory;
   private readonly cloud: CloudSyncProvider;
+  private readonly listeners = new Set<(session: Session | null) => void>();
 
   constructor(
     private readonly storage: SessionStorageAdapter,
@@ -43,7 +44,29 @@ export class SessionManager {
   }
 
   getSession(): Session | null {
-    return this.currentSession ? JSON.parse(JSON.stringify(this.currentSession)) : null;
+    return this.currentSession ? deepClone(this.currentSession) : null;
+  }
+
+  subscribe(listener: (session: Session | null) => void): () => void {
+    this.listeners.add(listener);
+    listener(this.getSession());
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private setCurrentSession(session: Session | null, notify = true) {
+    this.currentSession = session;
+    if (notify) {
+      const snapshot = this.getSession();
+      this.listeners.forEach((listener) => {
+        try {
+          listener(snapshot);
+        } catch (error) {
+          console.error('SessionManager listener failed', error);
+        }
+      });
+    }
   }
 
   async loadSession(sessionId: string): Promise<Session> {
@@ -68,10 +91,11 @@ export class SessionManager {
       }
       const normalized = normalizeSession(resolved);
       validateSession(normalized);
-      this.currentSession = normalized;
+      this.setCurrentSession(normalized, false);
       this.history.clear();
-      await this.audioEngine.applySessionUpdate(this.currentSession);
-      return JSON.parse(JSON.stringify(this.currentSession));
+      await this.audioEngine.applySessionUpdate(normalized);
+      this.setCurrentSession(normalized);
+      return deepClone(normalized);
     } finally {
       release();
     }
@@ -84,11 +108,12 @@ export class SessionManager {
       const finalSession = updateSessionTimestamp(normalized);
       validateSession(finalSession);
       await this.storage.write(finalSession, { expectedRevision: 0 });
-      this.currentSession = finalSession;
+      this.setCurrentSession(finalSession, false);
       this.history.clear();
       await this.audioEngine.applySessionUpdate(finalSession);
+      this.setCurrentSession(finalSession);
       await this.cloud.push(finalSession);
-      return JSON.parse(JSON.stringify(finalSession));
+      return deepClone(finalSession);
     } finally {
       release();
     }
@@ -118,10 +143,11 @@ export class SessionManager {
         throw error;
       }
       this.history.record(previous);
-      this.currentSession = finalSession;
+      this.setCurrentSession(finalSession, false);
       await this.audioEngine.applySessionUpdate(finalSession);
+      this.setCurrentSession(finalSession);
       await this.pushToCloud(finalSession);
-      return JSON.parse(JSON.stringify(finalSession));
+      return deepClone(finalSession);
     } finally {
       release();
     }
@@ -151,10 +177,11 @@ export class SessionManager {
         await tx.rollback().catch(() => undefined);
         throw error;
       }
-      this.currentSession = finalSession;
+      this.setCurrentSession(finalSession, false);
       await this.audioEngine.applySessionUpdate(finalSession);
+      this.setCurrentSession(finalSession);
       await this.pushToCloud(finalSession);
-      return JSON.parse(JSON.stringify(finalSession));
+      return deepClone(finalSession);
     } finally {
       release();
     }
@@ -184,10 +211,11 @@ export class SessionManager {
         await tx.rollback().catch(() => undefined);
         throw error;
       }
-      this.currentSession = finalSession;
+      this.setCurrentSession(finalSession, false);
       await this.audioEngine.applySessionUpdate(finalSession);
+      this.setCurrentSession(finalSession);
       await this.pushToCloud(finalSession);
-      return JSON.parse(JSON.stringify(finalSession));
+      return deepClone(finalSession);
     } finally {
       release();
     }
@@ -204,7 +232,7 @@ export class SessionManager {
         return null;
       }
       if (remote.session.revision === this.currentSession.revision) {
-        return JSON.parse(JSON.stringify(this.currentSession));
+        return deepClone(this.currentSession);
       }
       const base =
         remote.session.revision <= this.currentSession.revision
@@ -233,10 +261,11 @@ export class SessionManager {
         throw error;
       }
       this.history.record(this.currentSession);
-      this.currentSession = finalSession;
+      this.setCurrentSession(finalSession, false);
       await this.audioEngine.applySessionUpdate(finalSession);
+      this.setCurrentSession(finalSession);
       await this.pushToCloud(finalSession);
-      return JSON.parse(JSON.stringify(finalSession));
+      return deepClone(finalSession);
     } finally {
       release();
     }
