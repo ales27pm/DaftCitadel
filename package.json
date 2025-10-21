@@ -9,6 +9,18 @@
     "prettier": "prettier --write \"{src,docs}/**/*.{ts,tsx,md}\"",
     "manage:agents": "node scripts/manageAgents.js"
   },
+  "dependencies": {
+    "@react-navigation/bottom-tabs": "^6.5.20",
+    "@react-navigation/native": "^6.1.17",
+    "@react-navigation/native-stack": "^6.9.25",
+    "@shopify/react-native-skia": "^1.4.2",
+    "react": "18.2.0",
+    "react-native": "0.73.6",
+    "react-native-gesture-handler": "^2.14.1",
+    "react-native-reanimated": "^3.7.1",
+    "react-native-safe-area-context": "^4.8.2",
+    "react-native-screens": "^3.29.0"
+  },
   "devDependencies": {
     "@react-native/eslint-config": "^0.73.2",
     "@types/jest": "^29.5.12",
@@ -53,7 +65,9 @@
       "src/**/*.{ts,tsx}"
     ],
     "moduleNameMapper": {
-      "^react-native$": "<rootDir>/__mocks__/react-native.ts"
+      "^react-native$": "<rootDir>/__mocks__/react-native.ts",
+      "^react-native-reanimated$": "<rootDir>/__mocks__/react-native-reanimated.ts",
+      "^@shopify/react-native-skia$": "<rootDir>/__mocks__/@shopify/react-native-skia.ts"
     }
   }
 }
