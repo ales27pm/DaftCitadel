@@ -6,7 +6,8 @@
     "lint": "eslint . --ext .ts,.tsx",
     "test": "npx --yes jest",
     "typecheck": "tsc --noEmit",
-    "prettier": "prettier --write \"{src,docs}/**/*.{ts,tsx,md}\""
+    "prettier": "prettier --write \"{src,docs}/**/*.{ts,tsx,md}\"",
+    "manage:agents": "node scripts/manageAgents.js"
   },
   "devDependencies": {
     "@react-native/eslint-config": "^0.73.2",
