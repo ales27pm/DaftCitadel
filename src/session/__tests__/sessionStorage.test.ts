@@ -182,8 +182,8 @@ class RecordingCloudProvider extends NoopCloudSyncProvider {
 
   override async pull(
     _sessionId: string,
-  ): Promise<{ session: Session | null; revision: number }> {
-    return { session: this.remote, revision: this.remote?.revision ?? 0 };
+  ): Promise<{ session: Session | null }> {
+    return { session: this.remote };
   }
 
   override async push(session: Session): Promise<void> {
@@ -246,6 +246,25 @@ describe('JsonSessionStorageAdapter', () => {
         { expectedRevision: session.revision + 5 },
       ),
     ).rejects.toBeInstanceOf(RevisionConflictError);
+  });
+
+  it('retains staged expected revisions across multiple writes', async () => {
+    const session = createTestSession();
+    await adapter.write(session, { expectedRevision: 0 });
+
+    const tx = await adapter.beginTransaction();
+    const firstUpdate = { ...session, name: 'First', revision: session.revision + 1 };
+    await tx.write(firstUpdate, { expectedRevision: session.revision });
+    const secondUpdate = { ...firstUpdate, name: 'Second', revision: firstUpdate.revision + 1 };
+    await tx.write(secondUpdate);
+
+    await adapter.write(
+      { ...session, name: 'External', revision: session.revision + 1 },
+      { expectedRevision: session.revision },
+    );
+
+    await expect(tx.commit()).rejects.toBeInstanceOf(RevisionConflictError);
+    await tx.rollback().catch(() => undefined);
   });
 });
 

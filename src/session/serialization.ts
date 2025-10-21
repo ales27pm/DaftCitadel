@@ -49,8 +49,8 @@ export const mergeSessions = (
       createdAt: base.metadata.createdAt,
       updatedAt: new Date(
         Math.max(
-          new Date(winner.metadata.updatedAt).getTime(),
-          new Date(base.metadata.updatedAt).getTime(),
+          new Date(local.metadata.updatedAt).getTime(),
+          new Date(remote.metadata.updatedAt).getTime(),
         ),
       ).toISOString(),
     },
