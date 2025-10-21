@@ -31,11 +31,86 @@ export interface AutomationCurve {
   points: AutomationPoint[];
 }
 
+export type RoutingSignalType = 'audio' | 'midi' | 'sidechain';
+
+export type RoutingNodeID = string;
+export type RoutingConnectionID = string;
+export type PluginInstanceID = string;
+export type PluginSlotType = 'insert' | 'send' | 'return' | 'sidechain' | 'midiFx';
+
+export interface PluginAutomationTarget {
+  parameterId: string;
+  curveId: AutomationCurveID;
+}
+
+export interface RoutingNodeBase {
+  id: RoutingNodeID;
+  label?: string;
+  bypassed?: boolean;
+}
+
+export interface TrackEndpointNode extends RoutingNodeBase {
+  type: 'trackInput' | 'trackOutput';
+  ioId: string;
+  channelCount: number;
+}
+
+export interface PluginRoutingNode extends RoutingNodeBase {
+  type: 'plugin';
+  slot: PluginSlotType;
+  instanceId: PluginInstanceID;
+  order: number;
+  automation?: PluginAutomationTarget[];
+  accepts: RoutingSignalType[];
+  emits: RoutingSignalType[];
+}
+
+export interface SendRoutingNode extends RoutingNodeBase {
+  type: 'send' | 'return';
+  busId: string;
+  preFader: boolean;
+  gain: number;
+  targetTrackId?: TrackID;
+}
+
+export interface SidechainRoutingNode extends RoutingNodeBase {
+  type: 'sidechainTap';
+  sourceTrackId: TrackID;
+  busId: string;
+}
+
+export type RoutingNode =
+  | TrackEndpointNode
+  | PluginRoutingNode
+  | SendRoutingNode
+  | SidechainRoutingNode;
+
+export interface RoutingEndpointRef {
+  nodeId: RoutingNodeID;
+  port?: string;
+}
+
+export interface RoutingConnection {
+  id: RoutingConnectionID;
+  from: RoutingEndpointRef;
+  to: RoutingEndpointRef;
+  signal: RoutingSignalType;
+  gain?: number;
+  enabled: boolean;
+}
+
+export interface RoutingGraph {
+  version: number;
+  nodes: RoutingNode[];
+  connections: RoutingConnection[];
+}
+
 export interface TrackRouting {
   input?: string;
   output?: string;
   sends?: Record<string, number>;
   sidechainSource?: string;
+  graph?: RoutingGraph;
 }
 
 export interface Track {
@@ -59,6 +134,37 @@ export interface SessionMetadata {
   bpm: number;
   timeSignature: string;
 }
+
+export const createDefaultTrackRoutingGraph = (trackId: TrackID): RoutingGraph => {
+  const trackInputNode: TrackEndpointNode = {
+    id: `${trackId}:input:main`,
+    type: 'trackInput',
+    ioId: 'input:main',
+    channelCount: 2,
+    label: 'Track Input',
+  };
+  const trackOutputNode: TrackEndpointNode = {
+    id: `${trackId}:output:main`,
+    type: 'trackOutput',
+    ioId: 'output:main',
+    channelCount: 2,
+    label: 'Track Output',
+  };
+  const graph: RoutingGraph = {
+    version: 1,
+    nodes: [trackInputNode, trackOutputNode],
+    connections: [
+      {
+        id: `${trackId}:connection:direct`,
+        from: { nodeId: trackInputNode.id },
+        to: { nodeId: trackOutputNode.id },
+        signal: 'audio',
+        enabled: true,
+      },
+    ],
+  };
+  return graph;
+};
 
 export interface Session {
   id: SessionID;
@@ -104,6 +210,7 @@ export const normalizeTrack = (track: Track): Track => ({
   ...track,
   clips: [...track.clips].sort((a, b) => a.start - b.start),
   automationCurves: track.automationCurves.map(sortAutomationPoints),
+  routing: normalizeTrackRouting(track.id, track.routing),
 });
 
 export const normalizeSession = (session: Session): Session => ({
@@ -134,5 +241,85 @@ export const validateSession = (session: Session): void => {
         throw new Error('Clip duration must be positive');
       }
     });
+
+    if (track.routing.graph) {
+      validateRoutingGraph(track.routing.graph);
+    }
   });
+};
+
+const validateRoutingGraph = (graph: RoutingGraph): void => {
+  if (graph.version <= 0) {
+    throw new Error('Routing graph version must be positive');
+  }
+  const nodeIds = new Set<string>();
+  graph.nodes.forEach((node) => {
+    if (nodeIds.has(node.id)) {
+      throw new Error(`Duplicate routing node id detected: ${node.id}`);
+    }
+    nodeIds.add(node.id);
+    if (node.type === 'plugin') {
+      if (!node.instanceId) {
+        throw new Error(`Plugin node ${node.id} missing instance id`);
+      }
+      if (node.order < 0) {
+        throw new Error(`Plugin node ${node.id} has invalid order`);
+      }
+    }
+    if (node.type === 'send' || node.type === 'return') {
+      if (node.gain < 0) {
+        throw new Error(`Send/return node ${node.id} must have non-negative gain`);
+      }
+    }
+  });
+
+  const connectionIds = new Set<string>();
+  graph.connections.forEach((connection) => {
+    if (connectionIds.has(connection.id)) {
+      throw new Error(`Duplicate routing connection id: ${connection.id}`);
+    }
+    connectionIds.add(connection.id);
+    if (!nodeIds.has(connection.from.nodeId)) {
+      throw new Error(`Connection ${connection.id} references missing source node`);
+    }
+    if (!nodeIds.has(connection.to.nodeId)) {
+      throw new Error(`Connection ${connection.id} references missing destination node`);
+    }
+  });
+};
+
+const normalizeTrackRouting = (trackId: TrackID, routing: TrackRouting): TrackRouting => {
+  const graph = routing.graph ?? createDefaultTrackRoutingGraph(trackId);
+  const pluginNodes = graph.nodes.filter(
+    (node): node is PluginRoutingNode => node.type === 'plugin',
+  );
+  const sortedPluginIds = [...pluginNodes]
+    .sort((a, b) => a.order - b.order)
+    .map((plugin) => plugin.id);
+  const normalizedNodes = graph.nodes.map((node) => {
+    if (node.type !== 'plugin') {
+      return node;
+    }
+    const order = sortedPluginIds.indexOf(node.id);
+    return {
+      ...node,
+      order: order >= 0 ? order : node.order,
+    };
+  });
+  const seenConnectionIds = new Set<string>();
+  const normalizedConnections = graph.connections.filter((connection) => {
+    if (seenConnectionIds.has(connection.id)) {
+      return false;
+    }
+    seenConnectionIds.add(connection.id);
+    return true;
+  });
+  return {
+    ...routing,
+    graph: {
+      ...graph,
+      nodes: normalizedNodes,
+      connections: normalizedConnections,
+    },
+  };
 };
