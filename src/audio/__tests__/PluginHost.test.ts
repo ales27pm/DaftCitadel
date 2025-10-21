@@ -47,11 +47,21 @@ const instanceHandle: PluginInstanceHandle = {
   sandboxPath: '/mock/echo',
 };
 
+const restartedHandle: PluginInstanceHandle = {
+  ...instanceHandle,
+  instanceId: 'instance-2',
+  cpuLoadPercent: 5,
+};
+
 describe('PluginHost', () => {
+  let instantiateMock: jest.SpiedFunction<typeof NativePluginHost.instantiatePlugin>;
+
   beforeEach(() => {
     Platform.OS = 'ios';
     jest.spyOn(NativePluginHost, 'queryAvailablePlugins').mockResolvedValue([descriptor]);
-    jest.spyOn(NativePluginHost, 'instantiatePlugin').mockResolvedValue(instanceHandle);
+    instantiateMock = jest
+      .spyOn(NativePluginHost, 'instantiatePlugin')
+      .mockResolvedValue(instanceHandle);
     jest.spyOn(NativePluginHost, 'releasePlugin').mockResolvedValue();
     jest.spyOn(NativePluginHost, 'loadPreset').mockResolvedValue();
     jest.spyOn(NativePluginHost, 'scheduleAutomation').mockResolvedValue();
@@ -144,6 +154,45 @@ describe('PluginHost', () => {
         { time: 0, value: 0.2 },
         { time: 120, value: 0.8 },
       ],
+    );
+  });
+
+  it('reuses the logical instance id after a crash restart', async () => {
+    let callCount = 0;
+    instantiateMock.mockImplementation(async () => {
+      callCount += 1;
+      return callCount === 1 ? instanceHandle : restartedHandle;
+    });
+
+    const host = new PluginHost(new FakeSandboxManager());
+    await host.loadPlugin(descriptor);
+
+    __mockPluginHostEmitter.emit('pluginCrashed', {
+      instanceId: instanceHandle.instanceId,
+      descriptor,
+      timestamp: new Date().toISOString(),
+      reason: 'Test crash',
+      recovered: false,
+      restartToken: 'token-1',
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(instantiateMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+    const binding = (
+      host as unknown as { instances: Map<string, { nativeInstanceId: string }> }
+    ).instances.get(instanceHandle.instanceId);
+
+    expect(binding?.nativeInstanceId).toBe(restartedHandle.instanceId);
+
+    await host.setParameter(instanceHandle.instanceId, 'mix', 0.5);
+
+    expect(NativePluginHost.setParameterValue).toHaveBeenLastCalledWith(
+      restartedHandle.instanceId,
+      'mix',
+      0.5,
     );
   });
 });
