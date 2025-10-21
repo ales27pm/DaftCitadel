@@ -14,6 +14,8 @@ import {
   createDefaultTrackRoutingGraph,
   PluginRoutingNode,
 } from '../../session/models';
+import type { PluginDescriptor } from '../plugins/types';
+import type { PluginHost } from '../plugins/PluginHost';
 
 type LoaderFactoryOptions = Partial<AudioFileData> & {
   throwError?: Error;
@@ -147,6 +149,39 @@ const createSession = (overrides: Partial<Session> = {}): Session => ({
   },
   ...overrides,
 });
+
+const createPluginHostMock = () => {
+  const loadPlugin = jest.fn(async () => ({
+    instanceId: 'native-instance',
+    descriptor: mockDescriptor,
+    cpuLoadPercent: 12,
+    latencySamples: 32,
+  }));
+  const releasePlugin = jest.fn(async () => undefined);
+  const scheduleAutomation = jest.fn(async () => undefined);
+  const onCrash = jest.fn();
+  const host = {
+    loadPlugin,
+    releasePlugin,
+    scheduleAutomation,
+    onCrash,
+  } as unknown as PluginHost;
+  return { host, loadPlugin, releasePlugin, scheduleAutomation };
+};
+
+const mockDescriptor: PluginDescriptor = {
+  identifier: 'com.acme.Plugin',
+  name: 'Fixture Plugin',
+  format: 'auv3',
+  manufacturer: 'Acme',
+  version: '1.0.0',
+  supportsSandbox: true,
+  audioInputChannels: 2,
+  audioOutputChannels: 2,
+  midiInput: false,
+  midiOutput: false,
+  parameters: [],
+};
 
 describe('SessionAudioBridge', () => {
   const sampleRate = 48000;
@@ -496,5 +531,190 @@ describe('SessionAudioBridge', () => {
       Math.round(loaderFrames * (sampleRate / mismatchRate)),
     );
     expect(resampledFrames).toBe(expectedFrames);
+  });
+
+  it('loads plugin instances and releases them as the routing graph mutates', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine, configureNodes } = createMockEngine(clock);
+    const { host, loadPlugin, releasePlugin } = createPluginHostMock();
+    const descriptorResolver = jest.fn().mockResolvedValue(mockDescriptor);
+    const bridge = new SessionAudioBridge(engine, {
+      fileLoader: loader,
+      pluginHost: host,
+      resolvePluginDescriptor: descriptorResolver,
+    });
+
+    const baseGraph = createDefaultTrackRoutingGraph('track-plugin');
+    const trackInput = baseGraph.nodes.find((node) => node.type === 'trackInput');
+    const trackOutput = baseGraph.nodes.find((node) => node.type === 'trackOutput');
+    if (!trackInput || !trackOutput) {
+      throw new Error('missing endpoints');
+    }
+
+    const pluginNode: PluginRoutingNode = {
+      id: 'track-plugin:slot:1',
+      type: 'plugin',
+      slot: 'insert',
+      instanceId: 'session-plugin-1',
+      order: 0,
+      accepts: ['audio'],
+      emits: ['audio'],
+      automation: [],
+    };
+
+    const graphWithPlugin: RoutingGraph = {
+      ...baseGraph,
+      nodes: [...baseGraph.nodes, pluginNode],
+      connections: [
+        {
+          id: 'conn-in-plugin',
+          from: { nodeId: trackInput.id },
+          to: { nodeId: pluginNode.id },
+          signal: 'audio',
+          enabled: true,
+        },
+        {
+          id: 'conn-plugin-out',
+          from: { nodeId: pluginNode.id },
+          to: { nodeId: trackOutput.id },
+          signal: 'audio',
+          enabled: true,
+        },
+      ],
+    };
+
+    await bridge.applySessionUpdate(
+      createSession({
+        revision: 2,
+        tracks: [
+          createTrack({
+            id: 'track-plugin',
+            routing: { graph: graphWithPlugin },
+          }),
+        ],
+      }),
+    );
+
+    expect(loadPlugin).toHaveBeenCalledWith(mockDescriptor, {
+      sandboxIdentifier: 'session-plugin-1',
+      automationBindings: [],
+    });
+    const configuredNodes = configureNodes.mock.calls.flatMap((call) => call[0]);
+    const pluginConfig = configuredNodes.find((config) => config.id === pluginNode.id);
+    expect(pluginConfig?.options).toEqual(
+      expect.objectContaining({
+        hostInstanceId: 'native-instance',
+        acceptsAudio: true,
+        emitsAudio: true,
+      }),
+    );
+
+    await bridge.applySessionUpdate(
+      createSession({
+        revision: 3,
+        tracks: [
+          createTrack({
+            id: 'track-plugin',
+            routing: { graph: baseGraph },
+          }),
+        ],
+      }),
+    );
+
+    expect(releasePlugin).toHaveBeenCalledWith('native-instance');
+  });
+
+  it('schedules plugin automation envelopes via the PluginHost facade', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine } = createMockEngine(clock);
+    const { host, scheduleAutomation } = createPluginHostMock();
+    const descriptorResolver = jest.fn().mockResolvedValue(mockDescriptor);
+    const bridge = new SessionAudioBridge(engine, {
+      fileLoader: loader,
+      pluginHost: host,
+      resolvePluginDescriptor: descriptorResolver,
+    });
+
+    const baseGraph = createDefaultTrackRoutingGraph('track-automation');
+    const trackInput = baseGraph.nodes.find((node) => node.type === 'trackInput');
+    const trackOutput = baseGraph.nodes.find((node) => node.type === 'trackOutput');
+    if (!trackInput || !trackOutput) {
+      throw new Error('missing endpoints');
+    }
+
+    const pluginNode: PluginRoutingNode = {
+      id: 'track-automation:plugin:fx',
+      type: 'plugin',
+      slot: 'insert',
+      instanceId: 'session-plugin-automation',
+      order: 0,
+      accepts: ['audio'],
+      emits: ['audio'],
+      automation: [
+        {
+          parameterId: 'cutoff',
+          curveId: 'curve-cutoff',
+        },
+      ],
+    };
+
+    const automationCurve: AutomationCurve = {
+      id: 'curve-cutoff',
+      parameter: 'cutoff',
+      interpolation: 'linear',
+      points: [
+        { time: 0, value: 0.1 },
+        { time: 250, value: 0.6 },
+        { time: 125, value: 0.4 },
+      ],
+    };
+
+    const graphWithPlugin: RoutingGraph = {
+      ...baseGraph,
+      nodes: [...baseGraph.nodes, pluginNode],
+      connections: [
+        {
+          id: 'conn-in-plugin',
+          from: { nodeId: trackInput.id },
+          to: { nodeId: pluginNode.id },
+          signal: 'audio',
+          enabled: true,
+        },
+        {
+          id: 'conn-plugin-out',
+          from: { nodeId: pluginNode.id },
+          to: { nodeId: trackOutput.id },
+          signal: 'audio',
+          enabled: true,
+        },
+      ],
+    };
+
+    const session = createSession({
+      revision: 2,
+      tracks: [
+        createTrack({
+          id: 'track-automation',
+          routing: { graph: graphWithPlugin },
+          automationCurves: [automationCurve],
+        }),
+      ],
+    });
+
+    await bridge.applySessionUpdate(session);
+
+    expect(scheduleAutomation).toHaveBeenCalledWith('native-instance', 'cutoff', [
+      { time: 0, value: 0.1 },
+      { time: 125, value: 0.4 },
+      { time: 250, value: 0.6 },
+    ]);
+
+    scheduleAutomation.mockClear();
+
+    await bridge.applySessionUpdate({ ...session, revision: 3 });
+
+    expect(scheduleAutomation).toHaveBeenCalledTimes(1);
   });
 });
