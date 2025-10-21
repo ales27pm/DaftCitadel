@@ -28,6 +28,9 @@ lanes that align to buffer boundaries for deterministic playback.
 3. **Scene graph**: The graph primes DSP nodes with `prepare`, sizes stack-backed scratch
    buffers to the reported buffer length, and constructs a reusable topological ordering of the
    signal graph.
+   Initialization rejects buffers larger than the engine's static capacity (1024 frames) so that
+   real-time rendering always fits within the pre-allocated scratch space shared by both
+   platforms.
 4. **Automation**: When JavaScript publishes automation lanes, the TurboModule forwards each
    automation point to `SceneGraph::scheduleAutomation`, which queues callbacks in the bounded
    scheduler so parameter updates execute on the exact frame requested.
@@ -89,5 +92,23 @@ and sorted automation points.
    cmake --build audio-engine/build
    ```
 
-5. Integrate with React Native by registering a TurboModule named `AudioEngineModule` that
-   calls into the provided bridge methods.
+5. Integrate with React Native by registering the `AudioEngineModule` TurboModule on both
+   mobile platforms (see the section below for specifics).
+
+## React Native TurboModule bridge
+
+- **iOS** – `native/audio/ios/AudioEngineModule.mm` conforms to `RCTBridgeModule` and
+  `RCTTurboModule`, forwards every method in `src/audio/NativeAudioEngine.ts` to
+  `daft::audio::bridge::AudioEngineBridge`, and surfaces diagnostics via `getRenderDiagnostics`.
+  Add the source file plus the `audio-engine` headers to your Xcode target so that
+  `TurboModuleRegistry.getEnforcing('AudioEngineModule')` resolves on-device.
+- **Android** – `native/audio/android/src/main/java/com/daftcitadel/audio/AudioEngineModule.kt`
+  implements the TurboModule interface and delegates to JNI helpers located under
+  `native/audio/android/src/main/jni/AudioEngineModule.cpp`. The accompanying
+  `CMakeLists.txt` builds a shared library named `daft_audio_engine_module` that links the
+  core engine (`audio-engine/`) and exposes the TurboModule through
+  `AudioEnginePackage`.
+- **Unit tests** – `src/audio/__tests__/AudioEngineNative.test.ts` performs a smoke test that
+  initializes the native module, adds a node, connects it to `OUTPUT_BUS`, and confirms the
+  diagnostics contract. The React Native Jest mock (`__mocks__/react-native.ts`) has been
+  extended to track TurboModule state to keep the test suite green.

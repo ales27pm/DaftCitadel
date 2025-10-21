@@ -34,6 +34,9 @@ class SceneGraph {
 
   static constexpr std::string_view kOutputBusId = "__output__";
 
+  static constexpr std::size_t maxSupportedChannels() { return kMaxChannels; }
+  static constexpr std::size_t maxSupportedFramesPerBuffer() { return kMaxFrames; }
+
  private:
   static constexpr std::size_t kMaxChannels = 4;
   static constexpr std::size_t kMaxFrames = 1024;
