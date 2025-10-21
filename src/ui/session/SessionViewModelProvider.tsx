@@ -10,6 +10,7 @@ import React, {
 } from 'react';
 
 import { Session, SessionManager, SessionStorageError } from '../../session';
+import type { PluginHost, PluginCrashReport } from '../../audio';
 import { buildTracks, buildTransport } from './selectors';
 import { SessionViewModelState } from './types';
 import { useAudioDiagnostics } from './useAudioDiagnostics';
@@ -19,6 +20,7 @@ interface SessionViewModelProviderProps extends PropsWithChildren {
   sessionId: string;
   bootstrapSession?: () => Session;
   diagnosticsPollIntervalMs?: number;
+  pluginHost?: PluginHost;
 }
 
 interface SessionViewModelContextValue extends SessionViewModelState {
@@ -35,6 +37,7 @@ export const SessionViewModelProvider: React.FC<SessionViewModelProviderProps> =
   sessionId,
   bootstrapSession,
   diagnosticsPollIntervalMs,
+  pluginHost,
   children,
 }) => {
   const mounted = useRef(true);
@@ -42,6 +45,10 @@ export const SessionViewModelProvider: React.FC<SessionViewModelProviderProps> =
   const [error, setError] = useState<Error | undefined>();
   const [session, setSession] = useState<Session | null>(() => manager.getSession());
   const audioDiagnostics = useAudioDiagnostics(diagnosticsPollIntervalMs);
+  const [pluginCrashMap, setPluginCrashMap] = useState<Map<string, PluginCrashReport>>(
+    () => new Map(),
+  );
+  const [pluginAlerts, setPluginAlerts] = useState<PluginCrashReport[]>([]);
 
   useEffect(() => {
     return () => {
@@ -114,14 +121,37 @@ export const SessionViewModelProvider: React.FC<SessionViewModelProviderProps> =
     };
   }, [ensureSession, manager]);
 
+  useEffect(() => {
+    if (!pluginHost) {
+      return undefined;
+    }
+    const unsubscribe = pluginHost.onCrash((report) => {
+      setPluginCrashMap((previous) => {
+        const next = new Map(previous);
+        next.set(report.instanceId, report);
+        return next;
+      });
+      setPluginAlerts((previous) => {
+        const deduped = previous.filter(
+          (existing) =>
+            existing.instanceId !== report.instanceId ||
+            existing.timestamp !== report.timestamp,
+        );
+        const next = [report, ...deduped];
+        return next.slice(0, 5);
+      });
+    });
+    return unsubscribe;
+  }, [pluginHost]);
+
   const diagnostics = audioDiagnostics.diagnostics;
 
   const tracks = useMemo(() => {
     if (!session) {
       return [];
     }
-    return buildTracks(session, diagnostics);
-  }, [diagnostics, session]);
+    return buildTracks(session, diagnostics, pluginCrashMap);
+  }, [diagnostics, pluginCrashMap, session]);
 
   const transport = useMemo(() => {
     if (!session) {
@@ -139,8 +169,18 @@ export const SessionViewModelProvider: React.FC<SessionViewModelProviderProps> =
       transport,
       diagnostics,
       error,
+      pluginAlerts,
     }),
-    [diagnostics, error, session?.id, session?.name, status, tracks, transport],
+    [
+      diagnostics,
+      error,
+      pluginAlerts,
+      session?.id,
+      session?.name,
+      status,
+      tracks,
+      transport,
+    ],
   );
 
   const contextValue = useMemo<SessionViewModelContextValue>(

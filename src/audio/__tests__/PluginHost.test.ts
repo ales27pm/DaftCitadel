@@ -142,7 +142,7 @@ describe('PluginHost', () => {
   it('schedules automation envelopes', async () => {
     const host = new PluginHost(new FakeSandboxManager());
     await host.loadPlugin(descriptor);
-    await host.automateParameter(instanceHandle.instanceId, 'mix', [
+    await host.scheduleAutomation(instanceHandle.instanceId, 'mix', [
       { time: 0, value: 0.2 },
       { time: 120, value: 0.8 },
     ]);

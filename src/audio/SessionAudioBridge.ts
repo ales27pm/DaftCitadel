@@ -20,6 +20,9 @@ import {
   AutomationRequest,
 } from './bridge/AutomationManager';
 import { ConnectionKey, GraphReconciler } from './bridge/GraphReconciler';
+import type { PluginHost } from './plugins/PluginHost';
+import type { PluginDescriptor, PluginInstanceHandle } from './plugins/types';
+import type { PluginAutomationPoint } from './plugins/NativePluginHost';
 
 type Logger = Pick<typeof console, 'debug' | 'info' | 'warn' | 'error'>;
 
@@ -29,6 +32,8 @@ type SessionState = {
   nodes: Map<string, NodeConfiguration>;
   connections: Set<ConnectionKey>;
   automations: Map<string, AutomationRequest>;
+  pluginAutomations: Map<string, PluginAutomationRequest>;
+  activePluginInstances: Set<string>;
 };
 
 const isTrackEndpointNode = (node: RoutingNode): node is TrackEndpointNode =>
@@ -36,6 +41,21 @@ const isTrackEndpointNode = (node: RoutingNode): node is TrackEndpointNode =>
 
 const isPluginNode = (node: RoutingNode): node is PluginRoutingNode =>
   node.type === 'plugin';
+
+type PluginAutomationRequest = {
+  key: string;
+  instanceId: string;
+  hostInstanceId: string;
+  parameterId: string;
+  signature: string;
+  points: PluginAutomationPoint[];
+};
+
+type PluginInstanceBinding = {
+  descriptor: PluginDescriptor;
+  hostInstanceId: string;
+  handle: PluginInstanceHandle;
+};
 
 const DEFAULT_LOGGER: Logger = {
   debug: (...args: unknown[]) => console.debug('[SessionAudioBridge]', ...args),
@@ -47,6 +67,11 @@ const DEFAULT_LOGGER: Logger = {
 export interface SessionAudioBridgeOptions {
   fileLoader: AudioFileLoader;
   logger?: Logger;
+  pluginHost?: PluginHost;
+  resolvePluginDescriptor?: (
+    instanceId: string,
+    node: PluginRoutingNode,
+  ) => Promise<PluginDescriptor | undefined> | PluginDescriptor | undefined;
 }
 
 export class SessionAudioBridge {
@@ -60,7 +85,15 @@ export class SessionAudioBridge {
 
   private readonly logger: Logger;
 
+  private readonly pluginHost?: PluginHost;
+
+  private readonly resolvePluginDescriptor?: SessionAudioBridgeOptions['resolvePluginDescriptor'];
+
   private previousSessionRevision = -1;
+
+  private readonly pluginBindings = new Map<string, PluginInstanceBinding>();
+
+  private readonly pluginAutomationState = new Map<string, string>();
 
   constructor(
     private readonly audioEngine: AudioEngine,
@@ -80,6 +113,8 @@ export class SessionAudioBridge {
     this.automationPublisher = new AutomationPublisher((nodeId, lane) =>
       this.audioEngine.publishAutomation(nodeId, lane),
     );
+    this.pluginHost = options.pluginHost;
+    this.resolvePluginDescriptor = options.resolvePluginDescriptor;
   }
 
   public async applySessionUpdate(session: Session): Promise<void> {
@@ -107,6 +142,8 @@ export class SessionAudioBridge {
 
     await this.graph.apply(desiredState.nodes, desiredState.connections);
     await this.automationPublisher.applyChanges(desiredState.automations);
+    await this.applyPluginAutomations(desiredState.pluginAutomations);
+    await this.releaseStalePluginInstances(desiredState.activePluginInstances);
 
     this.previousSessionRevision = session.revision;
   }
@@ -118,6 +155,8 @@ export class SessionAudioBridge {
     const nodes = new Map<string, NodeConfiguration>();
     const connections = new Set<ConnectionKey>();
     const automations = new Map<string, AutomationRequest>();
+    const pluginAutomations = new Map<string, PluginAutomationRequest>();
+    const activePluginInstances = new Set<string>();
 
     await Promise.all(
       session.tracks.map(async (track) => {
@@ -130,8 +169,20 @@ export class SessionAudioBridge {
         );
 
         graph.nodes.forEach((node) => {
+          if (isPluginNode(node)) {
+            return;
+          }
           nodes.set(node.id, this.createNodeConfiguration(node));
         });
+
+        await this.preparePluginNodes(
+          track,
+          graph,
+          nodes,
+          pluginAutomations,
+          activePluginInstances,
+          session.revision,
+        );
 
         graph.connections.forEach((connection) => {
           if (connection.enabled === false) {
@@ -201,7 +252,13 @@ export class SessionAudioBridge {
       }),
     );
 
-    return { nodes, connections, automations };
+    return {
+      nodes,
+      connections,
+      automations,
+      pluginAutomations,
+      activePluginInstances,
+    };
   }
 
   private resolveRoutingGraph(track: Track): RoutingGraph {
@@ -229,8 +286,16 @@ export class SessionAudioBridge {
         type: `plugin:${node.slot}`,
         options: {
           instanceId: node.instanceId,
+          hostInstanceId:
+            this.pluginBindings.get(node.instanceId)?.hostInstanceId ?? node.instanceId,
           order: node.order,
           bypassed: node.bypassed ?? false,
+          acceptsAudio: node.accepts.includes('audio'),
+          acceptsMidi: node.accepts.includes('midi'),
+          acceptsSidechain: node.accepts.includes('sidechain'),
+          emitsAudio: node.emits.includes('audio'),
+          emitsMidi: node.emits.includes('midi'),
+          emitsSidechain: node.emits.includes('sidechain'),
         },
       };
     }
@@ -348,6 +413,261 @@ export class SessionAudioBridge {
 
   private quantizeFrame(frame: number): number {
     return this.clock.quantizeFrameToBuffer(frame);
+  }
+
+  private async preparePluginNodes(
+    track: Track,
+    graph: RoutingGraph,
+    nodes: Map<string, NodeConfiguration>,
+    pluginAutomations: Map<string, PluginAutomationRequest>,
+    activePluginInstances: Set<string>,
+    sessionRevision: number,
+  ): Promise<void> {
+    const pluginNodes = graph.nodes
+      .filter(isPluginNode)
+      .sort((a, b) => a.order - b.order);
+
+    await Promise.all(
+      pluginNodes.map(async (node) => {
+        const binding = await this.ensurePluginInstance(node);
+        if (!binding) {
+          nodes.set(node.id, this.createNodeConfiguration(node));
+          return;
+        }
+
+        activePluginInstances.add(node.instanceId);
+        nodes.set(node.id, {
+          id: node.id,
+          type: `plugin:${node.slot}`,
+          options: {
+            instanceId: node.instanceId,
+            hostInstanceId: binding.hostInstanceId,
+            order: node.order,
+            bypassed: node.bypassed ?? false,
+            acceptsAudio: node.accepts.includes('audio'),
+            acceptsMidi: node.accepts.includes('midi'),
+            acceptsSidechain: node.accepts.includes('sidechain'),
+            emitsAudio: node.emits.includes('audio'),
+            emitsMidi: node.emits.includes('midi'),
+            emitsSidechain: node.emits.includes('sidechain'),
+          },
+        });
+
+        if (!node.automation || node.automation.length === 0) {
+          return;
+        }
+
+        node.automation.forEach((target) => {
+          const curve = track.automationCurves.find(
+            (candidate) => candidate.id === target.curveId,
+          );
+          if (!curve) {
+            this.logger.warn(
+              `Automation curve ${target.curveId} missing for plugin ${node.instanceId}`,
+            );
+            return;
+          }
+          const points = [...curve.points]
+            .map<PluginAutomationPoint>((point) => ({
+              time: Math.max(0, point.time),
+              value: point.value,
+            }))
+            .sort((a, b) => a.time - b.time);
+          const key = `${node.instanceId}:${target.parameterId}`;
+          const signature = this.describePluginAutomation(
+            sessionRevision,
+            node.instanceId,
+            target.parameterId,
+            points,
+          );
+          pluginAutomations.set(key, {
+            key,
+            instanceId: node.instanceId,
+            hostInstanceId: binding.hostInstanceId,
+            parameterId: target.parameterId,
+            signature,
+            points,
+          });
+        });
+      }),
+    );
+  }
+
+  private async ensurePluginInstance(
+    node: PluginRoutingNode,
+  ): Promise<PluginInstanceBinding | undefined> {
+    if (!this.pluginHost) {
+      if (this.resolvePluginDescriptor) {
+        this.logger.warn(
+          `PluginHost unavailable; plugin node ${node.instanceId} will run offline`,
+        );
+      }
+      return undefined;
+    }
+
+    if (!this.resolvePluginDescriptor) {
+      this.logger.warn(
+        `No plugin descriptor resolver configured; skipping plugin ${node.instanceId}`,
+      );
+      return undefined;
+    }
+
+    try {
+      const descriptor = await this.resolvePluginDescriptor(node.instanceId, node);
+      if (!descriptor) {
+        this.logger.warn(
+          `Descriptor resolver returned empty result for plugin ${node.instanceId}`,
+        );
+        return undefined;
+      }
+
+      const existing = this.pluginBindings.get(node.instanceId);
+      if (
+        existing &&
+        existing.descriptor.identifier === descriptor.identifier &&
+        existing.handle.descriptor.version === descriptor.version
+      ) {
+        existing.descriptor = descriptor;
+        return existing;
+      }
+
+      if (existing) {
+        await this.safeReleasePlugin(existing.hostInstanceId, node.instanceId);
+        this.pluginBindings.delete(node.instanceId);
+      }
+
+      const handle = await this.pluginHost.loadPlugin(descriptor, {
+        sandboxIdentifier: node.instanceId,
+        automationBindings: node.automation?.map((binding) => ({
+          parameterId: binding.parameterId,
+          curveId: binding.curveId,
+        })),
+      });
+      const binding: PluginInstanceBinding = {
+        descriptor,
+        hostInstanceId: handle.instanceId,
+        handle,
+      };
+      this.pluginBindings.set(node.instanceId, binding);
+      return binding;
+    } catch (error) {
+      this.logger.error('Failed to ensure plugin instance', {
+        pluginInstanceId: node.instanceId,
+        error,
+      });
+      return undefined;
+    }
+  }
+
+  private describePluginAutomation(
+    revision: number,
+    instanceId: string,
+    parameterId: string,
+    points: PluginAutomationPoint[],
+  ): string {
+    const pointSignature = points
+      .map((point) => `${Math.round(point.time)}:${point.value.toFixed(6)}`)
+      .join('|');
+    return `${revision}:${instanceId}:${parameterId}:${pointSignature}`;
+  }
+
+  private async applyPluginAutomations(
+    requests: Map<string, PluginAutomationRequest>,
+  ): Promise<void> {
+    const pluginHost = this.pluginHost;
+    if (!pluginHost) {
+      if (requests.size > 0) {
+        this.logger.warn(
+          'Plugin automation requests present but PluginHost is unavailable',
+        );
+      }
+      this.pluginAutomationState.clear();
+      return;
+    }
+
+    const operations: Array<Promise<void>> = [];
+
+    requests.forEach((request) => {
+      const previous = this.pluginAutomationState.get(request.key);
+      if (previous === request.signature) {
+        return;
+      }
+      operations.push(
+        pluginHost
+          .scheduleAutomation(request.hostInstanceId, request.parameterId, request.points)
+          .then(() => {
+            this.pluginAutomationState.set(request.key, request.signature);
+          })
+          .catch((error) => {
+            this.logger.error('Failed to schedule plugin automation', {
+              instanceId: request.instanceId,
+              parameterId: request.parameterId,
+              error,
+            });
+          }),
+      );
+    });
+
+    await Promise.all(operations);
+
+    const staleKeys: string[] = [];
+    this.pluginAutomationState.forEach((_signature, key) => {
+      if (!requests.has(key)) {
+        staleKeys.push(key);
+      }
+    });
+    staleKeys.forEach((key) => this.pluginAutomationState.delete(key));
+  }
+
+  private async releaseStalePluginInstances(
+    activePluginInstances: Set<string>,
+  ): Promise<void> {
+    if (!this.pluginHost) {
+      if (this.pluginBindings.size > 0 && activePluginInstances.size === 0) {
+        this.pluginBindings.clear();
+      }
+      return;
+    }
+
+    const releases: Array<Promise<void>> = [];
+    this.pluginBindings.forEach((binding, instanceId) => {
+      if (!activePluginInstances.has(instanceId)) {
+        releases.push(
+          this.safeReleasePlugin(binding.hostInstanceId, instanceId).then(() => {
+            this.pluginBindings.delete(instanceId);
+          }),
+        );
+      }
+    });
+    await Promise.all(releases);
+
+    if (activePluginInstances.size === 0) {
+      this.pluginAutomationState.clear();
+    } else {
+      this.pluginAutomationState.forEach((_signature, key) => {
+        const [instanceId] = key.split(':');
+        if (!activePluginInstances.has(instanceId)) {
+          this.pluginAutomationState.delete(key);
+        }
+      });
+    }
+  }
+
+  private async safeReleasePlugin(
+    hostInstanceId: string,
+    sessionInstanceId: string,
+  ): Promise<void> {
+    if (!this.pluginHost) {
+      return;
+    }
+    try {
+      await this.pluginHost.releasePlugin(hostInstanceId);
+    } catch (error) {
+      this.logger.error('Failed to release plugin instance', {
+        pluginInstanceId: sessionInstanceId,
+        error,
+      });
+    }
   }
 }
 

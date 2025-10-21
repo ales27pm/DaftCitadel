@@ -4,7 +4,10 @@ import {
   ClipID,
   SessionID,
   TrackID,
+  PluginSlotType,
+  RoutingSignalType,
 } from '../../session';
+import type { PluginCrashReport } from '../../audio';
 
 export interface MidiNoteViewModel {
   id: string;
@@ -24,6 +27,19 @@ export interface ClipViewModel {
   midiNotes: MidiNoteViewModel[];
 }
 
+export type TrackPluginStatus = 'active' | 'bypassed' | 'crashed' | 'offline';
+
+export interface TrackPluginViewModel {
+  id: string;
+  instanceId: string;
+  slot: PluginSlotType;
+  label: string;
+  bypassed: boolean;
+  status: TrackPluginStatus;
+  accepts: RoutingSignalType[];
+  emits: RoutingSignalType[];
+}
+
 export interface TrackViewModel {
   id: TrackID;
   name: string;
@@ -37,6 +53,7 @@ export interface TrackViewModel {
   waveform: Float32Array;
   midiNotes: MidiNoteViewModel[];
   meterLevel: number;
+  plugins: TrackPluginViewModel[];
 }
 
 export interface SessionTransportView {
@@ -68,4 +85,5 @@ export interface SessionViewModelState {
   transport: SessionTransportView | null;
   diagnostics: SessionDiagnosticsView;
   error?: Error;
+  pluginAlerts: PluginCrashReport[];
 }
