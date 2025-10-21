@@ -1,7 +1,13 @@
 import os from 'os';
 import path from 'path';
 import { promises as fs } from 'fs';
-import { AutomationCurve, Clip, Session, Track } from '../models';
+import {
+  AutomationCurve,
+  Clip,
+  Session,
+  Track,
+  createDefaultTrackRoutingGraph,
+} from '../models';
 import { deserializeSession, mergeSessions, serializeSession } from '../serialization';
 import { JsonSessionStorageAdapter } from '../storage/jsonAdapter';
 import { RevisionConflictError, SessionStorageAdapter } from '../storage';
@@ -35,22 +41,36 @@ const createAutomationCurve = (
   ...overrides,
 });
 
-const createTestTrack = (overrides: Partial<Track> = {}): Track => ({
-  id: 'track-1',
-  name: 'Bass',
-  clips: [createTestClip()],
-  muted: false,
-  solo: false,
-  volume: -3,
-  pan: 0,
-  automationCurves: [createAutomationCurve()],
-  routing: {
+const createTestTrack = (overrides: Partial<Track> = {}): Track => {
+  const trackId = overrides.id ?? 'track-1';
+  const baseRouting = {
     input: 'line-1',
     output: 'bus-master',
     sends: { 'reverb-send': -6 },
-  },
-  ...overrides,
-});
+    graph: createDefaultTrackRoutingGraph(trackId),
+  };
+  const overrideRouting = overrides.routing;
+  const routing = overrideRouting
+    ? {
+        ...baseRouting,
+        ...overrideRouting,
+        graph: overrideRouting.graph ?? baseRouting.graph,
+      }
+    : baseRouting;
+  const track: Track = {
+    id: trackId,
+    name: 'Bass',
+    clips: [createTestClip()],
+    muted: false,
+    solo: false,
+    volume: -3,
+    pan: 0,
+    automationCurves: [createAutomationCurve()],
+    routing,
+    ...overrides,
+  };
+  return track;
+};
 
 const createTestSession = (overrides: Partial<Session> = {}): Session => ({
   id: 'session-test',
