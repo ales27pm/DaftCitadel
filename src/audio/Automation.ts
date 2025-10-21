@@ -19,6 +19,9 @@ export class AutomationLane {
     if (point.frame < 0) {
       throw new Error('Automation frame cannot be negative');
     }
+    if (!Number.isInteger(point.frame)) {
+      throw new Error('Automation frame must be an integer');
+    }
     const index = this.points.findIndex((p) => p.frame === point.frame);
     if (index >= 0) {
       this.points[index] = point;
@@ -76,6 +79,7 @@ export class ClockSyncService {
       throw new Error('Buffer size must be positive');
     }
     this.framesPerBuffer = framesPerBuffer;
+    this.tempoMapRevision += 1;
   }
 
   public framesPerBeat(): number {
@@ -89,6 +93,9 @@ export class ClockSyncService {
   public quantizeFrameToBuffer(frame: number): number {
     if (frame < 0) {
       throw new Error('Frame must be non-negative');
+    }
+    if (!Number.isInteger(frame)) {
+      throw new Error('Frame must be an integer');
     }
     const remainder = frame % this.framesPerBuffer;
     if (remainder === 0) {
@@ -112,10 +119,11 @@ export class ClockSyncService {
   }
 }
 
-export const publishAutomationLane = async (
-  graphId: string,
-  nodeId: string,
-  lane: AutomationLane,
-): Promise<void> => {
-  await NativeAudioEngine.scheduleAutomation(graphId, nodeId, lane.toPayload());
+export const publishAutomationLane = async (nodeId: string, lane: AutomationLane): Promise<void> => {
+  const payload = lane.toPayload();
+  await Promise.all(
+    payload.points.map((point) =>
+      NativeAudioEngine.scheduleParameterAutomation(nodeId, payload.parameter, point.frame, point.value),
+    ),
+  );
 };

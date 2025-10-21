@@ -3,6 +3,7 @@
 #include <jni.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -21,7 +22,8 @@ class AudioEngineBridge {
   static void removeNode(const std::string& id);
   static bool connect(const std::string& source, const std::string& destination);
   static void disconnect(const std::string& source, const std::string& destination);
-  static void scheduleGainRamp(const std::string& nodeId, std::uint64_t frame, double gain);
+  static void scheduleParameterAutomation(const std::string& nodeId, const std::string& parameter,
+                                          std::uint64_t frame, double value);
 
  private:
   static std::unique_ptr<SceneGraph> graph_;

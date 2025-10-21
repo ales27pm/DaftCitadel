@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -13,12 +14,13 @@
 #include "audio_engine/AudioBuffer.h"
 #include "audio_engine/DSPNode.h"
 #include "audio_engine/Scheduler.h"
+#include "audio_engine/Clock.h"
 
 namespace daft::audio {
 
 class SceneGraph {
  public:
-  explicit SceneGraph(double sampleRate);
+  explicit SceneGraph(double sampleRate, std::uint32_t framesPerBuffer);
 
   bool addNode(const std::string& id, std::unique_ptr<DSPNode> node);
   void removeNode(const std::string& id);
@@ -48,8 +50,8 @@ class SceneGraph {
 
     void configure(std::size_t channelCount, std::size_t frameCount) {
       storage.setFrameCount(frameCount);
-      for (std::size_t ch = 0; ch < channelCount; ++ch) {
-        channelPointers[ch] = storage.channel(ch);
+      for (std::size_t ch = 0; ch < kMaxChannels; ++ch) {
+        channelPointers[ch] = ch < channelCount ? storage.channel(ch) : nullptr;
       }
     }
 
@@ -59,11 +61,18 @@ class SceneGraph {
   };
 
   double sampleRate_;
+  std::uint32_t framesPerBuffer_;
   std::unordered_map<std::string, std::unique_ptr<DSPNode>> nodes_;
   std::vector<Connection> connections_;
   RenderClock clock_;
   RealTimeScheduler<128> scheduler_;
   std::unordered_map<std::string, NodeBuffer> nodeBuffers_;
-};
+  std::vector<std::string> renderOrder_;
+  std::unordered_map<std::string, std::vector<std::string>> inboundEdges_;
+  std::vector<std::string> outputSources_;
+
+  void rebuildTopology();
+  void ensureNodeBuffers(std::size_t channelCount, std::size_t frameCount);
+}; 
 
 }  // namespace daft::audio

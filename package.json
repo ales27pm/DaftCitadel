@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "lint": "eslint 'src/**/*.{ts,tsx}'",
+    "lint": "eslint . --ext .ts,.tsx",
     "test": "jest",
     "typecheck": "tsc --noEmit",
     "prettier": "prettier --write \"{src,docs}/**/*.{ts,tsx,md}\""
@@ -11,6 +11,7 @@
   "devDependencies": {
     "@react-native/eslint-config": "^0.73.2",
     "@types/jest": "^29.5.12",
+    "@types/node": "^20.16.3",
     "@types/react": "^18.2.21",
     "@types/react-native": "^0.73.0",
     "@typescript-eslint/eslint-plugin": "^7.8.0",
@@ -39,6 +40,13 @@
       "tsx",
       "js",
       "json"
+    ],
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/lib/"
+    ],
+    "transformIgnorePatterns": [
+      "node_modules/(?!(react-native|@react-native|react-native-.*|@react-navigation)/)"
     ],
     "collectCoverageFrom": [
       "src/**/*.{ts,tsx}"
