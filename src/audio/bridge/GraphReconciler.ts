@@ -1,4 +1,3 @@
-import { NativeAudioEngine } from '../NativeAudioEngine';
 import type { AudioEngine, NodeConfiguration } from '../AudioEngine';
 
 type Logger = Pick<typeof console, 'debug' | 'info' | 'warn' | 'error'>;
@@ -50,14 +49,7 @@ export class GraphReconciler {
 
     if (toRemove.length > 0) {
       this.logger.debug('Removing stale nodes', { nodeIds: toRemove });
-      const engineWithRemoval = this.audioEngine as AudioEngine & {
-        removeNodes?(nodeIds: string[]): Promise<void>;
-      };
-      if (typeof engineWithRemoval.removeNodes === 'function') {
-        await engineWithRemoval.removeNodes(toRemove);
-      } else {
-        await Promise.all(toRemove.map((nodeId) => NativeAudioEngine.removeNode(nodeId)));
-      }
+      await this.audioEngine.removeNodes(toRemove);
       toRemove.forEach((nodeId) => {
         this.nodeState.delete(nodeId);
         [...this.connectionState]
@@ -85,6 +77,7 @@ export class GraphReconciler {
     });
 
     if (toDisconnect.length > 0) {
+      this.logger.debug('Disconnecting connections', { count: toDisconnect.length });
       await Promise.all(
         toDisconnect.map((key) => {
           const [source, destination] = key.split('->');
@@ -99,14 +92,17 @@ export class GraphReconciler {
       if (this.connectionState.has(key)) {
         return;
       }
-      const [source] = key.split('->');
-      if (!nodes.has(source) && !this.nodeState.has(source)) {
+      const [source, destination] = key.split('->');
+      const hasSource = nodes.has(source) || this.nodeState.has(source);
+      const hasDestination = nodes.has(destination) || this.nodeState.has(destination);
+      if (!hasSource || !hasDestination) {
         return;
       }
       toConnect.push(key);
     });
 
     if (toConnect.length > 0) {
+      this.logger.debug('Connecting connections', { count: toConnect.length });
       await Promise.all(
         toConnect.map((key) => {
           const [source, destination] = key.split('->');

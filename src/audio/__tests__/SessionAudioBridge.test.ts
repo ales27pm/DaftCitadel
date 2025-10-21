@@ -4,7 +4,7 @@ import {
   AudioFileData,
 } from '../SessionAudioBridge';
 import { AudioEngine } from '../AudioEngine';
-import { ClockSyncService } from '../Automation';
+import { AutomationLane, ClockSyncService } from '../Automation';
 import {
   AutomationCurve,
   Clip,
@@ -32,9 +32,13 @@ const createLoader = (
     frames: loaderFrames = frames,
   } = options;
 
-  const channelData = data ?? [
-    Float32Array.from({ length: loaderFrames }, (_, index) => Math.sin(index / 10)),
-  ];
+  const channelData =
+    data ??
+    (channels > 0
+      ? Array.from({ length: channels }, () =>
+          Float32Array.from({ length: loaderFrames }, (_, index) => Math.sin(index / 10)),
+        )
+      : []);
 
   const audioData: AudioFileData = {
     sampleRate: loaderSampleRate,
@@ -252,13 +256,21 @@ describe('SessionAudioBridge', () => {
     const { engine } = createMockEngine(clock);
     const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
 
+    const trackWithoutGraph = {
+      id: 'track-missing',
+      name: 'Track Missing Graph',
+      color: '#abcdef',
+      clips: [createClip({ id: 'missing-clip' })],
+      muted: false,
+      solo: false,
+      volume: 0,
+      pan: 0,
+      automationCurves: [],
+      routing: {} as Track['routing'],
+    } as Track;
     const sessionWithoutGraph = createSession({
       revision: 2,
-      tracks: [
-        createTrack({
-          routing: {},
-        }),
-      ],
+      tracks: [trackWithoutGraph],
     });
 
     await expect(bridge.applySessionUpdate(sessionWithoutGraph)).rejects.toThrow(
@@ -354,7 +366,10 @@ describe('SessionAudioBridge', () => {
     await bridge.applySessionUpdate(session);
 
     expect(publishAutomation).toHaveBeenCalledTimes(4);
-    const lanePayloads = publishAutomation.mock.calls.map(([, lane]) => lane.toPayload());
+    type LanePayload = ReturnType<AutomationLane['toPayload']>;
+    const lanePayloads = publishAutomation.mock.calls.map(([, lane]) =>
+      lane.toPayload(),
+    ) as LanePayload[];
     expect(lanePayloads).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ parameter: 'volume' }),
@@ -362,6 +377,10 @@ describe('SessionAudioBridge', () => {
         expect.objectContaining({ parameter: 'gain' }),
       ]),
     );
+    const allFrames = lanePayloads.flatMap((payload) =>
+      payload.points.map((pt) => pt.frame),
+    );
+    expect(allFrames.every((frame) => frame % framesPerBuffer === 0)).toBe(true);
   });
 
   it('tears down nodes when clips or tracks are removed', async () => {
@@ -398,6 +417,56 @@ describe('SessionAudioBridge', () => {
     await bridge.applySessionUpdate(emptySession);
 
     expect(removeNodes).toHaveBeenCalledTimes(2);
+  });
+
+  it('publishes clearing automation when curves are removed', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine, publishAutomation } = createMockEngine(clock);
+    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+
+    const automationCurve: AutomationCurve = {
+      id: 'curve-clear',
+      parameter: 'volume',
+      interpolation: 'linear',
+      points: [
+        { time: 0, value: 0.25 },
+        { time: 128, value: 0.75 },
+      ],
+    };
+
+    await bridge.applySessionUpdate(
+      createSession({
+        revision: 9,
+        tracks: [
+          createTrack({
+            id: 'track-automation',
+            automationCurves: [automationCurve],
+          }),
+        ],
+      }),
+    );
+
+    publishAutomation.mockClear();
+
+    await bridge.applySessionUpdate(
+      createSession({
+        revision: 10,
+        tracks: [
+          createTrack({
+            id: 'track-automation',
+            automationCurves: [],
+          }),
+        ],
+      }),
+    );
+
+    expect(publishAutomation).toHaveBeenCalledTimes(1);
+    const [nodeId, lane] = publishAutomation.mock.calls[0];
+    expect(nodeId).toContain('track-automation:output');
+    const payload = lane.toPayload();
+    expect(payload.parameter).toBe('volume');
+    expect(payload.points).toEqual([{ frame: 0, value: 0.75 }]);
   });
 
   it('resamples audio when loader sample rate differs from engine sample rate', async () => {

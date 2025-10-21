@@ -134,6 +134,9 @@ export class SessionAudioBridge {
         });
 
         graph.connections.forEach((connection) => {
+          if (connection.enabled === false) {
+            return;
+          }
           connections.add(
             this.graph.getConnectionKey(connection.from.nodeId, connection.to.nodeId),
           );
@@ -232,14 +235,19 @@ export class SessionAudioBridge {
       };
     }
     if (node.type === 'send' || node.type === 'return') {
+      const options: Record<string, number | string | boolean> = {
+        busId: node.busId,
+      };
+      if (typeof node.preFader === 'boolean') {
+        options.preFader = node.preFader;
+      }
+      if (typeof node.gain === 'number') {
+        options.gain = node.gain;
+      }
       return {
         id: node.id,
         type: node.type,
-        options: {
-          busId: node.busId,
-          preFader: node.preFader,
-          gain: node.gain,
-        },
+        options,
       };
     }
     if (node.type === 'sidechainTap') {
@@ -272,14 +280,15 @@ export class SessionAudioBridge {
     );
 
     const startFrame = this.quantizeFrame(this.msToFrames(clip.start, sampleRate));
-    const durationFrames = Math.max(1, this.msToFrames(clip.duration, sampleRate));
-    const endFrame = this.quantizeFrame(startFrame + durationFrames);
+    const requestedFrames = Math.max(1, this.msToFrames(clip.duration, sampleRate));
+    const playbackFrames = Math.min(requestedFrames, bufferDescriptor.frames);
+    const endFrame = this.quantizeFrame(startFrame + playbackFrames);
     const fadeInFrames = Math.min(
-      durationFrames,
+      playbackFrames,
       this.msToFrames(clip.fadeIn, sampleRate),
     );
     const fadeOutFrames = Math.min(
-      durationFrames,
+      playbackFrames,
       this.msToFrames(clip.fadeOut, sampleRate),
     );
 

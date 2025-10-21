@@ -74,6 +74,29 @@ export class AudioEngine {
     frames: number,
     channelData: ReadonlyArray<ArrayBuffer>,
   ): Promise<void> {
+    if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
+      throw new Error('sampleRate must be a positive number');
+    }
+    if (!Number.isInteger(channels) || channels <= 0 || channels > 64) {
+      throw new Error('channels must be a positive integer less than or equal to 64');
+    }
+    if (!Number.isInteger(frames) || frames <= 0 || frames > 10_000_000) {
+      throw new Error('frames must be a positive integer not exceeding 10,000,000');
+    }
+    if (!Array.isArray(channelData) || channelData.length !== channels) {
+      throw new Error('channelData length must equal channels');
+    }
+    const bytesPerSample = 4; // Float32 PCM
+    channelData.forEach((buffer, index) => {
+      if (!(buffer instanceof ArrayBuffer)) {
+        throw new Error(`channelData[${index}] must be an ArrayBuffer`);
+      }
+      if (buffer.byteLength < frames * bytesPerSample) {
+        throw new Error(
+          `channelData[${index}] byteLength ${buffer.byteLength} is insufficient for ${frames} frames`,
+        );
+      }
+    });
     await NativeAudioEngine.registerClipBuffer(
       bufferKey,
       sampleRate,

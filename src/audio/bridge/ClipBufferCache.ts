@@ -47,11 +47,12 @@ const hashString = (value: string): string => {
 };
 
 const ensureArrayBuffer = (channel: Float32Array): ArrayBuffer => {
-  if (channel.byteLength === channel.buffer.byteLength && channel.byteOffset === 0) {
-    return channel.buffer.slice(0);
+  if (channel.byteOffset === 0 && channel.byteLength === channel.buffer.byteLength) {
+    return channel.buffer;
   }
-  const clone = channel.slice();
-  return clone.buffer;
+  const start = channel.byteOffset;
+  const end = channel.byteOffset + channel.byteLength;
+  return channel.buffer.slice(start, end);
 };
 
 export class ClipBufferCache {
@@ -81,7 +82,7 @@ export class ClipBufferCache {
     const prepared =
       decoded.sampleRate === targetSampleRate
         ? decoded
-        : await this.resampleBuffer(decoded, targetSampleRate);
+        : this.resampleBuffer(decoded, targetSampleRate);
 
     if (decoded.sampleRate !== targetSampleRate) {
       this.logger.info(
@@ -90,7 +91,9 @@ export class ClipBufferCache {
     }
 
     const descriptor: ClipBufferDescriptor = {
-      bufferKey: hashString(`${filePath}:${targetSampleRate}:${prepared.frames}`),
+      bufferKey: hashString(
+        `${filePath}:${targetSampleRate}:${prepared.frames}:${prepared.channels}`,
+      ),
       sampleRate: targetSampleRate,
       channels: prepared.channels,
       frames: prepared.frames,
@@ -126,12 +129,16 @@ export class ClipBufferCache {
     if (data.data.length !== data.channels) {
       throw new Error(`Audio file ${filePath} channel data mismatch`);
     }
+    for (let i = 0; i < data.channels; i += 1) {
+      if (data.data[i].length !== data.frames) {
+        throw new Error(
+          `Audio file ${filePath} channel ${i} length ${data.data[i].length} != frames ${data.frames}`,
+        );
+      }
+    }
   }
 
-  private async resampleBuffer(
-    buffer: AudioFileData,
-    targetSampleRate: number,
-  ): Promise<AudioFileData> {
+  private resampleBuffer(buffer: AudioFileData, targetSampleRate: number): AudioFileData {
     const ratio = targetSampleRate / buffer.sampleRate;
     const nextFrameCount = Math.max(1, Math.round(buffer.frames * ratio));
     const resampledChannels = buffer.data.map((channel) =>
