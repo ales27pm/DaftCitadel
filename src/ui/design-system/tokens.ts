@@ -80,6 +80,8 @@ export interface ThemeTokens {
   scheme: ColorSchemeName;
 }
 
+// NOTE: Both "light" and "dark" variants embrace neon-inspired dark palettes.
+// The light scheme is a slightly brighter dark theme until a true light mode ships.
 export const lightTokens: ThemeTokens = {
   scheme: 'light',
   colors: {
