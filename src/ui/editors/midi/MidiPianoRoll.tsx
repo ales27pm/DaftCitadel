@@ -1,5 +1,11 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { ScrollView, StyleProp, View, ViewStyle } from 'react-native';
+import {
+  ScrollView,
+  StyleProp,
+  View,
+  ViewStyle,
+  useWindowDimensions,
+} from 'react-native';
 import Animated, {
   runOnJS,
   useAnimatedReaction,
@@ -45,6 +51,7 @@ export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
   style,
 }) => {
   const theme = useTheme();
+  const { width: viewportWidth } = useWindowDimensions();
   const scrollX = useSharedValue(0);
   const [gridState, setGridState] = useState<GridMetrics>({
     startBeat: 0,
@@ -65,10 +72,11 @@ export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
   );
 
   const gridLines = useDerivedValue<GridMetrics>(() => {
-    const visibleBeats = Math.ceil(800 / pixelsPerBeat);
+    const windowWidth = Math.max(1, viewportWidth || 0);
+    const visibleBeats = Math.ceil(windowWidth / pixelsPerBeat);
     const startBeat = Math.floor(scrollX.value / pixelsPerBeat);
     return { visibleBeats, startBeat };
-  }, [pixelsPerBeat]);
+  }, [pixelsPerBeat, viewportWidth]);
 
   useAnimatedReaction<GridMetrics>(
     () => gridLines.value,
