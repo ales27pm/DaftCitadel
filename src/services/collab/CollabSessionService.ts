@@ -100,6 +100,10 @@ export class CollabSessionService<T = unknown> {
       connectionFactory,
       logger: this.logger,
       onLocalIceCandidate: async (candidate) => {
+        if (!candidate.candidate || candidate.candidate.trim() === '') {
+          this.logger('collab.emptyIceCandidate'); // skip end-of-candidates or malformed
+          return;
+        }
         await this.signalingClient.sendIceCandidate(
           this.normalizeIceCandidate(candidate),
         );
