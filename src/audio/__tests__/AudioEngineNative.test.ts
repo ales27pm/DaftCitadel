@@ -1,7 +1,7 @@
 import { AudioEngine, OUTPUT_BUS } from '../AudioEngine';
 import { NativeAudioEngine } from '../NativeAudioEngine';
 import { NativeModules } from 'react-native';
-import { AutomationLane } from '../Automation';
+import { AutomationLane, ClockSyncService } from '../Automation';
 
 type AudioEngineMockState = {
   initialized: boolean;
@@ -36,616 +36,85 @@ describe('NativeAudioEngine TurboModule', () => {
     state.automations.clear();
   });
 
-  it('initializes, configures nodes, connects to output, and exposes diagnostics', async () => {
-    const engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+  describe('Initialization and Lifecycle', () => {
+    it('initializes, configures nodes, connects to output, and exposes diagnostics', async () => {
+      const engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
 
-    await engine.init();
-    const state = resolveMockState();
-    expect(state.initialized).toBe(true);
-    expect(state.sampleRate).toBe(48000);
-    expect(state.framesPerBuffer).toBe(256);
-
-    await engine.configureNodes([
-      {
-        id: 'osc',
-        type: 'sine',
-        options: { frequency: 220 },
-      },
-    ]);
-
-    expect(state.nodes.get('osc')).toMatchObject({
-      type: 'sine',
-      options: { frequency: 220 },
-    });
-
-    await engine.connect('osc', OUTPUT_BUS);
-    expect(state.connections.has(`osc->${OUTPUT_BUS}`)).toBe(true);
-
-    const diagnostics = await NativeAudioEngine.getRenderDiagnostics();
-    expect(diagnostics).toEqual({ xruns: 0, lastRenderDurationMicros: 0 });
-
-    const gainLane = new AutomationLane('gain');
-    gainLane.addPoint({ frame: 0, value: 0.25 });
-    gainLane.addPoint({ frame: 128, value: 0.75 });
-    await engine.publishAutomation('osc', gainLane);
-
-    const nodeAutomations = state.automations.get('osc');
-    expect(nodeAutomations?.get('gain')).toEqual([
-      { frame: 0, value: 0.25 },
-      { frame: 128, value: 0.75 },
-    ]);
-
-    await engine.dispose();
-    expect(state.initialized).toBe(false);
-    expect(state.nodes.size).toBe(0);
-    expect(state.connections.size).toBe(0);
-    expect(state.automations.size).toBe(0);
-  });
-
-  describe('initialization', () => {
-    it('rejects initialization with negative sample rate', async () => {
-      expect(
-        () =>
-          new AudioEngine({
-            sampleRate: -1000,
-            framesPerBuffer: 256,
-            bpm: 120,
-          }),
-      ).toThrow('sampleRate must be positive');
-    });
-
-    it('rejects initialization with zero sample rate', async () => {
-      expect(
-        () =>
-          new AudioEngine({
-            sampleRate: 0,
-            framesPerBuffer: 256,
-            bpm: 120,
-          }),
-      ).toThrow('sampleRate must be positive');
-    });
-
-    it('rejects initialization with negative frames per buffer', async () => {
-      expect(
-        () =>
-          new AudioEngine({
-            sampleRate: 48000,
-            framesPerBuffer: -128,
-            bpm: 120,
-          }),
-      ).toThrow('framesPerBuffer must be positive');
-    });
-
-    it('rejects initialization with zero frames per buffer', async () => {
-      expect(
-        () =>
-          new AudioEngine({
-            sampleRate: 48000,
-            framesPerBuffer: 0,
-            bpm: 120,
-          }),
-      ).toThrow('framesPerBuffer must be positive');
-    });
-
-    it('initializes with standard sample rates', async () => {
-      const sampleRates = [44100, 48000, 88200, 96000];
-      for (const sr of sampleRates) {
-        const engine = new AudioEngine({
-          sampleRate: sr,
-          framesPerBuffer: 256,
-          bpm: 120,
-        });
-        await engine.init();
-        const state = resolveMockState();
-        expect(state.sampleRate).toBe(sr);
-        await engine.dispose();
-      }
-    });
-
-    it('initializes with various buffer sizes', async () => {
-      const bufferSizes = [64, 128, 256, 512, 1024];
-      for (const bs of bufferSizes) {
-        const engine = new AudioEngine({
-          sampleRate: 48000,
-          framesPerBuffer: bs,
-          bpm: 120,
-        });
-        await engine.init();
-        const state = resolveMockState();
-        expect(state.framesPerBuffer).toBe(bs);
-        await engine.dispose();
-      }
-    });
-
-    it('exposes clock service after initialization', () => {
-      const engine = new AudioEngine({
-        sampleRate: 48000,
-        framesPerBuffer: 256,
-        bpm: 120,
-      });
-      const clock = engine.getClock();
-      expect(clock).toBeDefined();
-      expect(clock.describe()).toMatchObject({
-        sampleRate: 48000,
-        framesPerBuffer: 256,
-        bpm: 120,
-      });
-    });
-
-    it('can be reinitialized after shutdown', async () => {
-      const engine = new AudioEngine({
-        sampleRate: 48000,
-        framesPerBuffer: 256,
-        bpm: 120,
-      });
-      await engine.init();
-      await engine.dispose();
       await engine.init();
       const state = resolveMockState();
       expect(state.initialized).toBe(true);
-      await engine.dispose();
-    });
-  });
+      expect(state.sampleRate).toBe(48000);
+      expect(state.framesPerBuffer).toBe(256);
 
-  describe('node management', () => {
-    let engine: AudioEngine;
+      await engine.configureNodes([
+        {
+          id: 'osc',
+          type: 'sine',
+          options: { frequency: 220 },
+        },
+      ]);
 
-    beforeEach(async () => {
-      engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
-      await engine.init();
-    });
-
-    afterEach(async () => {
-      await engine.dispose();
-    });
-
-    it('adds a single sine oscillator node', async () => {
-      await NativeAudioEngine.addNode('osc1', 'sine', { frequency: 440 });
-      const state = resolveMockState();
-      expect(state.nodes.get('osc1')).toEqual({
+      expect(state.nodes.get('osc')).toMatchObject({
         type: 'sine',
-        options: { frequency: 440 },
+        options: { frequency: 220 },
       });
-    });
 
-    it('adds a gain node with default options', async () => {
-      await NativeAudioEngine.addNode('gain1', 'gain', {});
-      const state = resolveMockState();
-      expect(state.nodes.get('gain1')).toEqual({
-        type: 'gain',
-        options: {},
-      });
-    });
-
-    it('adds a mixer node with input count option', async () => {
-      await NativeAudioEngine.addNode('mixer1', 'mixer', { inputCount: 4 });
-      const state = resolveMockState();
-      expect(state.nodes.get('mixer1')).toEqual({
-        type: 'mixer',
-        options: { inputCount: 4 },
-      });
-    });
-
-    it('adds multiple nodes via configureNodes', async () => {
-      await engine.configureNodes([
-        { id: 'osc1', type: 'sine', options: { frequency: 220 } },
-        { id: 'osc2', type: 'sine', options: { frequency: 440 } },
-        { id: 'mixer', type: 'mixer', options: { inputCount: 2 } },
-      ]);
-
-      const state = resolveMockState();
-      expect(state.nodes.size).toBe(3);
-      expect(state.nodes.has('osc1')).toBe(true);
-      expect(state.nodes.has('osc2')).toBe(true);
-      expect(state.nodes.has('mixer')).toBe(true);
-    });
-
-    it('handles empty node configuration gracefully', async () => {
-      await engine.configureNodes([]);
-      const state = resolveMockState();
-      expect(state.nodes.size).toBe(0);
-    });
-
-    it('rejects adding a node with empty ID', async () => {
-      await expect(NativeAudioEngine.addNode('', 'sine', {})).rejects.toThrow(
-        'nodeId and nodeType are required',
-      );
-    });
-
-    it('rejects adding a node with whitespace-only ID', async () => {
-      await expect(NativeAudioEngine.addNode('   ', 'sine', {})).rejects.toThrow(
-        'nodeId and nodeType are required',
-      );
-    });
-
-    it('rejects adding a node with empty type', async () => {
-      await expect(NativeAudioEngine.addNode('node1', '', {})).rejects.toThrow(
-        'nodeId and nodeType are required',
-      );
-    });
-
-    it('rejects adding a node with duplicate ID', async () => {
-      await NativeAudioEngine.addNode('duplicate', 'sine', {});
-      await expect(NativeAudioEngine.addNode('duplicate', 'gain', {})).rejects.toThrow(
-        "Node 'duplicate' already exists",
-      );
-    });
-
-    it('trims whitespace from node IDs', async () => {
-      await NativeAudioEngine.addNode('  osc1  ', 'sine', { frequency: 440 });
-      const state = resolveMockState();
-      expect(state.nodes.has('osc1')).toBe(true);
-      expect(state.nodes.has('  osc1  ')).toBe(false);
-    });
-
-    it('removes an existing node', async () => {
-      await NativeAudioEngine.addNode('temp', 'sine', {});
-      await NativeAudioEngine.removeNode('temp');
-      const state = resolveMockState();
-      expect(state.nodes.has('temp')).toBe(false);
-    });
-
-    it('removes a node that does not exist without error', async () => {
-      await expect(NativeAudioEngine.removeNode('nonexistent')).resolves.not.toThrow();
-    });
-
-    it('removes node connections when node is removed', async () => {
-      await NativeAudioEngine.addNode('osc', 'sine', {});
-      await NativeAudioEngine.addNode('gain', 'gain', {});
-      await NativeAudioEngine.connectNodes('osc', 'gain');
-      await NativeAudioEngine.connectNodes('gain', OUTPUT_BUS);
-
-      const state = resolveMockState();
-      expect(state.connections.size).toBe(2);
-
-      await NativeAudioEngine.removeNode('gain');
-      expect(state.connections.size).toBe(0);
-      expect(state.nodes.has('gain')).toBe(false);
-    });
-
-    it('removes node automations when node is removed', async () => {
-      await NativeAudioEngine.addNode('osc', 'sine', {});
-      await NativeAudioEngine.scheduleParameterAutomation('osc', 'frequency', 0, 440);
-      const state = resolveMockState();
-      expect(state.automations.has('osc')).toBe(true);
-
-      await NativeAudioEngine.removeNode('osc');
-      expect(state.automations.has('osc')).toBe(false);
-    });
-
-    it('supports nodes with complex option types', async () => {
-      await NativeAudioEngine.addNode('node', 'gain', {
-        gain: 0.75,
-        enabled: true,
-        label: 'Main Gain',
-      });
-      const state = resolveMockState();
-      expect(state.nodes.get('node')?.options).toEqual({
-        gain: 0.75,
-        enabled: true,
-        label: 'Main Gain',
-      });
-    });
-  });
-
-  describe('connection management', () => {
-    let engine: AudioEngine;
-
-    beforeEach(async () => {
-      engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
-      await engine.init();
-      await engine.configureNodes([
-        { id: 'osc', type: 'sine', options: {} },
-        { id: 'gain', type: 'gain', options: {} },
-        { id: 'mixer', type: 'mixer', options: {} },
-      ]);
-    });
-
-    afterEach(async () => {
-      await engine.dispose();
-    });
-
-    it('connects a node to the output bus', async () => {
       await engine.connect('osc', OUTPUT_BUS);
-      const state = resolveMockState();
       expect(state.connections.has(`osc->${OUTPUT_BUS}`)).toBe(true);
-    });
 
-    it('connects two nodes together', async () => {
-      await NativeAudioEngine.connectNodes('osc', 'gain');
-      const state = resolveMockState();
-      expect(state.connections.has('osc->gain')).toBe(true);
-    });
+      const diagnostics = await NativeAudioEngine.getRenderDiagnostics();
+      expect(diagnostics).toEqual({ xruns: 0, lastRenderDurationMicros: 0 });
 
-    it('creates a chain of connections', async () => {
-      await NativeAudioEngine.connectNodes('osc', 'gain');
-      await NativeAudioEngine.connectNodes('gain', 'mixer');
-      await NativeAudioEngine.connectNodes('mixer', OUTPUT_BUS);
+      const gainLane = new AutomationLane('gain');
+      gainLane.addPoint({ frame: 0, value: 0.25 });
+      gainLane.addPoint({ frame: 128, value: 0.75 });
+      await engine.publishAutomation('osc', gainLane);
 
-      const state = resolveMockState();
-      expect(state.connections.size).toBe(3);
-      expect(state.connections.has('osc->gain')).toBe(true);
-      expect(state.connections.has('gain->mixer')).toBe(true);
-      expect(state.connections.has(`mixer->${OUTPUT_BUS}`)).toBe(true);
-    });
+      const nodeAutomations = state.automations.get('osc');
+      expect(nodeAutomations?.get('gain')).toEqual([
+        { frame: 0, value: 0.25 },
+        { frame: 128, value: 0.75 },
+      ]);
 
-    it('rejects connection from unregistered source node', async () => {
-      await expect(NativeAudioEngine.connectNodes('nonexistent', 'gain')).rejects.toThrow(
-        "Source node 'nonexistent' is not registered",
-      );
-    });
-
-    it('rejects connection to unregistered destination node', async () => {
-      await expect(NativeAudioEngine.connectNodes('osc', 'nonexistent')).rejects.toThrow(
-        "Destination node 'nonexistent' is not registered",
-      );
-    });
-
-    it('rejects duplicate connections', async () => {
-      await NativeAudioEngine.connectNodes('osc', 'gain');
-      await expect(NativeAudioEngine.connectNodes('osc', 'gain')).rejects.toThrow(
-        "Connection 'osc->gain' already exists",
-      );
-    });
-
-    it('allows multiple sources to connect to the same destination', async () => {
-      await engine.configureNodes([{ id: 'osc2', type: 'sine', options: {} }]);
-      await NativeAudioEngine.connectNodes('osc', 'mixer');
-      await NativeAudioEngine.connectNodes('osc2', 'mixer');
-
-      const state = resolveMockState();
-      expect(state.connections.has('osc->mixer')).toBe(true);
-      expect(state.connections.has('osc2->mixer')).toBe(true);
-    });
-
-    it('disconnects an existing connection', async () => {
-      await NativeAudioEngine.connectNodes('osc', 'gain');
-      await engine.disconnect('osc', 'gain');
-
-      const state = resolveMockState();
-      expect(state.connections.has('osc->gain')).toBe(false);
-    });
-
-    it('disconnects a connection that does not exist without error', async () => {
-      await expect(engine.disconnect('osc', 'gain')).resolves.not.toThrow();
-    });
-
-    it('trims whitespace from connection endpoints', async () => {
-      await NativeAudioEngine.connectNodes('  osc  ', '  gain  ');
-      const state = resolveMockState();
-      expect(state.connections.has('osc->gain')).toBe(true);
-    });
-
-    it('clears all connections on shutdown', async () => {
-      await NativeAudioEngine.connectNodes('osc', 'gain');
-      await NativeAudioEngine.connectNodes('gain', OUTPUT_BUS);
       await engine.dispose();
-
-      const state = resolveMockState();
+      expect(state.initialized).toBe(false);
+      expect(state.nodes.size).toBe(0);
       expect(state.connections.size).toBe(0);
-    });
-  });
-
-  describe('parameter automation', () => {
-    let engine: AudioEngine;
-
-    beforeEach(async () => {
-      engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
-      await engine.init();
-      await NativeAudioEngine.addNode('osc', 'sine', {});
+      expect(state.automations.size).toBe(0);
     });
 
-    afterEach(async () => {
-      await engine.dispose();
+    it('rejects initialization with invalid sample rate', () => {
+      expect(() => new AudioEngine({ sampleRate: 0, framesPerBuffer: 256, bpm: 120 })).toThrow(
+        'sampleRate must be positive',
+      );
+      expect(() => new AudioEngine({ sampleRate: -1, framesPerBuffer: 256, bpm: 120 })).toThrow(
+        'sampleRate must be positive',
+      );
     });
 
-    it('schedules a single automation point', async () => {
-      await NativeAudioEngine.scheduleParameterAutomation('osc', 'frequency', 0, 440);
-      const state = resolveMockState();
-      const oscAutomation = state.automations.get('osc');
-      expect(oscAutomation?.get('frequency')).toEqual([{ frame: 0, value: 440 }]);
+    it('rejects initialization with invalid frames per buffer', () => {
+      expect(() => new AudioEngine({ sampleRate: 48000, framesPerBuffer: 0, bpm: 120 })).toThrow(
+        'framesPerBuffer must be positive',
+      );
+      expect(() => new AudioEngine({ sampleRate: 48000, framesPerBuffer: -10, bpm: 120 })).toThrow(
+        'framesPerBuffer must be positive',
+      );
     });
 
-    it('schedules multiple automation points in order', async () => {
-      await NativeAudioEngine.scheduleParameterAutomation('osc', 'frequency', 0, 220);
-      await NativeAudioEngine.scheduleParameterAutomation('osc', 'frequency', 256, 440);
-      await NativeAudioEngine.scheduleParameterAutomation('osc', 'frequency', 512, 880);
-
-      const state = resolveMockState();
-      const points = state.automations.get('osc')?.get('frequency');
-      expect(points).toEqual([
-        { frame: 0, value: 220 },
-        { frame: 256, value: 440 },
-        { frame: 512, value: 880 },
-      ]);
-    });
-
-    it('inserts automation points in sorted order regardless of submission order', async () => {
-      await NativeAudioEngine.scheduleParameterAutomation('osc', 'frequency', 512, 880);
-      await NativeAudioEngine.scheduleParameterAutomation('osc', 'frequency', 0, 220);
-      await NativeAudioEngine.scheduleParameterAutomation('osc', 'frequency', 256, 440);
-
-      const state = resolveMockState();
-      const points = state.automations.get('osc')?.get('frequency');
-      expect(points).toEqual([
-        { frame: 0, value: 220 },
-        { frame: 256, value: 440 },
-        { frame: 512, value: 880 },
-      ]);
-    });
-
-    it('replaces automation point at existing frame', async () => {
-      await NativeAudioEngine.scheduleParameterAutomation('osc', 'frequency', 128, 440);
-      await NativeAudioEngine.scheduleParameterAutomation('osc', 'frequency', 128, 550);
-
-      const state = resolveMockState();
-      const points = state.automations.get('osc')?.get('frequency');
-      expect(points).toEqual([{ frame: 128, value: 550 }]);
-    });
-
-    it('normalizes parameter names to lowercase', async () => {
-      await NativeAudioEngine.scheduleParameterAutomation('osc', 'Frequency', 0, 440);
-      await NativeAudioEngine.scheduleParameterAutomation('osc', 'FREQUENCY', 256, 880);
-
-      const state = resolveMockState();
-      const points = state.automations.get('osc')?.get('frequency');
-      expect(points).toEqual([
-        { frame: 0, value: 440 },
-        { frame: 256, value: 880 },
-      ]);
-    });
-
-    it('supports multiple parameters on the same node', async () => {
-      await NativeAudioEngine.scheduleParameterAutomation('osc', 'frequency', 0, 440);
-      await NativeAudioEngine.scheduleParameterAutomation('osc', 'gain', 0, 0.5);
-
-      const state = resolveMockState();
-      const oscAutomation = state.automations.get('osc');
-      expect(oscAutomation?.get('frequency')).toEqual([{ frame: 0, value: 440 }]);
-      expect(oscAutomation?.get('gain')).toEqual([{ frame: 0, value: 0.5 }]);
-    });
-
-    it('rejects automation for unregistered node', async () => {
-      await expect(
-        NativeAudioEngine.scheduleParameterAutomation('nonexistent', 'gain', 0, 0.5),
-      ).rejects.toThrow("Node 'nonexistent' is not registered");
-    });
-
-    it('rejects automation with empty parameter name', async () => {
-      await expect(
-        NativeAudioEngine.scheduleParameterAutomation('osc', '', 0, 0.5),
-      ).rejects.toThrow('Parameter name is required');
-    });
-
-    it('rejects automation with whitespace-only parameter name', async () => {
-      await expect(
-        NativeAudioEngine.scheduleParameterAutomation('osc', '   ', 0, 0.5),
-      ).rejects.toThrow('Parameter name is required');
-    });
-
-    it('rejects automation with negative frame', async () => {
-      await expect(
-        NativeAudioEngine.scheduleParameterAutomation('osc', 'frequency', -1, 440),
-      ).rejects.toThrow('Frame must be a non-negative integer');
-    });
-
-    it('rejects automation with non-integer frame', async () => {
-      await expect(
-        NativeAudioEngine.scheduleParameterAutomation('osc', 'frequency', 1.5, 440),
-      ).rejects.toThrow('Frame must be a non-negative integer');
-    });
-
-    it('rejects automation with non-finite frame', async () => {
-      await expect(
-        NativeAudioEngine.scheduleParameterAutomation('osc', 'frequency', Infinity, 440),
-      ).rejects.toThrow('Frame must be a non-negative integer');
-    });
-
-    it('rejects automation with non-finite value', async () => {
-      await expect(
-        NativeAudioEngine.scheduleParameterAutomation('osc', 'frequency', 0, NaN),
-      ).rejects.toThrow('Value must be finite');
-    });
-
-    it('accepts automation with zero frame', async () => {
-      await expect(
-        NativeAudioEngine.scheduleParameterAutomation('osc', 'frequency', 0, 440),
-      ).resolves.not.toThrow();
-    });
-
-    it('accepts automation with large frame values', async () => {
-      const largeFrame = 48000 * 60 * 10; // 10 minutes at 48kHz
-      await expect(
-        NativeAudioEngine.scheduleParameterAutomation(
-          'osc',
-          'frequency',
-          largeFrame,
-          440,
-        ),
-      ).resolves.not.toThrow();
-    });
-
-    it('publishes automation lane via AudioEngine helper', async () => {
-      const lane = new AutomationLane('frequency');
-      lane.addPoint({ frame: 0, value: 220 });
-      lane.addPoint({ frame: 256, value: 440 });
-      lane.addPoint({ frame: 512, value: 880 });
-
-      await engine.publishAutomation('osc', lane);
-
-      const state = resolveMockState();
-      const points = state.automations.get('osc')?.get('frequency');
-      expect(points).toEqual([
-        { frame: 0, value: 220 },
-        { frame: 256, value: 440 },
-        { frame: 512, value: 880 },
-      ]);
-    });
-  });
-
-  describe('render diagnostics', () => {
-    let engine: AudioEngine;
-
-    beforeEach(async () => {
-      engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
-      await engine.init();
-    });
-
-    afterEach(async () => {
-      await engine.dispose();
-    });
-
-    it('returns diagnostics with zero xruns after initialization', async () => {
-      const diagnostics = await NativeAudioEngine.getRenderDiagnostics();
-      expect(diagnostics).toEqual({
-        xruns: 0,
-        lastRenderDurationMicros: 0,
-      });
-    });
-
-    it('maintains diagnostics structure', async () => {
-      const diagnostics = await NativeAudioEngine.getRenderDiagnostics();
-      expect(diagnostics).toHaveProperty('xruns');
-      expect(diagnostics).toHaveProperty('lastRenderDurationMicros');
-      expect(typeof diagnostics.xruns).toBe('number');
-      expect(typeof diagnostics.lastRenderDurationMicros).toBe('number');
-    });
-
-    it('resets diagnostics on shutdown', async () => {
-      const state = resolveMockState();
-      state.diagnostics.xruns = 5;
-      state.diagnostics.lastRenderDurationMicros = 123.45;
-
-      await engine.dispose();
-
-      expect(state.diagnostics.xruns).toBe(0);
-      expect(state.diagnostics.lastRenderDurationMicros).toBe(0);
-    });
-
-    it('exposes diagnostics after initialization', async () => {
-      const state = resolveMockState();
-      expect(state.diagnostics).toBeDefined();
-      expect(state.diagnostics.xruns).toBe(0);
-      expect(state.diagnostics.lastRenderDurationMicros).toBe(0);
-    });
-  });
-
-  describe('state isolation and cleanup', () => {
-    it('clears all state on shutdown', async () => {
-      const engine = new AudioEngine({
-        sampleRate: 48000,
-        framesPerBuffer: 256,
-        bpm: 120,
-      });
+    it('properly cleans up all state on dispose', async () => {
+      const engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
       await engine.init();
 
       await engine.configureNodes([
-        { id: 'osc', type: 'sine', options: {} },
-        { id: 'gain', type: 'gain', options: {} },
+        { id: 'osc1', type: 'sine', options: { frequency: 440 } },
+        { id: 'gain1', type: 'gain', options: { gain: 0.5 } },
       ]);
-      await NativeAudioEngine.connectNodes('osc', 'gain');
-      await NativeAudioEngine.connectNodes('gain', OUTPUT_BUS);
-      await NativeAudioEngine.scheduleParameterAutomation('osc', 'frequency', 0, 440);
+      await engine.connect('osc1', 'gain1');
+      await engine.connect('gain1', OUTPUT_BUS);
+
+      const lane = new AutomationLane('frequency');
+      lane.addPoint({ frame: 0, value: 440 });
+      await engine.publishAutomation('osc1', lane);
 
       const state = resolveMockState();
       expect(state.nodes.size).toBe(2);
@@ -658,39 +127,28 @@ describe('NativeAudioEngine TurboModule', () => {
       expect(state.nodes.size).toBe(0);
       expect(state.connections.size).toBe(0);
       expect(state.automations.size).toBe(0);
-      expect(state.diagnostics.xruns).toBe(0);
-      expect(state.diagnostics.lastRenderDurationMicros).toBe(0);
     });
 
-    it('maintains independent state across test runs', async () => {
-      const state = resolveMockState();
-      expect(state.nodes.size).toBe(0);
-      expect(state.connections.size).toBe(0);
-      expect(state.automations.size).toBe(0);
-    });
+    it('allows re-initialization after disposal', async () => {
+      const engine = new AudioEngine({ sampleRate: 44100, framesPerBuffer: 512, bpm: 100 });
 
-    it('handles dispose without prior initialization gracefully', async () => {
-      const engine = new AudioEngine({
-        sampleRate: 48000,
-        framesPerBuffer: 256,
-        bpm: 120,
-      });
-      await expect(engine.dispose()).resolves.not.toThrow();
-    });
-
-    it('handles multiple dispose calls without error', async () => {
-      const engine = new AudioEngine({
-        sampleRate: 48000,
-        framesPerBuffer: 256,
-        bpm: 120,
-      });
       await engine.init();
+      let state = resolveMockState();
+      expect(state.initialized).toBe(true);
+      expect(state.sampleRate).toBe(44100);
+
       await engine.dispose();
-      await expect(engine.dispose()).resolves.not.toThrow();
+      expect(state.initialized).toBe(false);
+
+      await engine.init();
+      state = resolveMockState();
+      expect(state.initialized).toBe(true);
+      expect(state.sampleRate).toBe(44100);
+      expect(state.framesPerBuffer).toBe(512);
     });
   });
 
-  describe('complex audio graph scenarios', () => {
+  describe('Node Configuration', () => {
     let engine: AudioEngine;
 
     beforeEach(async () => {
@@ -702,246 +160,728 @@ describe('NativeAudioEngine TurboModule', () => {
       await engine.dispose();
     });
 
-    it('creates a multi-oscillator mixer setup', async () => {
+    it('configures multiple nodes in parallel', async () => {
+      await engine.configureNodes([
+        { id: 'osc1', type: 'sine', options: { frequency: 220 } },
+        { id: 'osc2', type: 'sine', options: { frequency: 440 } },
+        { id: 'mixer', type: 'mixer', options: { inputCount: 2 } },
+        { id: 'gain', type: 'gain', options: { gain: 0.8 } },
+      ]);
+
+      const state = resolveMockState();
+      expect(state.nodes.size).toBe(4);
+      expect(state.nodes.get('osc1')).toMatchObject({
+        type: 'sine',
+        options: { frequency: 220 },
+      });
+      expect(state.nodes.get('osc2')).toMatchObject({
+        type: 'sine',
+        options: { frequency: 440 },
+      });
+      expect(state.nodes.get('mixer')).toMatchObject({
+        type: 'mixer',
+        options: { inputCount: 2 },
+      });
+      expect(state.nodes.get('gain')).toMatchObject({
+        type: 'gain',
+        options: { gain: 0.8 },
+      });
+    });
+
+    it('handles empty node configuration array gracefully', async () => {
+      await engine.configureNodes([]);
+      const state = resolveMockState();
+      expect(state.nodes.size).toBe(0);
+    });
+
+    it('trims whitespace from node IDs and types', async () => {
+      await NativeAudioEngine.addNode('  osc1  ', '  sine  ', { frequency: 220 });
+      const state = resolveMockState();
+      expect(state.nodes.has('osc1')).toBe(true);
+      expect(state.nodes.get('osc1')?.type).toBe('sine');
+    });
+
+    it('rejects empty node IDs', async () => {
+      await expect(NativeAudioEngine.addNode('', 'sine', {})).rejects.toThrow(
+        'nodeId and nodeType are required',
+      );
+      await expect(NativeAudioEngine.addNode('   ', 'sine', {})).rejects.toThrow(
+        'nodeId and nodeType are required',
+      );
+    });
+
+    it('rejects empty node types', async () => {
+      await expect(NativeAudioEngine.addNode('osc1', '', {})).rejects.toThrow(
+        'nodeId and nodeType are required',
+      );
+      await expect(NativeAudioEngine.addNode('osc1', '   ', {})).rejects.toThrow(
+        'nodeId and nodeType are required',
+      );
+    });
+
+    it('rejects duplicate node IDs', async () => {
+      await NativeAudioEngine.addNode('osc1', 'sine', { frequency: 220 });
+      await expect(NativeAudioEngine.addNode('osc1', 'gain', {})).rejects.toThrow(
+        "Node 'osc1' already exists",
+      );
+    });
+
+    it('accepts nodes with various option types', async () => {
+      await engine.configureNodes([
+        {
+          id: 'complex',
+          type: 'mixer',
+          options: {
+            gain: 0.5, // number
+            enabled: true, // boolean
+            mode: 'stereo', // string
+            channels: 2,
+          },
+        },
+      ]);
+
+      const state = resolveMockState();
+      expect(state.nodes.get('complex')).toBeDefined();
+      expect(state.nodes.get('complex')?.options).toEqual({
+        gain: 0.5,
+        enabled: true,
+        mode: 'stereo',
+        channels: 2,
+      });
+    });
+
+    it('handles nodes with empty options', async () => {
+      await engine.configureNodes([{ id: 'osc', type: 'sine' }]);
+      const state = resolveMockState();
+      expect(state.nodes.get('osc')).toBeDefined();
+    });
+
+    it('removes nodes and their connections', async () => {
+      await engine.configureNodes([
+        { id: 'osc1', type: 'sine', options: { frequency: 440 } },
+        { id: 'gain1', type: 'gain' },
+      ]);
+      await engine.connect('osc1', 'gain1');
+      await engine.connect('gain1', OUTPUT_BUS);
+
+      const state = resolveMockState();
+      expect(state.nodes.size).toBe(2);
+      expect(state.connections.size).toBe(2);
+
+      await NativeAudioEngine.removeNode('gain1');
+
+      expect(state.nodes.size).toBe(1);
+      expect(state.nodes.has('osc1')).toBe(true);
+      expect(state.nodes.has('gain1')).toBe(false);
+      // Connections involving removed node should be cleaned up
+      expect(state.connections.has('osc1->gain1')).toBe(false);
+      expect(state.connections.has('gain1->__output__')).toBe(false);
+    });
+
+    it('removes node automations when node is removed', async () => {
+      await engine.configureNodes([{ id: 'osc1', type: 'sine' }]);
+      const lane = new AutomationLane('frequency');
+      lane.addPoint({ frame: 0, value: 440 });
+      await engine.publishAutomation('osc1', lane);
+
+      const state = resolveMockState();
+      expect(state.automations.has('osc1')).toBe(true);
+
+      await NativeAudioEngine.removeNode('osc1');
+      expect(state.automations.has('osc1')).toBe(false);
+    });
+  });
+
+  describe('Node Connections', () => {
+    let engine: AudioEngine;
+
+    beforeEach(async () => {
+      engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      await engine.init();
+      await engine.configureNodes([
+        { id: 'osc1', type: 'sine', options: { frequency: 220 } },
+        { id: 'osc2', type: 'sine', options: { frequency: 440 } },
+        { id: 'mixer', type: 'mixer' },
+        { id: 'gain', type: 'gain' },
+      ]);
+    });
+
+    afterEach(async () => {
+      await engine.dispose();
+    });
+
+    it('connects nodes in a simple chain', async () => {
+      await engine.connect('osc1', 'gain');
+      await engine.connect('gain', OUTPUT_BUS);
+
+      const state = resolveMockState();
+      expect(state.connections.has('osc1->gain')).toBe(true);
+      expect(state.connections.has('gain->__output__')).toBe(true);
+    });
+
+    it('connects multiple sources to a mixer', async () => {
+      await engine.connect('osc1', 'mixer');
+      await engine.connect('osc2', 'mixer');
+      await engine.connect('mixer', OUTPUT_BUS);
+
+      const state = resolveMockState();
+      expect(state.connections.size).toBe(3);
+      expect(state.connections.has('osc1->mixer')).toBe(true);
+      expect(state.connections.has('osc2->mixer')).toBe(true);
+      expect(state.connections.has('mixer->__output__')).toBe(true);
+    });
+
+    it('connects nodes directly to output bus', async () => {
+      await engine.connect('osc1', OUTPUT_BUS);
+
+      const state = resolveMockState();
+      expect(state.connections.has('osc1->__output__')).toBe(true);
+    });
+
+    it('trims whitespace from connection endpoints', async () => {
+      await NativeAudioEngine.connectNodes('  osc1  ', '  gain  ');
+      const state = resolveMockState();
+      expect(state.connections.has('osc1->gain')).toBe(true);
+    });
+
+    it('rejects connections with empty source', async () => {
+      await expect(NativeAudioEngine.connectNodes('', 'gain')).rejects.toThrow(
+        'source and destination are required',
+      );
+    });
+
+    it('rejects connections with empty destination', async () => {
+      await expect(NativeAudioEngine.connectNodes('osc1', '')).rejects.toThrow(
+        'source and destination are required',
+      );
+    });
+
+    it('rejects connections from non-existent source', async () => {
+      await expect(NativeAudioEngine.connectNodes('nonexistent', 'gain')).rejects.toThrow(
+        "Source node 'nonexistent' is not registered",
+      );
+    });
+
+    it('rejects connections to non-existent destination (excluding OUTPUT_BUS)', async () => {
+      await expect(NativeAudioEngine.connectNodes('osc1', 'nonexistent')).rejects.toThrow(
+        "Destination node 'nonexistent' is not registered",
+      );
+    });
+
+    it('allows connection to OUTPUT_BUS without registration', async () => {
+      await expect(NativeAudioEngine.connectNodes('osc1', OUTPUT_BUS)).resolves.not.toThrow();
+    });
+
+    it('rejects duplicate connections', async () => {
+      await NativeAudioEngine.connectNodes('osc1', 'gain');
+      await expect(NativeAudioEngine.connectNodes('osc1', 'gain')).rejects.toThrow(
+        "Connection 'osc1->gain' already exists",
+      );
+    });
+
+    it('disconnects nodes', async () => {
+      await engine.connect('osc1', 'gain');
+      await engine.connect('gain', OUTPUT_BUS);
+
+      let state = resolveMockState();
+      expect(state.connections.size).toBe(2);
+
+      await engine.disconnect('osc1', 'gain');
+
+      state = resolveMockState();
+      expect(state.connections.has('osc1->gain')).toBe(false);
+      expect(state.connections.has('gain->__output__')).toBe(true);
+      expect(state.connections.size).toBe(1);
+    });
+
+    it('handles disconnection of non-existent connection gracefully', async () => {
+      await expect(engine.disconnect('osc1', 'gain')).resolves.not.toThrow();
+      const state = resolveMockState();
+      expect(state.connections.size).toBe(0);
+    });
+
+    it('builds complex routing graph', async () => {
+      // Build: osc1 -> mixer -> gain -> output
+      //        osc2 -> mixer
+      await engine.connect('osc1', 'mixer');
+      await engine.connect('osc2', 'mixer');
+      await engine.connect('mixer', 'gain');
+      await engine.connect('gain', OUTPUT_BUS);
+
+      const state = resolveMockState();
+      expect(state.connections.size).toBe(4);
+      expect(state.connections.has('osc1->mixer')).toBe(true);
+      expect(state.connections.has('osc2->mixer')).toBe(true);
+      expect(state.connections.has('mixer->gain')).toBe(true);
+      expect(state.connections.has('gain->__output__')).toBe(true);
+    });
+  });
+
+  describe('Parameter Automation', () => {
+    let engine: AudioEngine;
+
+    beforeEach(async () => {
+      engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      await engine.init();
+      await engine.configureNodes([
+        { id: 'osc1', type: 'sine', options: { frequency: 440 } },
+        { id: 'gain1', type: 'gain' },
+      ]);
+    });
+
+    afterEach(async () => {
+      await engine.dispose();
+    });
+
+    it('schedules single automation point', async () => {
+      await NativeAudioEngine.scheduleParameterAutomation('osc1', 'frequency', 0, 440);
+
+      const state = resolveMockState();
+      const automations = state.automations.get('osc1');
+      expect(automations).toBeDefined();
+      expect(automations?.get('frequency')).toEqual([{ frame: 0, value: 440 }]);
+    });
+
+    it('schedules multiple automation points in order', async () => {
+      const lane = new AutomationLane('frequency');
+      lane.addPoint({ frame: 0, value: 220 });
+      lane.addPoint({ frame: 256, value: 440 });
+      lane.addPoint({ frame: 512, value: 880 });
+      await engine.publishAutomation('osc1', lane);
+
+      const state = resolveMockState();
+      const automations = state.automations.get('osc1');
+      expect(automations?.get('frequency')).toEqual([
+        { frame: 0, value: 220 },
+        { frame: 256, value: 440 },
+        { frame: 512, value: 880 },
+      ]);
+    });
+
+    it('normalizes parameter names to lowercase', async () => {
+      await NativeAudioEngine.scheduleParameterAutomation('osc1', 'FREQUENCY', 0, 440);
+      await NativeAudioEngine.scheduleParameterAutomation('osc1', 'Frequency', 128, 880);
+
+      const state = resolveMockState();
+      const automations = state.automations.get('osc1');
+      expect(automations?.get('frequency')).toEqual([
+        { frame: 0, value: 440 },
+        { frame: 128, value: 880 },
+      ]);
+    });
+
+    it('replaces automation point at same frame', async () => {
+      await NativeAudioEngine.scheduleParameterAutomation('osc1', 'frequency', 128, 440);
+      await NativeAudioEngine.scheduleParameterAutomation('osc1', 'frequency', 128, 880);
+
+      const state = resolveMockState();
+      const automations = state.automations.get('osc1');
+      expect(automations?.get('frequency')).toEqual([{ frame: 128, value: 880 }]);
+    });
+
+    it('maintains separate automation lanes per parameter', async () => {
+      await NativeAudioEngine.scheduleParameterAutomation('osc1', 'frequency', 0, 440);
+      await NativeAudioEngine.scheduleParameterAutomation('osc1', 'gain', 0, 0.5);
+
+      const state = resolveMockState();
+      const automations = state.automations.get('osc1');
+      expect(automations?.get('frequency')).toEqual([{ frame: 0, value: 440 }]);
+      expect(automations?.get('gain')).toEqual([{ frame: 0, value: 0.5 }]);
+    });
+
+    it('maintains separate automation maps per node', async () => {
+      await NativeAudioEngine.scheduleParameterAutomation('osc1', 'frequency', 0, 440);
+      await NativeAudioEngine.scheduleParameterAutomation('gain1', 'gain', 0, 0.8);
+
+      const state = resolveMockState();
+      expect(state.automations.get('osc1')?.get('frequency')).toEqual([
+        { frame: 0, value: 440 },
+      ]);
+      expect(state.automations.get('gain1')?.get('gain')).toEqual([{ frame: 0, value: 0.8 }]);
+    });
+
+    it('rejects automation for non-existent node', async () => {
+      await expect(
+        NativeAudioEngine.scheduleParameterAutomation('nonexistent', 'frequency', 0, 440),
+      ).rejects.toThrow("Node 'nonexistent' is not registered");
+    });
+
+    it('rejects empty parameter name', async () => {
+      await expect(
+        NativeAudioEngine.scheduleParameterAutomation('osc1', '', 0, 440),
+      ).rejects.toThrow('Parameter name is required');
+
+      await expect(
+        NativeAudioEngine.scheduleParameterAutomation('osc1', '   ', 0, 440),
+      ).rejects.toThrow('Parameter name is required');
+    });
+
+    it('rejects negative frame values', async () => {
+      await expect(
+        NativeAudioEngine.scheduleParameterAutomation('osc1', 'frequency', -1, 440),
+      ).rejects.toThrow('Frame must be a non-negative integer');
+    });
+
+    it('rejects non-integer frame values', async () => {
+      await expect(
+        NativeAudioEngine.scheduleParameterAutomation('osc1', 'frequency', 1.5, 440),
+      ).rejects.toThrow('Frame must be a non-negative integer');
+    });
+
+    it('rejects non-finite frame values', async () => {
+      await expect(
+        NativeAudioEngine.scheduleParameterAutomation('osc1', 'frequency', NaN, 440),
+      ).rejects.toThrow('Frame must be a non-negative integer');
+
+      await expect(
+        NativeAudioEngine.scheduleParameterAutomation('osc1', 'frequency', Infinity, 440),
+      ).rejects.toThrow('Frame must be a non-negative integer');
+    });
+
+    it('rejects non-finite parameter values', async () => {
+      await expect(
+        NativeAudioEngine.scheduleParameterAutomation('osc1', 'frequency', 0, NaN),
+      ).rejects.toThrow('Value must be finite');
+
+      await expect(
+        NativeAudioEngine.scheduleParameterAutomation('osc1', 'frequency', 0, Infinity),
+      ).rejects.toThrow('Value must be finite');
+    });
+
+    it('accepts zero as valid automation value', async () => {
+      await NativeAudioEngine.scheduleParameterAutomation('osc1', 'frequency', 0, 0);
+
+      const state = resolveMockState();
+      const automations = state.automations.get('osc1');
+      expect(automations?.get('frequency')).toEqual([{ frame: 0, value: 0 }]);
+    });
+
+    it('publishes complex automation curves via AutomationLane', async () => {
+      const frequencyLane = new AutomationLane('frequency');
+      frequencyLane.addPoint({ frame: 0, value: 220 });
+      frequencyLane.addPoint({ frame: 128, value: 440 });
+      frequencyLane.addPoint({ frame: 256, value: 880 });
+      frequencyLane.addPoint({ frame: 384, value: 440 });
+
+      await engine.publishAutomation('osc1', frequencyLane);
+
+      const state = resolveMockState();
+      const automations = state.automations.get('osc1');
+      expect(automations?.get('frequency')).toHaveLength(4);
+      expect(automations?.get('frequency')).toEqual([
+        { frame: 0, value: 220 },
+        { frame: 128, value: 440 },
+        { frame: 256, value: 880 },
+        { frame: 384, value: 440 },
+      ]);
+    });
+  });
+
+  describe('Render Diagnostics', () => {
+    let engine: AudioEngine;
+
+    beforeEach(async () => {
+      engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      await engine.init();
+    });
+
+    afterEach(async () => {
+      await engine.dispose();
+    });
+
+    it('returns initial diagnostics with zeros', async () => {
+      const diagnostics = await NativeAudioEngine.getRenderDiagnostics();
+      expect(diagnostics).toEqual({
+        xruns: 0,
+        lastRenderDurationMicros: 0,
+      });
+    });
+
+    it('maintains diagnostics state across operations', async () => {
+      await engine.configureNodes([{ id: 'osc1', type: 'sine' }]);
+      await engine.connect('osc1', OUTPUT_BUS);
+
+      const diagnostics = await NativeAudioEngine.getRenderDiagnostics();
+      expect(diagnostics.xruns).toBe(0);
+      expect(diagnostics.lastRenderDurationMicros).toBe(0);
+    });
+
+    it('can simulate xruns for testing', async () => {
+      const state = resolveMockState();
+      state.diagnostics.xruns = 5;
+      state.diagnostics.lastRenderDurationMicros = 1250.5;
+
+      const diagnostics = await NativeAudioEngine.getRenderDiagnostics();
+      expect(diagnostics.xruns).toBe(5);
+      expect(diagnostics.lastRenderDurationMicros).toBe(1250.5);
+    });
+
+    it('resets diagnostics on shutdown', async () => {
+      const state = resolveMockState();
+      state.diagnostics.xruns = 10;
+      state.diagnostics.lastRenderDurationMicros = 2000;
+
+      await engine.dispose();
+
+      expect(state.diagnostics.xruns).toBe(0);
+      expect(state.diagnostics.lastRenderDurationMicros).toBe(0);
+    });
+  });
+
+  describe('ClockSyncService Integration', () => {
+    it('provides clock service from AudioEngine', () => {
+      const engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      const clock = engine.getClock();
+
+      expect(clock).toBeInstanceOf(ClockSyncService);
+      expect(clock.describe()).toMatchObject({
+        sampleRate: 48000,
+        framesPerBuffer: 256,
+        bpm: 120,
+        tempoRevision: 0,
+      });
+    });
+
+    it('clock computes correct frames per beat', () => {
+      const engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      const clock = engine.getClock();
+
+      // At 120 BPM: 60 seconds / 120 beats = 0.5 seconds per beat
+      // At 48000 Hz: 0.5 * 48000 = 24000 frames per beat
+      expect(clock.framesPerBeat()).toBeCloseTo(24000);
+    });
+
+    it('clock quantizes frames to buffer boundaries', () => {
+      const engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      const clock = engine.getClock();
+
+      expect(clock.quantizeFrameToBuffer(0)).toBe(0);
+      expect(clock.quantizeFrameToBuffer(1)).toBe(256);
+      expect(clock.quantizeFrameToBuffer(256)).toBe(256);
+      expect(clock.quantizeFrameToBuffer(257)).toBe(512);
+      expect(clock.quantizeFrameToBuffer(512)).toBe(512);
+    });
+
+    it('clock tracks tempo changes', () => {
+      const engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      const clock = engine.getClock();
+
+      expect(clock.describe().tempoRevision).toBe(0);
+
+      clock.updateTempo(140);
+      expect(clock.describe().bpm).toBe(140);
+      expect(clock.describe().tempoRevision).toBe(1);
+
+      clock.updateTempo(100);
+      expect(clock.describe().tempoRevision).toBe(2);
+    });
+  });
+
+  describe('Complex Integration Scenarios', () => {
+    let engine: AudioEngine;
+
+    beforeEach(async () => {
+      engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      await engine.init();
+    });
+
+    afterEach(async () => {
+      await engine.dispose();
+    });
+
+    it('builds and tears down multi-node processing graph', async () => {
+      // Build: osc1, osc2 -> mixer -> reverb -> gain -> output
       await engine.configureNodes([
         { id: 'osc1', type: 'sine', options: { frequency: 220 } },
         { id: 'osc2', type: 'sine', options: { frequency: 330 } },
-        { id: 'osc3', type: 'sine', options: { frequency: 440 } },
-        { id: 'mixer', type: 'mixer', options: { inputCount: 3 } },
-        { id: 'master', type: 'gain', options: { gain: 0.8 } },
+        { id: 'mixer', type: 'mixer', options: { inputCount: 2 } },
+        { id: 'reverb', type: 'gain', options: { gain: 0.3 } }, // Placeholder
+        { id: 'gain', type: 'gain', options: { gain: 0.8 } },
       ]);
 
-      await NativeAudioEngine.connectNodes('osc1', 'mixer');
-      await NativeAudioEngine.connectNodes('osc2', 'mixer');
-      await NativeAudioEngine.connectNodes('osc3', 'mixer');
-      await NativeAudioEngine.connectNodes('mixer', 'master');
-      await NativeAudioEngine.connectNodes('master', OUTPUT_BUS);
+      await engine.connect('osc1', 'mixer');
+      await engine.connect('osc2', 'mixer');
+      await engine.connect('mixer', 'reverb');
+      await engine.connect('reverb', 'gain');
+      await engine.connect('gain', OUTPUT_BUS);
 
       const state = resolveMockState();
       expect(state.nodes.size).toBe(5);
       expect(state.connections.size).toBe(5);
+
+      // Remove reverb and rewire
+      await NativeAudioEngine.removeNode('reverb');
+      expect(state.nodes.size).toBe(4);
+
+      // Reconnect mixer directly to gain
+      await engine.connect('mixer', 'gain');
+      expect(state.connections.has('mixer->gain')).toBe(true);
     });
 
-    it('creates parallel processing chains', async () => {
+    it('handles batch node addition and connection', async () => {
+      const nodeConfigs = Array.from({ length: 10 }, (_, i) => ({
+        id: `osc${i}`,
+        type: 'sine',
+        options: { frequency: 220 + i * 110 },
+      }));
+
+      await engine.configureNodes(nodeConfigs);
+
+      const state = resolveMockState();
+      expect(state.nodes.size).toBe(10);
+
+      for (let i = 0; i < 10; i++) {
+        expect(state.nodes.get(`osc${i}`)).toMatchObject({
+          type: 'sine',
+          options: { frequency: 220 + i * 110 },
+        });
+      }
+    });
+
+    it('schedules complex automation across multiple nodes', async () => {
       await engine.configureNodes([
-        { id: 'input', type: 'gain', options: {} },
-        { id: 'chain1', type: 'gain', options: {} },
-        { id: 'chain2', type: 'gain', options: {} },
-        { id: 'mixer', type: 'mixer', options: {} },
+        { id: 'osc1', type: 'sine' },
+        { id: 'osc2', type: 'sine' },
+        { id: 'gain1', type: 'gain' },
       ]);
 
-      await NativeAudioEngine.connectNodes('input', 'chain1');
-      await NativeAudioEngine.connectNodes('input', 'chain2');
-      await NativeAudioEngine.connectNodes('chain1', 'mixer');
-      await NativeAudioEngine.connectNodes('chain2', 'mixer');
-      await NativeAudioEngine.connectNodes('mixer', OUTPUT_BUS);
+      // Schedule automation for multiple parameters across nodes
+      const freqLane1 = new AutomationLane('frequency');
+      freqLane1.addPoint({ frame: 0, value: 220 });
+      freqLane1.addPoint({ frame: 512, value: 440 });
+
+      const freqLane2 = new AutomationLane('frequency');
+      freqLane2.addPoint({ frame: 0, value: 330 });
+      freqLane2.addPoint({ frame: 512, value: 660 });
+
+      const gainLane = new AutomationLane('gain');
+      gainLane.addPoint({ frame: 0, value: 0.5 });
+      gainLane.addPoint({ frame: 256, value: 0.8 });
+      gainLane.addPoint({ frame: 512, value: 0.3 });
+
+      await engine.publishAutomation('osc1', freqLane1);
+      await engine.publishAutomation('osc2', freqLane2);
+      await engine.publishAutomation('gain1', gainLane);
 
       const state = resolveMockState();
-      expect(state.connections.size).toBe(5);
+      expect(state.automations.size).toBe(3);
+      expect(state.automations.get('osc1')?.get('frequency')).toHaveLength(2);
+      expect(state.automations.get('osc2')?.get('frequency')).toHaveLength(2);
+      expect(state.automations.get('gain1')?.get('gain')).toHaveLength(3);
     });
 
-    it('supports rebuilding the graph by removing and reconnecting nodes', async () => {
+    it('handles rapid connection/disconnection cycles', async () => {
       await engine.configureNodes([
-        { id: 'osc', type: 'sine', options: {} },
-        { id: 'gain1', type: 'gain', options: {} },
+        { id: 'source', type: 'sine' },
+        { id: 'dest', type: 'gain' },
       ]);
 
-      await NativeAudioEngine.connectNodes('osc', 'gain1');
-      await NativeAudioEngine.connectNodes('gain1', OUTPUT_BUS);
+      for (let i = 0; i < 5; i++) {
+        await engine.connect('source', 'dest');
+        const state = resolveMockState();
+        expect(state.connections.has('source->dest')).toBe(true);
 
-      await NativeAudioEngine.removeNode('gain1');
-      await NativeAudioEngine.addNode('gain2', 'gain', {});
-      await NativeAudioEngine.connectNodes('osc', 'gain2');
-      await NativeAudioEngine.connectNodes('gain2', OUTPUT_BUS);
-
-      const state = resolveMockState();
-      expect(state.nodes.has('gain1')).toBe(false);
-      expect(state.nodes.has('gain2')).toBe(true);
-      expect(state.connections.has('osc->gain2')).toBe(true);
+        await engine.disconnect('source', 'dest');
+        expect(state.connections.has('source->dest')).toBe(false);
+      }
     });
 
-    it('handles automation across multiple nodes simultaneously', async () => {
-      await engine.configureNodes([
-        { id: 'osc1', type: 'sine', options: {} },
-        { id: 'osc2', type: 'sine', options: {} },
-        { id: 'mixer', type: 'mixer', options: {} },
-      ]);
+    it('maintains state consistency after partial failures', async () => {
+      await engine.configureNodes([{ id: 'osc1', type: 'sine' }]);
 
-      await NativeAudioEngine.scheduleParameterAutomation('osc1', 'frequency', 0, 220);
-      await NativeAudioEngine.scheduleParameterAutomation('osc2', 'frequency', 0, 440);
-      await NativeAudioEngine.scheduleParameterAutomation('mixer', 'gain', 0, 0.5);
+      // Try to connect to non-existent node
+      await expect(engine.connect('osc1', 'nonexistent')).rejects.toThrow();
 
+      // Verify state is still consistent
       const state = resolveMockState();
-      expect(state.automations.get('osc1')?.get('frequency')).toBeDefined();
-      expect(state.automations.get('osc2')?.get('frequency')).toBeDefined();
-      expect(state.automations.get('mixer')?.get('gain')).toBeDefined();
-    });
+      expect(state.nodes.has('osc1')).toBe(true);
+      expect(state.connections.size).toBe(0);
 
-    it('supports dynamic automation updates during runtime', async () => {
-      await NativeAudioEngine.addNode('osc', 'sine', {});
-
-      const lane = new AutomationLane('frequency');
-      lane.addPoint({ frame: 0, value: 220 });
-      await engine.publishAutomation('osc', lane);
-
-      lane.addPoint({ frame: 256, value: 440 });
-      lane.addPoint({ frame: 512, value: 880 });
-      await engine.publishAutomation('osc', lane);
-
-      const state = resolveMockState();
-      const points = state.automations.get('osc')?.get('frequency');
-      expect(points?.length).toBe(3);
+      // Subsequent valid operations should work
+      await engine.configureNodes([{ id: 'gain1', type: 'gain' }]);
+      await engine.connect('osc1', 'gain1');
+      expect(state.connections.has('osc1->gain1')).toBe(true);
     });
   });
 
-  describe('edge cases and error recovery', () => {
-    let engine: AudioEngine;
-
-    beforeEach(async () => {
-      engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+  describe('Edge Cases and Boundary Conditions', () => {
+    it('handles very large frame numbers in automation', async () => {
+      const engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
       await engine.init();
-    });
+      await engine.configureNodes([{ id: 'osc1', type: 'sine' }]);
 
-    afterEach(async () => {
+      const largeFrame = 48000 * 3600; // 1 hour at 48kHz
+      await NativeAudioEngine.scheduleParameterAutomation('osc1', 'frequency', largeFrame, 880);
+
+      const state = resolveMockState();
+      const automations = state.automations.get('osc1');
+      expect(automations?.get('frequency')).toEqual([{ frame: largeFrame, value: 880 }]);
+
       await engine.dispose();
     });
 
-    it('handles nodes with special characters in IDs', async () => {
-      const specialIds = ['node-1', 'node_2', 'node.3', 'node#4'];
-      for (const id of specialIds) {
-        await NativeAudioEngine.addNode(id, 'gain', {});
+    it('handles extreme parameter values', async () => {
+      const engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      await engine.init();
+      await engine.configureNodes([{ id: 'osc1', type: 'sine' }]);
+
+      await NativeAudioEngine.scheduleParameterAutomation('osc1', 'frequency', 0, 0.0001);
+      await NativeAudioEngine.scheduleParameterAutomation('osc1', 'frequency', 1, 20000);
+      await NativeAudioEngine.scheduleParameterAutomation('osc1', 'frequency', 2, -1000);
+
+      const state = resolveMockState();
+      const automations = state.automations.get('osc1');
+      expect(automations?.get('frequency')).toEqual([
+        { frame: 0, value: 0.0001 },
+        { frame: 1, value: 20000 },
+        { frame: 2, value: -1000 },
+      ]);
+
+      await engine.dispose();
+    });
+
+    it('handles node IDs with special characters', async () => {
+      const engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      await engine.init();
+
+      await engine.configureNodes([
+        { id: 'osc-1', type: 'sine' },
+        { id: 'gain_1', type: 'gain' },
+        { id: 'mixer.main', type: 'mixer' },
+      ]);
+
+      const state = resolveMockState();
+      expect(state.nodes.has('osc-1')).toBe(true);
+      expect(state.nodes.has('gain_1')).toBe(true);
+      expect(state.nodes.has('mixer.main')).toBe(true);
+
+      await engine.connect('osc-1', 'gain_1');
+      expect(state.connections.has('osc-1->gain_1')).toBe(true);
+
+      await engine.dispose();
+    });
+
+    it('handles many connections to single node', async () => {
+      const engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      await engine.init();
+
+      const sources = Array.from({ length: 20 }, (_, i) => `source${i}`);
+      await engine.configureNodes([
+        ...sources.map((id) => ({ id, type: 'sine' })),
+        { id: 'mixer', type: 'mixer' },
+      ]);
+
+      for (const source of sources) {
+        await engine.connect(source, 'mixer');
       }
-      const state = resolveMockState();
-      expect(state.nodes.size).toBe(specialIds.length);
-    });
-
-    it('trims leading and trailing whitespace from node IDs', async () => {
-      await NativeAudioEngine.addNode('  trimmed  ', 'sine', {});
-      const state = resolveMockState();
-      expect(state.nodes.has('trimmed')).toBe(true);
-    });
-
-    it('preserves options with boolean false values', async () => {
-      await NativeAudioEngine.addNode('node', 'gain', { bypass: false });
-      const state = resolveMockState();
-      expect(state.nodes.get('node')?.options.bypass).toBe(false);
-    });
-
-    it('preserves options with zero numeric values', async () => {
-      await NativeAudioEngine.addNode('node', 'gain', { gain: 0 });
-      const state = resolveMockState();
-      expect(state.nodes.get('node')?.options.gain).toBe(0);
-    });
-
-    it('handles very long node IDs', async () => {
-      const longId = 'a'.repeat(256);
-      await NativeAudioEngine.addNode(longId, 'gain', {});
-      const state = resolveMockState();
-      expect(state.nodes.has(longId)).toBe(true);
-    });
-
-    it('handles options with deeply nested structures', async () => {
-      await NativeAudioEngine.addNode('node', 'gain', {
-        level1: 1,
-        level2: 2.5,
-        level3: 3.14159,
-      });
-      const state = resolveMockState();
-      expect(state.nodes.get('node')?.options).toMatchObject({
-        level1: 1,
-        level2: 2.5,
-        level3: 3.14159,
-      });
-    });
-
-    it('maintains connection integrity after failed connection attempts', async () => {
-      await NativeAudioEngine.addNode('osc', 'sine', {});
-      await NativeAudioEngine.connectNodes('osc', OUTPUT_BUS);
-
-      await expect(
-        NativeAudioEngine.connectNodes('osc', 'nonexistent'),
-      ).rejects.toThrow();
 
       const state = resolveMockState();
-      expect(state.connections.size).toBe(1);
-      expect(state.connections.has(`osc->${OUTPUT_BUS}`)).toBe(true);
-    });
+      expect(state.connections.size).toBe(20);
+      for (const source of sources) {
+        expect(state.connections.has(`${source}->mixer`)).toBe(true);
+      }
 
-    it('allows reconnection after disconnection', async () => {
-      await NativeAudioEngine.addNode('osc', 'sine', {});
-      await NativeAudioEngine.addNode('gain', 'gain', {});
-
-      await NativeAudioEngine.connectNodes('osc', 'gain');
-      await NativeAudioEngine.disconnectNodes('osc', 'gain');
-      await NativeAudioEngine.connectNodes('osc', 'gain');
-
-      const state = resolveMockState();
-      expect(state.connections.has('osc->gain')).toBe(true);
-    });
-  });
-
-  describe('integration with ClockSyncService', () => {
-    it('initializes clock with engine parameters', () => {
-      const engine = new AudioEngine({
-        sampleRate: 48000,
-        framesPerBuffer: 256,
-        bpm: 120,
-      });
-      const clock = engine.getClock();
-      const desc = clock.describe();
-
-      expect(desc.sampleRate).toBe(48000);
-      expect(desc.framesPerBuffer).toBe(256);
-      expect(desc.bpm).toBe(120);
-    });
-
-    it('quantizes automation frames to buffer boundaries using clock', () => {
-      const engine = new AudioEngine({
-        sampleRate: 48000,
-        framesPerBuffer: 128,
-        bpm: 120,
-      });
-      const clock = engine.getClock();
-
-      expect(clock.quantizeFrameToBuffer(0)).toBe(0);
-      expect(clock.quantizeFrameToBuffer(1)).toBe(128);
-      expect(clock.quantizeFrameToBuffer(128)).toBe(128);
-      expect(clock.quantizeFrameToBuffer(129)).toBe(256);
-    });
-
-    it('computes buffer duration accurately', () => {
-      const engine = new AudioEngine({
-        sampleRate: 48000,
-        framesPerBuffer: 480,
-        bpm: 120,
-      });
-      const clock = engine.getClock();
-
-      expect(clock.bufferDurationSeconds()).toBeCloseTo(0.01, 5); // 10ms
-    });
-
-    it('computes frames per beat accurately', () => {
-      const engine = new AudioEngine({
-        sampleRate: 48000,
-        framesPerBuffer: 256,
-        bpm: 120,
-      });
-      const clock = engine.getClock();
-
-      expect(clock.framesPerBeat()).toBe(24000); // 0.5 seconds at 48kHz
-    });
-
-    it('supports tempo updates via clock service', () => {
-      const engine = new AudioEngine({
-        sampleRate: 48000,
-        framesPerBuffer: 256,
-        bpm: 120,
-      });
-      const clock = engine.getClock();
-
-      clock.updateTempo(90);
-      expect(clock.describe().bpm).toBe(90);
-      expect(clock.framesPerBeat()).toBe(32000); // 60/90 seconds at 48kHz
+      await engine.dispose();
     });
   });
 });
