@@ -15,7 +15,68 @@
 #include "audio_engine/Scheduler.h"
 #include "audio_engine/Clock.h"
 
-namespace daft::audio {
+/**
+   * Construct a scene graph configured for audio processing.
+   * @param sampleRate The audio sample rate in Hz used for processing.
+   * @param framesPerBuffer The expected number of frames per render buffer.
+   */
+  
+  /**
+   * Add a DSP node to the scene graph under the given identifier.
+   * @param id Identifier for the node; must be unique within the graph.
+   * @param node Ownership of the node to insert into the graph.
+   * @returns `true` if the node was added successfully, `false` if an entry with the same id already exists.
+   */
+  
+  /**
+   * Remove the node associated with the given identifier from the scene graph.
+   * @param id Identifier of the node to remove; no action is taken if the id is not present.
+   */
+  
+  /**
+   * Create a directed connection from a source node to a destination node.
+   * @param source Identifier of the source node.
+   * @param destination Identifier of the destination node.
+   * @returns `true` if the connection was established, `false` if the connection could not be created (e.g., nodes missing or connection invalid).
+   */
+  
+  /**
+   * Remove the directed connection between the specified source and destination nodes.
+   * @param source Identifier of the source node.
+   * @param destination Identifier of the destination node.
+   */
+  
+  /**
+   * Render audio by processing the graph topology and write the mixed output into the provided buffer.
+   * @param outputBuffer View into the destination buffer that will receive the rendered audio.
+   */
+  
+  /**
+   * Schedule a one-time automation callback to be invoked for a node at a specific render frame.
+   * @param nodeId Identifier of the node to automate.
+   * @param cb Callback invoked with the target node to perform parameter updates.
+   * @param frame Absolute render frame at which the callback should execute.
+   */
+  
+  /**
+   * Return the configured audio sample rate for this scene graph.
+   * @returns The sample rate in Hz.
+   */
+  
+  /**
+   * Identifier used for the graph's output bus.
+   */
+  
+  /**
+   * Return the maximum number of supported audio channels.
+   * @returns The compile-time upper limit on supported channels.
+   */
+  
+  /**
+   * Return the maximum supported frames per buffer.
+   * @returns The compile-time upper limit on frames per buffer.
+   */
+  namespace daft::audio {
 
 class SceneGraph {
  public:

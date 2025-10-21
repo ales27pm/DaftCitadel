@@ -18,6 +18,14 @@ using daft::audio::bridge::NodeOptions;
 
 namespace {
 
+/**
+ * @brief Converts a Java UTF-8 string to a C++ std::string.
+ *
+ * If `value` is null, returns an empty string.
+ *
+ * @param value Java `jstring` to convert; may be null.
+ * @return std::string UTF-8 encoded copy of `value`'s characters, or an empty string if `value` is null.
+ */
 std::string ToStdString(JNIEnv* env, jstring value) {
   if (value == nullptr) {
     return std::string();
@@ -30,6 +38,11 @@ std::string ToStdString(JNIEnv* env, jstring value) {
   return result;
 }
 
+/**
+ * Produce a lowercase copy of the input string.
+ *
+ * @return A copy of `key` with all characters converted to lowercase.
+ */
 std::string NormalizeKey(const std::string& key) {
   std::string normalized = key;
   std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char c) {
@@ -38,6 +51,17 @@ std::string NormalizeKey(const std::string& key) {
   return normalized;
 }
 
+/**
+ * @brief Throws a Java exception of the specified class with the provided message.
+ *
+ * Locates the Java exception class named by `className` and, if found, throws a new
+ * instance of that exception with `message` as the detail message. If the exception
+ * class cannot be found, the function returns without throwing.
+ *
+ * @param env JNI environment pointer used to find and throw the exception.
+ * @param className Fully-qualified JNI class name of the Java exception (e.g. "java/lang/RuntimeException").
+ * @param message Detail message to use for the thrown Java exception.
+ */
 void ThrowJavaException(JNIEnv* env, const char* className, const std::string& message) {
   jclass exceptionClass = env->FindClass(className);
   if (exceptionClass == nullptr) {
@@ -47,6 +71,18 @@ void ThrowJavaException(JNIEnv* env, const char* className, const std::string& m
   env->DeleteLocalRef(exceptionClass);
 }
 
+/**
+ * @brief Converts a Java Map<String, Object> into a NodeOptions map with numeric values.
+ *
+ * Keys are normalized to lowercase; values are converted to doubles when possible:
+ * - Java Numbers are stored as their double value.
+ * - Java Booleans are stored as `1.0` for `true` and `0.0` for `false`.
+ * - Java Strings are parsed as doubles and stored if parsing succeeds; unparsable strings are ignored.
+ *
+ * @param env JNI environment pointer.
+ * @param map Java `java.util.Map<String, Object>` instance to convert. If `nullptr`, an empty NodeOptions is returned.
+ * @return NodeOptions A map from normalized (lowercase) keys to double values representing the converted entries.
+ */
 NodeOptions ConvertOptions(JNIEnv* env, jobject map) {
   NodeOptions options;
   if (map == nullptr) {
@@ -121,6 +157,14 @@ NodeOptions ConvertOptions(JNIEnv* env, jobject map) {
 
 extern "C" {
 
+/**
+ * @brief Initialize the native audio engine with the specified sample rate and buffer size.
+ *
+ * @param sampleRate Audio sample rate in Hz.
+ * @param framesPerBuffer Number of frames per audio buffer.
+ *
+ * @throws java.lang.RuntimeException if engine initialization fails.
+ */
 JNIEXPORT void JNICALL
 Java_com_daftcitadel_audio_AudioEngineModule_nativeInitialize(JNIEnv* env, jobject /*thiz*/, jdouble sampleRate,
                                                              jint framesPerBuffer) {
@@ -131,6 +175,16 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeInitialize(JNIEnv* env, jobje
   }
 }
 
+/**
+ * @brief Shuts down the global native audio engine bridge.
+ *
+ * Attempts to stop and clean up the native audio engine; on failure, throws a Java RuntimeException containing the native exception message.
+ *
+ * @param env JNI environment pointer.
+ * @param thiz Unused Java object reference.
+ *
+ * @throws java.lang.RuntimeException If the native shutdown raises an exception.
+ */
 JNIEXPORT void JNICALL
 Java_com_daftcitadel_audio_AudioEngineModule_nativeShutdown(JNIEnv* env, jobject /*thiz*/) {
   try {
@@ -140,6 +194,19 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeShutdown(JNIEnv* env, jobject
   }
 }
 
+/**
+ * @brief Creates a native audio node from Java parameters and adds it to the engine.
+ *
+ * Converts the provided Java nodeId, nodeType, and options map into native types,
+ * constructs the requested node, and registers it with the AudioEngineBridge.
+ *
+ * @param nodeId Java string identifier for the node; must be non-empty.
+ * @param nodeType Java string specifying the node type; must be non-empty.
+ * @param optionsMap Java Map<String,Object> of node options; may be null for defaults.
+ *
+ * @throws java.lang.IllegalArgumentException if nodeId or nodeType is empty or node creation fails.
+ * @throws java.lang.IllegalStateException if the node cannot be added to the audio engine.
+ */
 JNIEXPORT void JNICALL
 Java_com_daftcitadel_audio_AudioEngineModule_nativeAddNode(JNIEnv* env, jobject /*thiz*/, jstring nodeId, jstring nodeType,
                                                           jobject optionsMap) {
@@ -162,6 +229,12 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeAddNode(JNIEnv* env, jobject 
   }
 }
 
+/**
+ * @brief Remove a node from the native audio engine by its identifier.
+ *
+ * @param nodeId Java `jstring` containing the node identifier to remove.
+ * @throws Java RuntimeException containing the native exception message if removal fails.
+ */
 JNIEXPORT void JNICALL
 Java_com_daftcitadel_audio_AudioEngineModule_nativeRemoveNode(JNIEnv* env, jobject /*thiz*/, jstring nodeId) {
   try {
@@ -171,6 +244,16 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeRemoveNode(JNIEnv* env, jobje
   }
 }
 
+/**
+ * @brief Connects two nodes identified by Java strings.
+ *
+ * Attempts to connect the node with id `source` to the node with id `destination`.
+ *
+ * @param source Java `jstring` containing the source node id.
+ * @param destination Java `jstring` containing the destination node id.
+ *
+ * @throws java/lang/IllegalStateException if the connection fails; message is "Failed to connect '<source>' -> '<destination>'".
+ */
 JNIEXPORT void JNICALL
 Java_com_daftcitadel_audio_AudioEngineModule_nativeConnectNodes(JNIEnv* env, jobject /*thiz*/, jstring source,
                                                                 jstring destination) {
@@ -182,6 +265,14 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeConnectNodes(JNIEnv* env, job
   }
 }
 
+/**
+ * @brief Disconnects two nodes in the native audio engine.
+ *
+ * @param source Java `jstring` containing the source node identifier.
+ * @param destination Java `jstring` containing the destination node identifier.
+ *
+ * @throws java/lang/RuntimeException if the native disconnect operation fails.
+ */
 JNIEXPORT void JNICALL
 Java_com_daftcitadel_audio_AudioEngineModule_nativeDisconnectNodes(JNIEnv* env, jobject /*thiz*/, jstring source,
                                                                    jstring destination) {
@@ -192,6 +283,16 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeDisconnectNodes(JNIEnv* env, 
   }
 }
 
+/**
+ * @brief Schedule a parameter automation event for a node at a specific frame.
+ *
+ * @param nodeId Java string identifier of the target node.
+ * @param parameter Java string name of the parameter to automate.
+ * @param frame Frame index at which to apply the automation (converted to unsigned 64-bit).
+ * @param value Parameter value to set at the specified frame.
+ *
+ * @throws java/lang/IllegalStateException if scheduling fails due to a native-side error.
+ */
 JNIEXPORT void JNICALL
 Java_com_daftcitadel_audio_AudioEngineModule_nativeScheduleAutomation(JNIEnv* env, jobject /*thiz*/, jstring nodeId,
                                                                       jstring parameter, jlong frame, jdouble value) {
@@ -211,6 +312,13 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeScheduleAutomation(JNIEnv* en
   }
 }
 
+/**
+ * @brief Retrieve runtime diagnostics from the audio engine.
+ *
+ * @return jdoubleArray A 2-element double array where element 0 is the number of xruns
+ * (`diagnostics.xruns`) and element 1 is the last render duration in microseconds
+ * (`diagnostics.lastRenderDurationMicros`). Returns `nullptr` if the Java array cannot be allocated.
+ */
 JNIEXPORT jdoubleArray JNICALL
 Java_com_daftcitadel_audio_AudioEngineModule_nativeGetDiagnostics(JNIEnv* env, jobject /*thiz*/) {
   jdoubleArray result = env->NewDoubleArray(2);
@@ -223,6 +331,11 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeGetDiagnostics(JNIEnv* env, j
   return result;
 }
 
+/**
+ * @brief Get the maximum supported frames per buffer for the audio scene graph.
+ *
+ * @return jint The maximum frames per buffer supported by the engine.
+ */
 JNIEXPORT jint JNICALL
 Java_com_daftcitadel_audio_AudioEngineModule_nativeMaxFramesPerBuffer(JNIEnv*, jobject /*thiz*/) {
   return static_cast<jint>(daft::audio::SceneGraph::maxSupportedFramesPerBuffer());
