@@ -70,9 +70,24 @@ const pluginHostModule = {
   __emitter: pluginHostEmitter,
 };
 
+const collabDiagnosticsEmitter = new MockNativeEventEmitter();
+
+const collabNetworkDiagnosticsModule = {
+  getCurrentLinkMetrics: async () => ({
+    interface: 'en0',
+    rssi: -58,
+    noise: -95,
+    linkSpeedMbps: 420,
+  }),
+  startObserving: () => {},
+  stopObserving: () => {},
+  __emitter: collabDiagnosticsEmitter,
+};
+
 export const NativeModules: Record<string, unknown> = {
   AudioEngineModule: audioEngineModule,
   PluginHostModule: pluginHostModule,
+  CollabNetworkDiagnostics: collabNetworkDiagnosticsModule,
 };
 
 export class NativeEventEmitter extends MockNativeEventEmitter {
@@ -80,6 +95,9 @@ export class NativeEventEmitter extends MockNativeEventEmitter {
     super();
     if (module === pluginHostModule) {
       return pluginHostEmitter as unknown as NativeEventEmitter;
+    }
+    if (module === collabNetworkDiagnosticsModule) {
+      return collabDiagnosticsEmitter as unknown as NativeEventEmitter;
     }
   }
 }
@@ -108,3 +126,4 @@ export const PermissionsAndroid = {
 export type TurboModule = unknown;
 
 export const __mockPluginHostEmitter = pluginHostEmitter;
+export const __mockCollabDiagnosticsEmitter = collabDiagnosticsEmitter;
