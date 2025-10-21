@@ -246,9 +246,23 @@ RCT_EXPORT_METHOD(scheduleParameterAutomation:(NSString*)nodeId
     RejectPromise(reject, @"invalid_arguments", "nodeId, parameter, and frame are required");
     return;
   }
+  const double frameValue = frame.doubleValue;
+  if (!std::isfinite(frameValue) || frameValue < 0.0) {
+    RejectPromise(reject, @"invalid_arguments", "frame must be a non-negative integer");
+    return;
+  }
+  if (!std::isfinite(value)) {
+    RejectPromise(reject, @"invalid_arguments", "value must be finite");
+    return;
+  }
+  const unsigned long long frameTicks = frame.unsignedLongLongValue;
+  const double diff = std::fabs(frameValue - static_cast<double>(frameTicks));
+  if (diff > 1e-6) {
+    RejectPromise(reject, @"invalid_arguments", "frame must be a non-negative integer");
+    return;
+  }
   try {
-    AudioEngineBridge::scheduleParameterAutomation([nodeId UTF8String], [parameter UTF8String], frame.unsignedLongLongValue,
-                                                   value);
+    AudioEngineBridge::scheduleParameterAutomation([nodeId UTF8String], [parameter UTF8String], frameTicks, value);
     resolve(nil);
   } catch (const std::exception& ex) {
     os_log_error(ModuleLogger(), "scheduleParameterAutomation failed: %{public}s", ex.what());

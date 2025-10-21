@@ -11,7 +11,7 @@
         "Preserve cross-platform support for iOS and Android, relying only on public APIs and approved tooling for network diagnostics research.",
         "Document user-facing behavior and developer workflows in the `docs/` directory when introducing notable changes.",
         "Run `npm run manage:agents` at the end of each session so that generated AGENTS.md files stay synchronized with `agents.config.json`.",
-        "Placeholders, stubs, mocks, incomplete or simplified code is not allowed. Only refine full working logic and code will be accepted."
+        "Production code must be complete and fully functional; placeholders and stubs are not allowed. Test mocks and test doubles are acceptable when they enable deterministic unit testing."
       ],
       "notes": [
         "This file is maintained automatically by `scripts/manageAgents.js`; edit `agents.config.json` instead of modifying AGENTS.md manually.",

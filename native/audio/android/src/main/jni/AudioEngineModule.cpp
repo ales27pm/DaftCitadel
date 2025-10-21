@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -194,6 +195,14 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeDisconnectNodes(JNIEnv* env, 
 JNIEXPORT void JNICALL
 Java_com_daftcitadel_audio_AudioEngineModule_nativeScheduleAutomation(JNIEnv* env, jobject /*thiz*/, jstring nodeId,
                                                                       jstring parameter, jlong frame, jdouble value) {
+  if (frame < 0) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException", "frame must be non-negative");
+    return;
+  }
+  if (!std::isfinite(value)) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException", "value must be finite");
+    return;
+  }
   try {
     AudioEngineBridge::scheduleParameterAutomation(ToStdString(env, nodeId), ToStdString(env, parameter),
                                                    static_cast<std::uint64_t>(frame), value);
