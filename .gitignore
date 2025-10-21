@@ -1,0 +1,4 @@
+node_modules/
+audio-engine/build/
+*.log
+.DS_Store
