@@ -11,6 +11,18 @@
     "outDir": "lib",
     "jsx": "react-native",
     "types": ["jest", "node"],
+    "typeRoots": ["./src/types", "./node_modules/@types"],
+    "paths": {
+      "react-native-reanimated": ["src/types/stubs/react-native-reanimated"],
+      "@shopify/react-native-skia": ["src/types/stubs/shopify-react-native-skia"],
+      "@react-navigation/native": ["src/types/stubs/react-navigation-native"],
+      "@react-navigation/native-stack": [
+        "src/types/stubs/react-navigation-native-stack"
+      ],
+      "@react-navigation/bottom-tabs": [
+        "src/types/stubs/react-navigation-bottom-tabs"
+      ]
+    },
     "resolveJsonModule": true,
     "skipLibCheck": true
   },

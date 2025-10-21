@@ -33,13 +33,13 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
   const internalPlayhead = useSharedValue(0);
   const playheadValue = playhead ?? internalPlayhead;
   const canvasStyle = useMemo(() => [{ width, height }, style], [height, style, width]);
-  const [progress, setProgress] = useState(() => playheadValue.value ?? 0);
+  const [progress, setProgress] = useState<number>(() => playheadValue.value ?? 0);
 
   useEffect(() => {
     waveformPath.current = buildWaveformPath(waveform, width, height);
   }, [height, waveform, width]);
 
-  useAnimatedReaction(
+  useAnimatedReaction<number>(
     () => Math.max(0, Math.min(1, playheadValue.value)),
     (value, previous) => {
       if (value !== previous) {
@@ -57,7 +57,7 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
     waveformPath.current = buildWaveformPath(waveform, newWidth, height);
   };
 
-  const progressPath = useMemo(() => {
+  const progressPath = useMemo<SkPath>(() => {
     const x = progress * width;
     const path = Skia.Path.Make();
     path.moveTo(x, 0);
@@ -65,7 +65,7 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
     return path;
   }, [height, progress, width]);
 
-  const waveformRendered = useMemo(() => {
+  const waveformRendered = useMemo<SkPath | null>(() => {
     if (!waveformPath.current) {
       waveformPath.current = buildWaveformPath(waveform, width, height);
     }
