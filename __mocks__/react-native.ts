@@ -60,9 +60,10 @@ const audioEngineState: AudioEngineMockState = {
   automations: new Map(),
 };
 
-const connectionKey = (source: string, destination: string) => `${source}->${destination}`;
+export const connectionKey = (source: string, destination: string) =>
+  `${source}->${destination}`;
 
-const OUTPUT_BUS_ID = '__output__';
+export const OUTPUT_BUS_ID = '__output__';
 
 const audioEngineModule = {
   initialize: async (sampleRate: number, framesPerBuffer: number) => {
@@ -111,10 +112,16 @@ const audioEngineModule = {
   connectNodes: async (source: string, destination: string) => {
     const trimmedSource = source.trim();
     const trimmedDestination = destination.trim();
+    if (!trimmedSource || !trimmedDestination) {
+      throw new Error('source and destination are required');
+    }
     if (!audioEngineState.nodes.has(trimmedSource)) {
       throw new Error(`Source node '${trimmedSource}' is not registered`);
     }
-    if (trimmedDestination !== OUTPUT_BUS_ID && !audioEngineState.nodes.has(trimmedDestination)) {
+    if (
+      trimmedDestination !== OUTPUT_BUS_ID &&
+      !audioEngineState.nodes.has(trimmedDestination)
+    ) {
       throw new Error(`Destination node '${trimmedDestination}' is not registered`);
     }
     const key = connectionKey(trimmedSource, trimmedDestination);

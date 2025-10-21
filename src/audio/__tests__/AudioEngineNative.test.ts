@@ -38,7 +38,11 @@ describe('NativeAudioEngine TurboModule', () => {
 
   describe('Initialization and Lifecycle', () => {
     it('initializes, configures nodes, connects to output, and exposes diagnostics', async () => {
-      const engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      const engine = new AudioEngine({
+        sampleRate: 48000,
+        framesPerBuffer: 256,
+        bpm: 120,
+      });
 
       await engine.init();
       const state = resolveMockState();
@@ -84,25 +88,29 @@ describe('NativeAudioEngine TurboModule', () => {
     });
 
     it('rejects initialization with invalid sample rate', () => {
-      expect(() => new AudioEngine({ sampleRate: 0, framesPerBuffer: 256, bpm: 120 })).toThrow(
-        'sampleRate must be positive',
-      );
-      expect(() => new AudioEngine({ sampleRate: -1, framesPerBuffer: 256, bpm: 120 })).toThrow(
-        'sampleRate must be positive',
-      );
+      expect(
+        () => new AudioEngine({ sampleRate: 0, framesPerBuffer: 256, bpm: 120 }),
+      ).toThrow('sampleRate must be positive');
+      expect(
+        () => new AudioEngine({ sampleRate: -1, framesPerBuffer: 256, bpm: 120 }),
+      ).toThrow('sampleRate must be positive');
     });
 
     it('rejects initialization with invalid frames per buffer', () => {
-      expect(() => new AudioEngine({ sampleRate: 48000, framesPerBuffer: 0, bpm: 120 })).toThrow(
-        'framesPerBuffer must be positive',
-      );
-      expect(() => new AudioEngine({ sampleRate: 48000, framesPerBuffer: -10, bpm: 120 })).toThrow(
-        'framesPerBuffer must be positive',
-      );
+      expect(
+        () => new AudioEngine({ sampleRate: 48000, framesPerBuffer: 0, bpm: 120 }),
+      ).toThrow('framesPerBuffer must be positive');
+      expect(
+        () => new AudioEngine({ sampleRate: 48000, framesPerBuffer: -10, bpm: 120 }),
+      ).toThrow('framesPerBuffer must be positive');
     });
 
     it('properly cleans up all state on dispose', async () => {
-      const engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      const engine = new AudioEngine({
+        sampleRate: 48000,
+        framesPerBuffer: 256,
+        bpm: 120,
+      });
       await engine.init();
 
       await engine.configureNodes([
@@ -130,7 +138,11 @@ describe('NativeAudioEngine TurboModule', () => {
     });
 
     it('allows re-initialization after disposal', async () => {
-      const engine = new AudioEngine({ sampleRate: 44100, framesPerBuffer: 512, bpm: 100 });
+      const engine = new AudioEngine({
+        sampleRate: 44100,
+        framesPerBuffer: 512,
+        bpm: 100,
+      });
 
       await engine.init();
       let state = resolveMockState();
@@ -369,7 +381,9 @@ describe('NativeAudioEngine TurboModule', () => {
     });
 
     it('allows connection to OUTPUT_BUS without registration', async () => {
-      await expect(NativeAudioEngine.connectNodes('osc1', OUTPUT_BUS)).resolves.not.toThrow();
+      await expect(
+        NativeAudioEngine.connectNodes('osc1', OUTPUT_BUS),
+      ).resolves.not.toThrow();
     });
 
     it('rejects duplicate connections', async () => {
@@ -497,7 +511,9 @@ describe('NativeAudioEngine TurboModule', () => {
       expect(state.automations.get('osc1')?.get('frequency')).toEqual([
         { frame: 0, value: 440 },
       ]);
-      expect(state.automations.get('gain1')?.get('gain')).toEqual([{ frame: 0, value: 0.8 }]);
+      expect(state.automations.get('gain1')?.get('gain')).toEqual([
+        { frame: 0, value: 0.8 },
+      ]);
     });
 
     it('rejects automation for non-existent node', async () => {
@@ -630,7 +646,11 @@ describe('NativeAudioEngine TurboModule', () => {
 
   describe('ClockSyncService Integration', () => {
     it('provides clock service from AudioEngine', () => {
-      const engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      const engine = new AudioEngine({
+        sampleRate: 48000,
+        framesPerBuffer: 256,
+        bpm: 120,
+      });
       const clock = engine.getClock();
 
       expect(clock).toBeInstanceOf(ClockSyncService);
@@ -643,7 +663,11 @@ describe('NativeAudioEngine TurboModule', () => {
     });
 
     it('clock computes correct frames per beat', () => {
-      const engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      const engine = new AudioEngine({
+        sampleRate: 48000,
+        framesPerBuffer: 256,
+        bpm: 120,
+      });
       const clock = engine.getClock();
 
       // At 120 BPM: 60 seconds / 120 beats = 0.5 seconds per beat
@@ -652,7 +676,11 @@ describe('NativeAudioEngine TurboModule', () => {
     });
 
     it('clock quantizes frames to buffer boundaries', () => {
-      const engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      const engine = new AudioEngine({
+        sampleRate: 48000,
+        framesPerBuffer: 256,
+        bpm: 120,
+      });
       const clock = engine.getClock();
 
       expect(clock.quantizeFrameToBuffer(0)).toBe(0);
@@ -663,7 +691,11 @@ describe('NativeAudioEngine TurboModule', () => {
     });
 
     it('clock tracks tempo changes', () => {
-      const engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      const engine = new AudioEngine({
+        sampleRate: 48000,
+        framesPerBuffer: 256,
+        bpm: 120,
+      });
       const clock = engine.getClock();
 
       expect(clock.describe().tempoRevision).toBe(0);
@@ -806,12 +838,21 @@ describe('NativeAudioEngine TurboModule', () => {
 
   describe('Edge Cases and Boundary Conditions', () => {
     it('handles very large frame numbers in automation', async () => {
-      const engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      const engine = new AudioEngine({
+        sampleRate: 48000,
+        framesPerBuffer: 256,
+        bpm: 120,
+      });
       await engine.init();
       await engine.configureNodes([{ id: 'osc1', type: 'sine' }]);
 
       const largeFrame = 48000 * 3600; // 1 hour at 48kHz
-      await NativeAudioEngine.scheduleParameterAutomation('osc1', 'frequency', largeFrame, 880);
+      await NativeAudioEngine.scheduleParameterAutomation(
+        'osc1',
+        'frequency',
+        largeFrame,
+        880,
+      );
 
       const state = resolveMockState();
       const automations = state.automations.get('osc1');
@@ -821,7 +862,11 @@ describe('NativeAudioEngine TurboModule', () => {
     });
 
     it('handles extreme parameter values', async () => {
-      const engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      const engine = new AudioEngine({
+        sampleRate: 48000,
+        framesPerBuffer: 256,
+        bpm: 120,
+      });
       await engine.init();
       await engine.configureNodes([{ id: 'osc1', type: 'sine' }]);
 
@@ -841,7 +886,11 @@ describe('NativeAudioEngine TurboModule', () => {
     });
 
     it('handles node IDs with special characters', async () => {
-      const engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      const engine = new AudioEngine({
+        sampleRate: 48000,
+        framesPerBuffer: 256,
+        bpm: 120,
+      });
       await engine.init();
 
       await engine.configureNodes([
@@ -862,7 +911,11 @@ describe('NativeAudioEngine TurboModule', () => {
     });
 
     it('handles many connections to single node', async () => {
-      const engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      const engine = new AudioEngine({
+        sampleRate: 48000,
+        framesPerBuffer: 256,
+        bpm: 120,
+      });
       await engine.init();
 
       const sources = Array.from({ length: 20 }, (_, i) => `source${i}`);

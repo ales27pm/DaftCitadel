@@ -67,7 +67,7 @@ describe('AutomationLane', () => {
     lane.addPoint({ frame: 200, value: 0.7 });
     lane.addPoint({ frame: 300, value: 1.0 });
 
-    expect(lane.toPayload().points.map(p => p.frame)).toEqual([0, 100, 200, 300]);
+    expect(lane.toPayload().points.map((p) => p.frame)).toEqual([0, 100, 200, 300]);
   });
 
   it('maintains correct order when adding at the beginning', () => {
@@ -76,7 +76,7 @@ describe('AutomationLane', () => {
     lane.addPoint({ frame: 50, value: 0.25 });
     lane.addPoint({ frame: 10, value: 0.1 });
 
-    expect(lane.toPayload().points.map(p => p.frame)).toEqual([10, 50, 100]);
+    expect(lane.toPayload().points.map((p) => p.frame)).toEqual([10, 50, 100]);
   });
 
   it('maintains correct order when adding at the end', () => {
@@ -85,7 +85,7 @@ describe('AutomationLane', () => {
     lane.addPoint({ frame: 50, value: 440 });
     lane.addPoint({ frame: 100, value: 880 });
 
-    expect(lane.toPayload().points.map(p => p.frame)).toEqual([10, 50, 100]);
+    expect(lane.toPayload().points.map((p) => p.frame)).toEqual([10, 50, 100]);
   });
 
   it('maintains correct order when adding in the middle', () => {
@@ -94,7 +94,7 @@ describe('AutomationLane', () => {
     lane.addPoint({ frame: 200, value: 500 });
     lane.addPoint({ frame: 100, value: 300 });
 
-    expect(lane.toPayload().points.map(p => p.frame)).toEqual([0, 100, 200]);
+    expect(lane.toPayload().points.map((p) => p.frame)).toEqual([0, 100, 200]);
   });
 
   it('clears all points', () => {
@@ -151,7 +151,7 @@ describe('AutomationLane', () => {
     lane.addPoint({ frame: 100, value: 0.0 });
     lane.addPoint({ frame: 200, value: 1.0 });
 
-    expect(lane.toPayload().points.map(p => p.value)).toEqual([-1.0, 0.0, 1.0]);
+    expect(lane.toPayload().points.map((p) => p.value)).toEqual([-1.0, 0.0, 1.0]);
   });
 
   it('includes parameter name in payload', () => {
@@ -218,7 +218,7 @@ describe('ClockSyncService', () => {
   it('calculates different frames per beat for different tempos', () => {
     const clock1 = new ClockSyncService(48000, 256, 120);
     const clock2 = new ClockSyncService(48000, 256, 60);
-    
+
     expect(clock1.framesPerBeat()).toBe(24000); // 120 BPM: (48000 * 60) / 120
     expect(clock2.framesPerBeat()).toBe(48000); // 60 BPM: (48000 * 60) / 60
   });
@@ -231,7 +231,7 @@ describe('ClockSyncService', () => {
   it('calculates buffer duration for different sample rates', () => {
     const clock44k = new ClockSyncService(44100, 441, 120);
     const clock48k = new ClockSyncService(48000, 480, 120);
-    
+
     expect(clock44k.bufferDurationSeconds()).toBe(0.01);
     expect(clock48k.bufferDurationSeconds()).toBe(0.01);
   });
@@ -261,7 +261,7 @@ describe('ClockSyncService', () => {
   it('preserves state through describe method', () => {
     const clock = new ClockSyncService(44100, 512, 140);
     const described = clock.describe();
-    
+
     expect(described).toEqual({
       sampleRate: 44100,
       framesPerBuffer: 512,
@@ -273,10 +273,10 @@ describe('ClockSyncService', () => {
   it('updates frames per beat calculation after tempo change', () => {
     const clock = new ClockSyncService(48000, 256, 120);
     const initialFrames = clock.framesPerBeat();
-    
+
     clock.updateTempo(60);
     const updatedFrames = clock.framesPerBeat();
-    
+
     expect(initialFrames).toBe(24000);
     expect(updatedFrames).toBe(48000);
   });
@@ -284,10 +284,10 @@ describe('ClockSyncService', () => {
   it('updates buffer duration after buffer size change', () => {
     const clock = new ClockSyncService(48000, 256, 120);
     const initialDuration = clock.bufferDurationSeconds();
-    
+
     clock.updateBufferSize(512);
     const updatedDuration = clock.bufferDurationSeconds();
-    
+
     expect(initialDuration).toBeCloseTo(256 / 48000);
     expect(updatedDuration).toBeCloseTo(512 / 48000);
   });
@@ -301,7 +301,7 @@ describe('ClockSyncService', () => {
   it('handles extreme tempos', () => {
     const slowClock = new ClockSyncService(48000, 256, 20);
     const fastClock = new ClockSyncService(48000, 256, 300);
-    
+
     expect(slowClock.framesPerBeat()).toBe(144000);
     expect(fastClock.framesPerBeat()).toBe(9600);
   });
@@ -328,9 +328,9 @@ describe('publishAutomationLane', () => {
   it('publishes single automation point', async () => {
     const lane = new AutomationLane('frequency');
     lane.addPoint({ frame: 0, value: 440 });
-    
+
     await publishAutomationLane('testNode', lane);
-    
+
     const state = resolveMockState();
     const automation = state.automations.get('testNode')?.get('frequency');
     expect(automation).toEqual([{ frame: 0, value: 440 }]);
@@ -341,9 +341,9 @@ describe('publishAutomationLane', () => {
     lane.addPoint({ frame: 0, value: 0.0 });
     lane.addPoint({ frame: 100, value: 0.5 });
     lane.addPoint({ frame: 200, value: 1.0 });
-    
+
     await publishAutomationLane('testNode', lane);
-    
+
     const state = resolveMockState();
     const automation = state.automations.get('testNode')?.get('gain');
     expect(automation).toHaveLength(3);
@@ -351,9 +351,9 @@ describe('publishAutomationLane', () => {
 
   it('publishes empty lane without error', async () => {
     const lane = new AutomationLane('volume');
-    
+
     await expect(publishAutomationLane('testNode', lane)).resolves.not.toThrow();
-    
+
     const state = resolveMockState();
     const automation = state.automations.get('testNode')?.get('volume');
     expect(automation).toBeUndefined();
@@ -362,22 +362,22 @@ describe('publishAutomationLane', () => {
   it('rejects publishing to non-existent node', async () => {
     const lane = new AutomationLane('frequency');
     lane.addPoint({ frame: 0, value: 440 });
-    
+
     await expect(publishAutomationLane('nonexistent', lane)).rejects.toThrow();
   });
 
   it('publishes concurrent automation lanes', async () => {
     const lane1 = new AutomationLane('frequency');
     lane1.addPoint({ frame: 0, value: 440 });
-    
+
     const lane2 = new AutomationLane('gain');
     lane2.addPoint({ frame: 0, value: 0.8 });
-    
+
     await Promise.all([
       publishAutomationLane('testNode', lane1),
       publishAutomationLane('testNode', lane2),
     ]);
-    
+
     const state = resolveMockState();
     expect(state.automations.get('testNode')?.get('frequency')).toBeDefined();
     expect(state.automations.get('testNode')?.get('gain')).toBeDefined();
@@ -387,26 +387,26 @@ describe('publishAutomationLane', () => {
     const lane1 = new AutomationLane('frequency');
     lane1.addPoint({ frame: 0, value: 440 });
     await publishAutomationLane('testNode', lane1);
-    
+
     const lane2 = new AutomationLane('frequency');
     lane2.addPoint({ frame: 100, value: 880 });
     await publishAutomationLane('testNode', lane2);
-    
+
     const state = resolveMockState();
     const automation = state.automations.get('testNode')?.get('frequency');
-    expect(automation?.map(p => p.frame)).toContain(0);
-    expect(automation?.map(p => p.frame)).toContain(100);
+    expect(automation?.map((p) => p.frame)).toContain(0);
+    expect(automation?.map((p) => p.frame)).toContain(100);
   });
 
   it('publishes large automation lanes efficiently', async () => {
     const lane = new AutomationLane('modulation');
-    
+
     for (let i = 0; i < 1000; i++) {
       lane.addPoint({ frame: i * 10, value: Math.sin(i / 100) });
     }
-    
+
     await expect(publishAutomationLane('testNode', lane)).resolves.not.toThrow();
-    
+
     const state = resolveMockState();
     const automation = state.automations.get('testNode')?.get('modulation');
     expect(automation).toHaveLength(1000);
