@@ -7,9 +7,15 @@ import Animated, {
   useDerivedValue,
   useSharedValue,
 } from 'react-native-reanimated';
+import type { AnimatedScrollEvent } from 'react-native-reanimated';
 
 import { ThemeIntent, mapIntentToColor } from '../../design-system/tokens';
 import { useTheme } from '../../design-system/theme';
+
+interface GridMetrics {
+  startBeat: number;
+  visibleBeats: number;
+}
 
 export interface MidiNote {
   id: string;
@@ -40,10 +46,13 @@ export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
 }) => {
   const theme = useTheme();
   const scrollX = useSharedValue(0);
-  const [gridState, setGridState] = useState({ startBeat: 0, visibleBeats: 0 });
+  const [gridState, setGridState] = useState<GridMetrics>({
+    startBeat: 0,
+    visibleBeats: 0,
+  });
 
   const onScroll = useAnimatedScrollHandler({
-    onScroll: (event) => {
+    onScroll: (event: AnimatedScrollEvent) => {
       scrollX.value = event.contentOffset.x;
     },
   });
@@ -55,13 +64,13 @@ export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
     [pixelsPerBeat, totalBars],
   );
 
-  const gridLines = useDerivedValue(() => {
+  const gridLines = useDerivedValue<GridMetrics>(() => {
     const visibleBeats = Math.ceil(800 / pixelsPerBeat);
     const startBeat = Math.floor(scrollX.value / pixelsPerBeat);
     return { visibleBeats, startBeat };
   }, [pixelsPerBeat]);
 
-  useAnimatedReaction(
+  useAnimatedReaction<GridMetrics>(
     () => gridLines.value,
     (value, previous) => {
       if (
