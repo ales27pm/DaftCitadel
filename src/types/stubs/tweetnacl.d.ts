@@ -19,22 +19,25 @@ declare module 'tweetnacl' {
       publicKey: Uint8Array,
       secretKey: Uint8Array,
     ): Uint8Array;
-    open(
-      message: Uint8Array,
-      nonce: Uint8Array,
-      publicKey: Uint8Array,
-      secretKey: Uint8Array,
-    ): Uint8Array | null;
+    open: {
+      (
+        message: Uint8Array,
+        nonce: Uint8Array,
+        publicKey: Uint8Array,
+        secretKey: Uint8Array,
+      ): Uint8Array | null;
+      after(
+        message: Uint8Array,
+        nonce: Uint8Array,
+        sharedKey: Uint8Array,
+      ): Uint8Array | null;
+    };
     before(publicKey: Uint8Array, secretKey: Uint8Array): Uint8Array;
     after(message: Uint8Array, nonce: Uint8Array, sharedKey: Uint8Array): Uint8Array;
-    openAfter(
-      message: Uint8Array,
-      nonce: Uint8Array,
-      sharedKey: Uint8Array,
-    ): Uint8Array | null;
     readonly publicKeyLength: number;
     readonly secretKeyLength: number;
     readonly sharedKeyLength: number;
+    readonly nonceLength: number;
     readonly overheadLength: number;
     keyPair: {
       (): BoxKeyPair;
@@ -45,7 +48,10 @@ declare module 'tweetnacl' {
   export const secretbox: SecretBox;
   export const box: Box;
   export function randomBytes(length: number): Uint8Array;
-  export function hash(message: Uint8Array): Uint8Array;
+  export const hash: {
+    (message: Uint8Array): Uint8Array;
+    readonly hashLength: number;
+  };
   export const scalarMult: {
     (n: Uint8Array, p: Uint8Array): Uint8Array;
     base(n: Uint8Array): Uint8Array;
