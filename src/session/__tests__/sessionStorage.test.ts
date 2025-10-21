@@ -180,9 +180,7 @@ class RecordingCloudProvider extends NoopCloudSyncProvider {
     this.remote = session;
   }
 
-  override async pull(
-    _sessionId: string,
-  ): Promise<{ session: Session | null }> {
+  override async pull(_sessionId: string): Promise<{ session: Session | null }> {
     return { session: this.remote };
   }
 
@@ -255,7 +253,11 @@ describe('JsonSessionStorageAdapter', () => {
     const tx = await adapter.beginTransaction();
     const firstUpdate = { ...session, name: 'First', revision: session.revision + 1 };
     await tx.write(firstUpdate, { expectedRevision: session.revision });
-    const secondUpdate = { ...firstUpdate, name: 'Second', revision: firstUpdate.revision + 1 };
+    const secondUpdate = {
+      ...firstUpdate,
+      name: 'Second',
+      revision: firstUpdate.revision + 1,
+    };
     await tx.write(secondUpdate);
 
     await adapter.write(
