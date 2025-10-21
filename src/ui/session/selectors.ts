@@ -1,5 +1,19 @@
-import { AutomationCurve, Session, SessionMetadata, Track } from '../../session';
-import { SessionDiagnosticsView, SessionTransportView, TrackViewModel } from './types';
+import {
+  AutomationCurve,
+  PluginRoutingNode,
+  RoutingGraph,
+  Session,
+  SessionMetadata,
+  Track,
+} from '../../session';
+import {
+  SessionDiagnosticsView,
+  SessionTransportView,
+  TrackViewModel,
+  TrackPluginViewModel,
+  TrackPluginStatus,
+} from './types';
+import type { PluginCrashReport } from '../../audio';
 
 const DEFAULT_SAMPLE_COUNT = 2048;
 const MIN_SESSION_LENGTH_MS = 1000;
@@ -166,6 +180,7 @@ const buildTrackViewModel = (
   sessionLengthMs: number,
   diagnostics: SessionDiagnosticsView,
   soloActive: boolean,
+  pluginCrashes?: Map<string, PluginCrashReport>,
 ): TrackViewModel => {
   const waveform = generateWaveform(track, metadata, sessionLengthMs);
   const midiNotes = collectMidiNotes(track, metadata);
@@ -191,6 +206,7 @@ const buildTrackViewModel = (
     hasSolo || track.muted
       ? 0
       : clamp(dbToLinear(track.volume) * peakAutomation * renderAttenuation, 0, 1);
+  const plugins = buildPluginChain(track.routing.graph, pluginCrashes);
   return {
     id: track.id,
     name: track.name,
@@ -204,7 +220,41 @@ const buildTrackViewModel = (
     waveform,
     midiNotes,
     meterLevel,
+    plugins,
   };
+};
+
+const buildPluginChain = (
+  graph: RoutingGraph | undefined,
+  pluginCrashes?: Map<string, PluginCrashReport>,
+): TrackPluginViewModel[] => {
+  if (!graph) {
+    return [];
+  }
+  const nodes = graph.nodes.filter(
+    (node): node is PluginRoutingNode => node.type === 'plugin',
+  );
+  const sorted = [...nodes].sort((a, b) => a.order - b.order);
+  return sorted.map((node) => {
+    const crash = pluginCrashes?.get(node.instanceId);
+    let status: TrackPluginStatus = 'active';
+    if (crash && !crash.recovered) {
+      status = 'crashed';
+    } else if (node.bypassed) {
+      status = 'bypassed';
+    }
+    const label = node.label ?? node.instanceId;
+    return {
+      id: node.id,
+      instanceId: node.instanceId,
+      slot: node.slot,
+      label,
+      bypassed: node.bypassed ?? false,
+      status,
+      accepts: node.accepts,
+      emits: node.emits,
+    };
+  });
 };
 
 export const buildDiagnosticsView = (
@@ -227,11 +277,19 @@ export const buildDiagnosticsView = (
 export const buildTracks = (
   session: Session,
   diagnostics: SessionDiagnosticsView,
+  pluginCrashes?: Map<string, PluginCrashReport>,
 ): TrackViewModel[] => {
   const sessionLength = computeSessionLengthMs(session);
   const soloActive = session.tracks.some((track) => track.solo);
   return session.tracks.map((track) =>
-    buildTrackViewModel(track, session.metadata, sessionLength, diagnostics, soloActive),
+    buildTrackViewModel(
+      track,
+      session.metadata,
+      sessionLength,
+      diagnostics,
+      soloActive,
+      pluginCrashes,
+    ),
   );
 };
 

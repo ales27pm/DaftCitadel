@@ -105,6 +105,14 @@ export class PluginHost {
     parameterId: string,
     envelope: PluginAutomationEnvelope[],
   ): Promise<void> {
+    await this.scheduleAutomation(instanceId, parameterId, envelope);
+  }
+
+  async scheduleAutomation(
+    instanceId: string,
+    parameterId: string,
+    envelope: PluginAutomationEnvelope[],
+  ): Promise<void> {
     const binding = this.instances.get(instanceId);
     if (!binding) {
       throw new Error(`Cannot automate unknown plugin instance ${instanceId}`);

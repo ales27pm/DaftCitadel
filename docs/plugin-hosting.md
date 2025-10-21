@@ -55,7 +55,7 @@ The JS facade coordinates sandboxes, native instantiation, and crash handling:
 
 1. `PluginHost.listAvailablePlugins()` caches descriptors for routing graph configuration.
 2. `PluginHost.loadPlugin(descriptor, options)` ensures the sandbox exists, requests native instantiation, and registers crash listeners.
-3. `PluginHost.automateParameter` validates instance ownership before calling the native automation scheduler.
+3. `PluginHost.scheduleAutomation` validates instance ownership before calling the native automation scheduler; `automateParameter` remains as a compatibility wrapper.
 4. `PluginHost.onCrash` subscribers receive normalized crash reports and can trigger session routing recovery.
 5. `PluginSandboxManager` centralizes Android permission prompts and reuses resolved sandboxes.
 
@@ -63,12 +63,26 @@ The JS facade coordinates sandboxes, native instantiation, and crash handling:
 
 Plugin instances are represented in the session model as `RoutingNode` entries with `slot`, `order`, and automation bindings (see [`src/session/models.ts`](../src/session/models.ts)). The host exports `PluginAutomationEnvelope` utilities so automation curves can be scheduled against native parameters.
 
+### Session audio bridge integration
+
+- [`SessionAudioBridge`](../src/audio/SessionAudioBridge.ts) now provisions plugin sandboxes and instantiates plugins through the shared `PluginHost` whenever a `PluginRoutingNode` is detected in the routing graph.
+- Each plugin node is configured with a `hostInstanceId` option, plus per-signal booleans (`acceptsAudio`, `acceptsMidi`, `acceptsSidechain`, and their `emits` counterparts). Native engines must accept these options when wiring audio and MIDI busses.
+- Plugin automation targets defined on routing nodes are translated into `PluginHost.scheduleAutomation` calls. Automation signatures embed the session revision to guarantee rescheduling when the timeline changes.
+- Stale plugin instances are released after the routing diff executes so native resources are reclaimed promptly.
+
+### UI surfacing
+
+- Mixer channel strips list insert chains with their current state (`active`, `bypassed`, `crashed`).
+- Crash notifications collected from `PluginHost.onCrash` are surfaced via `SessionViewModelProvider` and rendered on the Mixer screen for quick triage.
+
 ## Testing
 
 Automated coverage includes:
 
 - `src/audio/__tests__/PluginHost.test.ts` – validates JS lifecycle hooks, crash recovery, and automation scheduling using mock native modules.
+- `src/audio/__tests__/SessionAudioBridge.test.ts` – exercises plugin lifecycle diffing, automation scheduling, and routing graph mutations.
 - `src/session/__tests__/routingGraph.test.ts` – verifies routing graph normalization and validation logic for plugin nodes, sends, and sidechains.
+- `src/ui/session/__tests__/SessionViewModelProvider.test.tsx` – ensures crash notifications propagate into the session view model.
 
 Use the following commands before committing:
 
@@ -84,5 +98,6 @@ npm run prettier
 - The Android bridge assumes a sandbox binary capable of handling JSON control messages; provide this executable when packaging the app or during developer setup.
 - AUv3 crash detection relies on render observer errors; plug-ins that fail silently may require additional watchdog logic (e.g., heartbeat messages from the audio unit).
 - Parameter automation timing assumes millisecond-resolution envelopes; align session tempo maps if sample-accurate timing is required.
+- Native engines must map `hostInstanceId` back to the underlying plugin process/AudioUnit. Older builds that only expected the session-level `instanceId` should be updated accordingly.
 
 For additional platform-specific entitlements or signing instructions, refer to the project deployment guides under `docs/`.

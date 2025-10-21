@@ -6,7 +6,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
-import { NeonSurface, NeonText, NeonToolbar } from '../design-system';
+import { NeonSurface, NeonText, NeonToolbar, ThemeIntent } from '../design-system';
 import { useAdaptiveLayout } from '../layout';
 import { TrackViewModel, useSessionViewModel } from '../session';
 
@@ -25,6 +25,19 @@ const channelStyles = StyleSheet.create({
     width: '100%',
     borderRadius: 12,
     backgroundColor: '#50E3C2',
+  },
+  pluginRow: {
+    marginTop: 12,
+    borderRadius: 8,
+    backgroundColor: '#16182A',
+    padding: 8,
+  },
+  pluginPill: {
+    marginTop: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    backgroundColor: '#20233B',
   },
 });
 
@@ -53,6 +66,40 @@ const MixerChannel: React.FC<{ track: TrackViewModel }> = ({ track }) => {
     return 'Live';
   }, [track.muted, track.solo]);
 
+  const pluginBadges = useMemo(() => {
+    if (track.plugins.length === 0) {
+      return null;
+    }
+    return (
+      <View style={channelStyles.pluginRow}>
+        <NeonText variant="body" intent="secondary" weight="medium">
+          Inserts
+        </NeonText>
+        {track.plugins.map((plugin) => {
+          let intent: ThemeIntent = 'secondary';
+          let statusText = plugin.status;
+          if (plugin.status === 'crashed') {
+            intent = 'critical';
+            statusText = 'crashed';
+          } else if (plugin.status === 'bypassed') {
+            intent = 'warning';
+            statusText = 'bypassed';
+          }
+          return (
+            <View key={plugin.id} style={channelStyles.pluginPill}>
+              <NeonText variant="body" weight="medium">
+                {plugin.label} • {plugin.slot.toUpperCase()}
+              </NeonText>
+              <NeonText variant="caption" intent={intent}>
+                {statusText}
+              </NeonText>
+            </View>
+          );
+        })}
+      </View>
+    );
+  }, [track.plugins]);
+
   return (
     <NeonSurface style={channelStyles.container}>
       <NeonText variant="title" weight="medium">
@@ -64,13 +111,14 @@ const MixerChannel: React.FC<{ track: TrackViewModel }> = ({ track }) => {
       <View accessibilityLabel={`${track.name} level`} style={channelStyles.meterShell}>
         <Animated.View style={[channelStyles.meterFill, animatedStyle]} />
       </View>
+      {pluginBadges}
     </NeonSurface>
   );
 };
 
 export const MixerScreen: React.FC = () => {
   const adaptive = useAdaptiveLayout();
-  const { status, tracks, diagnostics, refresh } = useSessionViewModel();
+  const { status, tracks, diagnostics, refresh, pluginAlerts } = useSessionViewModel();
   const channelListStyle = useMemo<ViewStyle>(
     () => ({
       paddingHorizontal: adaptive.breakpoint === 'phone' ? 12 : 32,
@@ -126,6 +174,19 @@ export const MixerScreen: React.FC = () => {
           title="Mixer"
           actions={[{ label: 'Refresh', onPress: handleRefresh, intent: 'secondary' }]}
         />
+        {pluginAlerts.length > 0 && (
+          <NeonSurface style={diagnosticsCardStyle} intent="critical">
+            <NeonText variant="title" weight="medium">
+              Plugin Alerts
+            </NeonText>
+            {pluginAlerts.map((alert) => (
+              <NeonText key={`${alert.instanceId}:${alert.timestamp}`} variant="body">
+                {alert.descriptor.name} crashed at{' '}
+                {new Date(alert.timestamp).toLocaleTimeString()}
+              </NeonText>
+            ))}
+          </NeonSurface>
+        )}
         <NeonSurface style={diagnosticsCardStyle}>
           <NeonText variant="title" weight="medium">
             Audio Engine Diagnostics
