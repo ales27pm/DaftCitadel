@@ -11,6 +11,7 @@
 3. Preserve cross-platform support for iOS and Android, relying only on public APIs and approved tooling for network diagnostics research.
 4. Document user-facing behavior and developer workflows in the `docs/` directory when introducing notable changes.
 5. Run `npm run manage:agents` at the end of each session so that generated AGENTS.md files stay synchronized with `agents.config.json`.
+6. Placeholders, stubs, mocks, incomplete or simplified code is not allowed. Only refine full working logic and code will be accepted.
 
 ### Notes
 - This file is maintained automatically by `scripts/manageAgents.js`; edit `agents.config.json` instead of modifying AGENTS.md manually.

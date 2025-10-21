@@ -33,15 +33,135 @@ class MockNativeEventEmitter {
   }
 }
 
+type AudioEngineNode = {
+  type: string;
+  options: Record<string, number | string | boolean>;
+};
+
+type AutomationPoint = { frame: number; value: number };
+
+type AudioEngineMockState = {
+  initialized: boolean;
+  sampleRate: number;
+  framesPerBuffer: number;
+  nodes: Map<string, AudioEngineNode>;
+  connections: Set<string>;
+  diagnostics: { xruns: number; lastRenderDurationMicros: number };
+  automations: Map<string, Map<string, AutomationPoint[]>>;
+};
+
+const audioEngineState: AudioEngineMockState = {
+  initialized: false,
+  sampleRate: 0,
+  framesPerBuffer: 0,
+  nodes: new Map(),
+  connections: new Set(),
+  diagnostics: { xruns: 0, lastRenderDurationMicros: 0 },
+  automations: new Map(),
+};
+
+const connectionKey = (source: string, destination: string) => `${source}->${destination}`;
+
+const OUTPUT_BUS_ID = '__output__';
+
 const audioEngineModule = {
-  initialize: noop,
-  shutdown: noop,
-  addNode: noop,
-  removeNode: noop,
-  connectNodes: noop,
-  disconnectNodes: noop,
-  scheduleParameterAutomation: noop,
-  getRenderDiagnostics: async () => ({ xruns: 0, lastRenderDurationMicros: 0 }),
+  initialize: async (sampleRate: number, framesPerBuffer: number) => {
+    audioEngineState.initialized = true;
+    audioEngineState.sampleRate = sampleRate;
+    audioEngineState.framesPerBuffer = framesPerBuffer;
+    audioEngineState.diagnostics.xruns = 0;
+    audioEngineState.diagnostics.lastRenderDurationMicros = 0;
+  },
+  shutdown: async () => {
+    audioEngineState.initialized = false;
+    audioEngineState.nodes.clear();
+    audioEngineState.connections.clear();
+    audioEngineState.automations.clear();
+    audioEngineState.diagnostics.xruns = 0;
+    audioEngineState.diagnostics.lastRenderDurationMicros = 0;
+  },
+  addNode: async (
+    nodeId: string,
+    nodeType: string,
+    options: Record<string, number | string | boolean>,
+  ) => {
+    const trimmedId = nodeId.trim();
+    const trimmedType = nodeType.trim();
+    if (!trimmedId || !trimmedType) {
+      throw new Error('nodeId and nodeType are required');
+    }
+    if (audioEngineState.nodes.has(trimmedId)) {
+      throw new Error(`Node '${trimmedId}' already exists`);
+    }
+    audioEngineState.nodes.set(trimmedId, {
+      type: trimmedType,
+      options: { ...options },
+    });
+  },
+  removeNode: async (nodeId: string) => {
+    const trimmedId = nodeId.trim();
+    audioEngineState.nodes.delete(trimmedId);
+    Array.from(audioEngineState.connections).forEach((key) => {
+      if (key.startsWith(`${trimmedId}->`) || key.endsWith(`->${trimmedId}`)) {
+        audioEngineState.connections.delete(key);
+      }
+    });
+    audioEngineState.automations.delete(trimmedId);
+  },
+  connectNodes: async (source: string, destination: string) => {
+    const trimmedSource = source.trim();
+    const trimmedDestination = destination.trim();
+    if (!audioEngineState.nodes.has(trimmedSource)) {
+      throw new Error(`Source node '${trimmedSource}' is not registered`);
+    }
+    if (trimmedDestination !== OUTPUT_BUS_ID && !audioEngineState.nodes.has(trimmedDestination)) {
+      throw new Error(`Destination node '${trimmedDestination}' is not registered`);
+    }
+    const key = connectionKey(trimmedSource, trimmedDestination);
+    if (audioEngineState.connections.has(key)) {
+      throw new Error(`Connection '${key}' already exists`);
+    }
+    audioEngineState.connections.add(key);
+  },
+  disconnectNodes: async (source: string, destination: string) => {
+    audioEngineState.connections.delete(connectionKey(source.trim(), destination.trim()));
+  },
+  scheduleParameterAutomation: async (
+    nodeId: string,
+    parameter: string,
+    frame: number,
+    value: number,
+  ) => {
+    const trimmedId = nodeId.trim();
+    const trimmedParam = parameter.trim().toLowerCase();
+    if (!audioEngineState.nodes.has(trimmedId)) {
+      throw new Error(`Node '${trimmedId}' is not registered`);
+    }
+    if (!trimmedParam) {
+      throw new Error('Parameter name is required');
+    }
+    if (!Number.isFinite(frame) || frame < 0 || !Number.isInteger(frame)) {
+      throw new Error('Frame must be a non-negative integer');
+    }
+    if (!Number.isFinite(value)) {
+      throw new Error('Value must be finite');
+    }
+    let parameterMap = audioEngineState.automations.get(trimmedId);
+    if (!parameterMap) {
+      parameterMap = new Map<string, AutomationPoint[]>();
+      audioEngineState.automations.set(trimmedId, parameterMap);
+    }
+    const points: AutomationPoint[] = parameterMap.get(trimmedParam) ?? [];
+    const nextPoints: AutomationPoint[] = points.filter((point) => point.frame !== frame);
+    nextPoints.push({ frame, value });
+    nextPoints.sort((lhs, rhs) => lhs.frame - rhs.frame);
+    parameterMap.set(trimmedParam, nextPoints);
+  },
+  getRenderDiagnostics: async () => ({
+    xruns: audioEngineState.diagnostics.xruns,
+    lastRenderDurationMicros: audioEngineState.diagnostics.lastRenderDurationMicros,
+  }),
+  __state: audioEngineState,
 };
 
 const pluginHostEmitter = new MockNativeEventEmitter();
@@ -166,3 +286,4 @@ export type TurboModule = unknown;
 
 export const __mockPluginHostEmitter = pluginHostEmitter;
 export const __mockCollabDiagnosticsEmitter = collabDiagnosticsEmitter;
+export const __mockAudioEngineState = audioEngineState;
