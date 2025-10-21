@@ -2,6 +2,7 @@ import React, { PropsWithChildren, useEffect, useMemo } from 'react';
 import {
   AccessibilityProps,
   Pressable,
+  PressableProps,
   StyleProp,
   StyleSheet,
   Text,
@@ -9,6 +10,7 @@ import {
   View,
   ViewProps,
   ViewStyle,
+  Platform,
 } from 'react-native';
 import Animated, {
   useAnimatedStyle,
@@ -41,14 +43,24 @@ export const NeonSurface: React.FC<PropsWithChildren<NeonSurfaceProps>> = ({
     glowValue.value = withTiming(glow, { duration: 200 });
   }, [glow, glowValue]);
 
-  const animatedStyle = useAnimatedStyle(() => ({
-    shadowColor: mapIntentToColor(theme, intent),
-    shadowOpacity: 0.7,
-    shadowRadius: theme.elevation[elevation] * glowValue.value,
-    shadowOffset: { width: 0, height: 0 },
-    borderColor: mapIntentToColor(theme, intent),
-    borderWidth: 1,
-  }));
+  const animatedStyle = useAnimatedStyle(() => {
+    const accent = mapIntentToColor(theme, intent);
+    const base: ViewStyle = {
+      borderColor: accent,
+      borderWidth: 1,
+    };
+
+    if (Platform.OS === 'android') {
+      base.elevation = theme.elevation[elevation];
+    } else {
+      base.shadowColor = accent;
+      base.shadowOpacity = 0.7;
+      base.shadowRadius = theme.elevation[elevation] * glowValue.value;
+      base.shadowOffset = { width: 0, height: 0 };
+    }
+
+    return base;
+  }, [elevation, glowValue, intent, theme]);
 
   const containerStyle: StyleProp<ViewStyle> = useMemo(
     () => [
@@ -101,7 +113,7 @@ export const NeonText: React.FC<PropsWithChildren<NeonTextProps>> = ({
   );
 };
 
-export interface NeonButtonProps extends AccessibilityProps {
+export interface NeonButtonProps extends AccessibilityProps, PressableProps {
   label: string;
   onPress: () => void;
   disabled?: boolean;
@@ -119,17 +131,26 @@ export const NeonButton: React.FC<NeonButtonProps> = ({
 }) => {
   const theme = useTheme();
   const glow = useSharedValue(disabled ? theme.opacity.disabled : 1);
+  const scale = useSharedValue(disabled ? 0.98 : 1);
 
-  const animatedGlow = useAnimatedStyle(() => ({
-    shadowColor: mapIntentToColor(theme, intent),
-    shadowOpacity: glow.value,
-    shadowRadius: theme.elevation.md,
-    transform: [
-      {
-        scale: withTiming(disabled ? 0.98 : 1, { duration: 150 }),
-      },
-    ],
-  }));
+  useEffect(() => {
+    glow.value = withTiming(disabled ? theme.opacity.disabled : 1, { duration: 150 });
+    scale.value = withTiming(disabled ? 0.98 : 1, { duration: 150 });
+  }, [disabled, glow, scale, theme.opacity.disabled]);
+
+  const animatedGlow = useAnimatedStyle(
+    () => ({
+      shadowColor: mapIntentToColor(theme, intent),
+      shadowOpacity: glow.value,
+      shadowRadius: theme.elevation.md,
+      transform: [
+        {
+          scale: scale.value,
+        },
+      ],
+    }),
+    [intent, theme],
+  );
 
   const baseStyle: StyleProp<ViewStyle> = [
     {

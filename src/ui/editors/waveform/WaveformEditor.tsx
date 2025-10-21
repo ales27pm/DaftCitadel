@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { LayoutChangeEvent, StyleProp, ViewStyle } from 'react-native';
-import { Canvas, Path, Skia, SkPath } from '@shopify/react-native-skia';
+import { Canvas, Path, Skia } from '@shopify/react-native-skia';
 import {
   SharedValue,
   useSharedValue,
@@ -10,6 +10,8 @@ import {
 
 import { useTheme } from '../../design-system';
 import { buildWaveformPath } from './path';
+
+const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
 
 export interface WaveformEditorProps {
   waveform: Float32Array;
@@ -29,18 +31,25 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
   onPlayheadChange,
 }) => {
   const theme = useTheme();
-  const waveformPath = useRef<SkPath | null>(null);
+  const [canvasWidth, setCanvasWidth] = useState(width);
   const internalPlayhead = useSharedValue(0);
   const playheadValue = playhead ?? internalPlayhead;
-  const canvasStyle = useMemo(() => [{ width, height }, style], [height, style, width]);
-  const [progress, setProgress] = useState<number>(() => playheadValue.value ?? 0);
+  const canvasStyle = useMemo(
+    () => [{ width: canvasWidth, height }, style],
+    [canvasWidth, height, style],
+  );
+  const [progress, setProgress] = useState<number>(() =>
+    clamp01(playheadValue.value ?? 0),
+  );
 
   useEffect(() => {
-    waveformPath.current = buildWaveformPath(waveform, width, height);
-  }, [height, waveform, width]);
+    if (Number.isFinite(width) && width > 0 && width !== canvasWidth) {
+      setCanvasWidth(width);
+    }
+  }, [canvasWidth, width]);
 
   useAnimatedReaction<number>(
-    () => Math.max(0, Math.min(1, playheadValue.value)),
+    () => clamp01(playheadValue.value),
     (value, previous) => {
       if (value !== previous) {
         runOnJS(setProgress)(value);
@@ -54,34 +63,32 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
 
   const handleLayout = (event: LayoutChangeEvent) => {
     const newWidth = event.nativeEvent.layout.width;
-    waveformPath.current = buildWaveformPath(waveform, newWidth, height);
+    if (Number.isFinite(newWidth) && newWidth > 0 && newWidth !== canvasWidth) {
+      setCanvasWidth(newWidth);
+    }
   };
 
-  const progressPath = useMemo<SkPath>(() => {
-    const x = progress * width;
+  const progressPath = useMemo(() => {
+    const x = progress * canvasWidth;
     const path = Skia.Path.Make();
     path.moveTo(x, 0);
     path.lineTo(x, height);
     return path;
-  }, [height, progress, width]);
+  }, [canvasWidth, height, progress]);
 
-  const waveformRendered = useMemo<SkPath | null>(() => {
-    if (!waveformPath.current) {
-      waveformPath.current = buildWaveformPath(waveform, width, height);
-    }
-    return waveformPath.current;
-  }, [height, waveform, width]);
+  const waveformPath = useMemo(
+    () => buildWaveformPath(waveform, canvasWidth, height),
+    [canvasWidth, height, waveform],
+  );
 
   return (
     <Canvas style={canvasStyle} onLayout={handleLayout}>
-      {waveformRendered ? (
-        <Path
-          path={waveformRendered}
-          color={theme.colors.waveform}
-          style="stroke"
-          strokeWidth={1.5}
-        />
-      ) : null}
+      <Path
+        path={waveformPath}
+        color={theme.colors.waveform}
+        style="stroke"
+        strokeWidth={1.5}
+      />
       <Path
         path={progressPath}
         color={theme.colors.accentSecondary}
