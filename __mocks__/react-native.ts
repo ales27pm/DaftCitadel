@@ -26,6 +26,11 @@ class MockNativeEventEmitter {
   removeAllListeners(eventName: string): void {
     this.listeners.delete(eventName);
   }
+
+  listenerCount(eventName: string): number {
+    const listeners = this.listeners.get(eventName);
+    return listeners ? listeners.size : 0;
+  }
 }
 
 const audioEngineModule = {
@@ -70,17 +75,69 @@ const pluginHostModule = {
   __emitter: pluginHostEmitter,
 };
 
+const collabDiagnosticsEmitter = new MockNativeEventEmitter();
+
+const collabNetworkDiagnosticsModule = {
+  getCurrentLinkMetrics: async () => ({
+    interface: 'en0',
+    rssi: -58,
+    noise: -95,
+    linkSpeedMbps: 420,
+  }),
+  startObserving: () => {},
+  stopObserving: () => {},
+  __emitter: collabDiagnosticsEmitter,
+};
+
 export const NativeModules: Record<string, unknown> = {
   AudioEngineModule: audioEngineModule,
   PluginHostModule: pluginHostModule,
+  CollabNetworkDiagnostics: collabNetworkDiagnosticsModule,
 };
 
 export class NativeEventEmitter extends MockNativeEventEmitter {
+  private readonly delegate?: MockNativeEventEmitter;
+
   constructor(module?: unknown) {
     super();
     if (module === pluginHostModule) {
-      return pluginHostEmitter as unknown as NativeEventEmitter;
+      this.delegate = pluginHostEmitter;
+    } else if (module === collabNetworkDiagnosticsModule) {
+      this.delegate = collabDiagnosticsEmitter;
     }
+  }
+
+  override addListener(
+    eventName: string,
+    listener: (...args: unknown[]) => void,
+  ): { remove: () => void } {
+    if (this.delegate) {
+      return this.delegate.addListener(eventName, listener);
+    }
+    return super.addListener(eventName, listener);
+  }
+
+  override emit(eventName: string, payload?: unknown): void {
+    if (this.delegate) {
+      this.delegate.emit(eventName, payload);
+      return;
+    }
+    super.emit(eventName, payload);
+  }
+
+  override removeAllListeners(eventName: string): void {
+    if (this.delegate) {
+      this.delegate.removeAllListeners(eventName);
+      return;
+    }
+    super.removeAllListeners(eventName);
+  }
+
+  override listenerCount(eventName: string): number {
+    if (this.delegate) {
+      return this.delegate.listenerCount(eventName);
+    }
+    return super.listenerCount(eventName);
   }
 }
 
@@ -108,3 +165,4 @@ export const PermissionsAndroid = {
 export type TurboModule = unknown;
 
 export const __mockPluginHostEmitter = pluginHostEmitter;
+export const __mockCollabDiagnosticsEmitter = collabDiagnosticsEmitter;
