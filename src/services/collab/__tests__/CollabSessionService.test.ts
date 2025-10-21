@@ -8,12 +8,16 @@ import type {
 import { CollabSessionService } from '../CollabSessionService';
 import {
   AbstractPeerSignalingClient,
-  type PeerSignalingClient,
   type SignalingAnswer,
   type SignalingIceCandidate,
   type SignalingOffer,
 } from '../PeerSignalingClient';
 import type { CollabPayload } from '../encryption';
+import type {
+  LinkMetrics,
+  NetworkDiagnostics,
+  NetworkMetricsListener,
+} from '../diagnostics/NetworkDiagnostics';
 
 class LoopbackSignalingClient extends AbstractPeerSignalingClient {
   peer?: LoopbackSignalingClient;
@@ -41,6 +45,69 @@ class LoopbackSignalingClient extends AbstractPeerSignalingClient {
   async disconnect(): Promise<void> {
     this.emitEvent('shutdown');
   }
+
+  dispatch(
+    event: 'offer' | 'answer' | 'iceCandidate' | 'publicKey' | 'shutdown',
+    payload?: unknown,
+  ): void {
+    this.emitEvent(event, payload as never);
+  }
+}
+
+class ControlledSignalingClient extends LoopbackSignalingClient {
+  autoDeliverPublicKeys = true;
+  private pendingPublicKeys: string[] = [];
+
+  override async sendPublicKey(publicKey: string): Promise<void> {
+    if (this.autoDeliverPublicKeys) {
+      await super.sendPublicKey(publicKey);
+      return;
+    }
+    this.pendingPublicKeys.push(publicKey);
+  }
+
+  async flushPublicKeys(): Promise<void> {
+    const keys = [...this.pendingPublicKeys];
+    this.pendingPublicKeys = [];
+    await Promise.all(keys.map((key) => super.sendPublicKey(key)));
+  }
+}
+
+class TestNetworkDiagnostics implements NetworkDiagnostics {
+  private listeners: Set<NetworkMetricsListener> = new Set();
+  private failure = false;
+  private metrics: LinkMetrics;
+
+  constructor(initialMetrics?: Partial<LinkMetrics>) {
+    this.metrics = {
+      timestamp: Date.now(),
+      category: 'unusable',
+      ...initialMetrics,
+    } as LinkMetrics;
+  }
+
+  setFailure(shouldFail: boolean): void {
+    this.failure = shouldFail;
+  }
+
+  async getCurrentLinkMetrics(): Promise<LinkMetrics> {
+    if (this.failure) {
+      throw new Error('diagnostics failure');
+    }
+    return this.metrics;
+  }
+
+  subscribe(listener: NetworkMetricsListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  emit(metrics: LinkMetrics): void {
+    this.metrics = metrics;
+    this.listeners.forEach((listener) => listener(metrics));
+  }
 }
 
 type ChannelMessageHandler = (data: unknown) => void;
@@ -49,7 +116,7 @@ type RTCDataChannelState = 'connecting' | 'open' | 'closing' | 'closed';
 
 class MockRTCDataChannel {
   readonly label: string;
-  readyState: RTCDataChannelState = 'open';
+  readyState: RTCDataChannelState = 'connecting';
   bufferedAmountLowThreshold = 0;
   onopen?: () => void;
   onclose?: () => void;
@@ -98,6 +165,7 @@ class MockPeerConnection {
   public lastCreatedChannel?: MockRTCDataChannel;
   private peer?: MockPeerConnection;
   private pendingRemoteChannels: MockRTCDataChannel[] = [];
+  private remoteDescriptionSet = false;
 
   linkPeer(peer: MockPeerConnection): void {
     this.peer = peer;
@@ -117,12 +185,16 @@ class MockPeerConnection {
   }
 
   async setRemoteDescription(description: RTCSessionDescriptionInit): Promise<void> {
+    this.remoteDescriptionSet = true;
     if (description.type === 'offer') {
       this.flushPendingChannels();
     }
   }
 
   async addIceCandidate(candidate: RTCIceCandidateInit): Promise<void> {
+    if (!this.remoteDescriptionSet) {
+      throw new Error('Remote description not set');
+    }
     this.addedCandidates.push(candidate);
   }
 
@@ -167,9 +239,20 @@ class MockPeerConnection {
   }
 }
 
-function pairSignalingClients(): [PeerSignalingClient, PeerSignalingClient] {
+function pairSignalingClients(): [LoopbackSignalingClient, LoopbackSignalingClient] {
   const a = new LoopbackSignalingClient();
   const b = new LoopbackSignalingClient();
+  a.peer = b;
+  b.peer = a;
+  return [a, b];
+}
+
+function pairControlledSignalingClients(): [
+  ControlledSignalingClient,
+  ControlledSignalingClient,
+] {
+  const a = new ControlledSignalingClient();
+  const b = new ControlledSignalingClient();
   a.peer = b;
   b.peer = a;
   return [a, b];
@@ -183,12 +266,19 @@ describe('CollabSessionService', () => {
     initiatorConnection.linkPeer(responderConnection);
 
     const remoteUpdates: CollabPayload<{ text: string }>[] = [];
+    let resolveFirstUpdate:
+      | ((payload: CollabPayload<{ text: string }>) => void)
+      | undefined;
+    const firstUpdate = new Promise<CollabPayload<{ text: string }>>((resolve) => {
+      resolveFirstUpdate = resolve;
+    });
 
     const responderService = new CollabSessionService<{ text: string }>({
       signalingClient: responderSignaling,
       connectionFactory: () => responderConnection as unknown as RTCPeerConnection,
       onRemoteUpdate: (payload) => {
         remoteUpdates.push(payload);
+        resolveFirstUpdate?.(payload);
       },
     });
 
@@ -204,7 +294,7 @@ describe('CollabSessionService', () => {
 
     await initiatorService.broadcastUpdate({ text: 'Hello' });
 
-    await waitForCondition(() => remoteUpdates.length > 0);
+    await firstUpdate;
 
     expect(remoteUpdates).toHaveLength(1);
     expect(remoteUpdates[0].body).toEqual({ text: 'Hello' });
@@ -217,25 +307,235 @@ describe('CollabSessionService', () => {
     initiatorService.stop();
     responderService.stop();
   });
-});
 
-async function waitForCondition(
-  predicate: () => boolean,
-  timeoutMs = 200,
-): Promise<void> {
-  const start = Date.now();
-  return new Promise((resolve, reject) => {
-    const check = () => {
-      if (predicate()) {
-        resolve();
-        return;
-      }
-      if (Date.now() - start > timeoutMs) {
-        reject(new Error('Timed out waiting for condition'));
-        return;
-      }
-      setTimeout(check, 5);
+  it('buffers ICE candidates until the remote description is applied', async () => {
+    const [initiatorSignaling, responderSignaling] = pairSignalingClients();
+    const initiatorConnection = new MockPeerConnection();
+    const responderConnection = new MockPeerConnection();
+    initiatorConnection.linkPeer(responderConnection);
+
+    const responderService = new CollabSessionService({
+      signalingClient: responderSignaling,
+      connectionFactory: () => responderConnection as unknown as RTCPeerConnection,
+    });
+
+    const initiatorService = new CollabSessionService({
+      signalingClient: initiatorSignaling,
+      connectionFactory: () => initiatorConnection as unknown as RTCPeerConnection,
+    });
+
+    await responderService.start('responder');
+
+    const candidate: SignalingIceCandidate = {
+      candidate: 'candidate:mock',
+      sdpMid: '0',
+      sdpMLineIndex: 0,
     };
-    check();
+
+    expect(() => responderSignaling.dispatch('iceCandidate', candidate)).not.toThrow();
+    expect(responderConnection.addedCandidates).toHaveLength(0);
+
+    await initiatorService.start('initiator');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(responderConnection.addedCandidates).toHaveLength(1);
+    expect(responderConnection.addedCandidates[0].candidate).toBe('candidate:mock');
+
+    initiatorService.stop();
+    responderService.stop();
   });
-}
+
+  it('waits for encryption readiness before sending payloads', async () => {
+    const [initiatorSignaling, responderSignaling] = pairControlledSignalingClients();
+    responderSignaling.autoDeliverPublicKeys = false;
+    const initiatorConnection = new MockPeerConnection();
+    const responderConnection = new MockPeerConnection();
+    initiatorConnection.linkPeer(responderConnection);
+
+    const remoteUpdates: CollabPayload<{ text: string }>[] = [];
+    let resolveFirstUpdate: (() => void) | undefined;
+    const firstUpdate = new Promise<void>((resolve) => {
+      resolveFirstUpdate = resolve;
+    });
+
+    const responderService = new CollabSessionService<{ text: string }>({
+      signalingClient: responderSignaling,
+      connectionFactory: () => responderConnection as unknown as RTCPeerConnection,
+      onRemoteUpdate: (payload) => {
+        remoteUpdates.push(payload);
+        resolveFirstUpdate?.();
+      },
+    });
+
+    const initiatorService = new CollabSessionService<{ text: string }>({
+      signalingClient: initiatorSignaling,
+      connectionFactory: () => initiatorConnection as unknown as RTCPeerConnection,
+    });
+
+    await responderService.start('responder');
+    await initiatorService.start('initiator');
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const broadcastPromise = initiatorService.broadcastUpdate({ text: 'delayed' });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(remoteUpdates).toHaveLength(0);
+
+    await responderSignaling.flushPublicKeys();
+    await initiatorSignaling.flushPublicKeys();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await broadcastPromise;
+    await firstUpdate;
+
+    expect(remoteUpdates).toHaveLength(1);
+    expect(remoteUpdates[0].body).toEqual({ text: 'delayed' });
+
+    initiatorService.stop();
+    responderService.stop();
+  });
+
+  it('updates bufferedAmountLowThreshold in response to diagnostics events', async () => {
+    const diagnostics = new TestNetworkDiagnostics({
+      linkSpeedMbps: 5,
+      category: 'good',
+      timestamp: Date.now(),
+    });
+    const logger = jest.fn();
+    const [initiatorSignaling, responderSignaling] = pairSignalingClients();
+    const initiatorConnection = new MockPeerConnection();
+    const responderConnection = new MockPeerConnection();
+    initiatorConnection.linkPeer(responderConnection);
+
+    const responderService = new CollabSessionService({
+      signalingClient: responderSignaling,
+      connectionFactory: () => responderConnection as unknown as RTCPeerConnection,
+      networkDiagnostics: diagnostics,
+      logger,
+    });
+
+    const initiatorService = new CollabSessionService({
+      signalingClient: initiatorSignaling,
+      connectionFactory: () => initiatorConnection as unknown as RTCPeerConnection,
+      networkDiagnostics: diagnostics,
+      logger,
+    });
+
+    await responderService.start('responder');
+    await initiatorService.start('initiator');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const newMetrics: LinkMetrics = {
+      timestamp: Date.now(),
+      category: 'excellent',
+      linkSpeedMbps: 200,
+      interfaceName: 'en0',
+    };
+    diagnostics.emit(newMetrics);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const threshold =
+      initiatorConnection.lastCreatedChannel?.bufferedAmountLowThreshold ?? 0;
+    expect(threshold).toBe(512 * 1024);
+
+    const loggedContexts = logger.mock.calls
+      .filter(
+        ([message]) =>
+          message === 'collab.networkMetrics' ||
+          message === 'collab.networkMetrics.initial',
+      )
+      .map(([, context]) => context ?? {});
+    loggedContexts.forEach((context) => {
+      expect(context).not.toHaveProperty('interfaceName');
+    });
+
+    initiatorService.stop();
+    responderService.stop();
+  });
+
+  it('logs diagnostics retrieval failures', async () => {
+    const diagnostics = new TestNetworkDiagnostics();
+    diagnostics.setFailure(true);
+    const logger = jest.fn();
+    const [initiatorSignaling, responderSignaling] = pairSignalingClients();
+    const initiatorConnection = new MockPeerConnection();
+    const responderConnection = new MockPeerConnection();
+    initiatorConnection.linkPeer(responderConnection);
+
+    const responderService = new CollabSessionService({
+      signalingClient: responderSignaling,
+      connectionFactory: () => responderConnection as unknown as RTCPeerConnection,
+      networkDiagnostics: diagnostics,
+      logger,
+    });
+
+    const initiatorService = new CollabSessionService({
+      signalingClient: initiatorSignaling,
+      connectionFactory: () => initiatorConnection as unknown as RTCPeerConnection,
+      networkDiagnostics: diagnostics,
+      logger,
+    });
+
+    await responderService.start('responder');
+    await initiatorService.start('initiator');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(logger).toHaveBeenCalledWith(
+      'collab.networkMetrics.error',
+      expect.objectContaining({ error: expect.stringContaining('diagnostics failure') }),
+    );
+
+    initiatorService.stop();
+    responderService.stop();
+  });
+
+  it('logs encryption errors when remote keys are malformed', () => {
+    const responderSignaling = new LoopbackSignalingClient();
+    const logger = jest.fn();
+
+    const responderService = new CollabSessionService({
+      signalingClient: responderSignaling,
+      connectionFactory: () => new MockPeerConnection() as unknown as RTCPeerConnection,
+      logger,
+    });
+
+    responderSignaling.dispatch('publicKey', 'not-base64');
+
+    expect(logger).toHaveBeenCalledWith(
+      'collab.encryptionError',
+      expect.objectContaining({ error: expect.any(String) }),
+    );
+
+    responderService.stop();
+  });
+
+  it('rejects broadcasts when the channel is not ready', async () => {
+    const [initiatorSignaling, responderSignaling] = pairSignalingClients();
+    const initiatorConnection = new MockPeerConnection();
+    const responderConnection = new MockPeerConnection();
+    initiatorConnection.linkPeer(responderConnection);
+
+    const responderService = new CollabSessionService({
+      signalingClient: responderSignaling,
+      connectionFactory: () => responderConnection as unknown as RTCPeerConnection,
+    });
+
+    const initiatorService = new CollabSessionService({
+      signalingClient: initiatorSignaling,
+      connectionFactory: () => initiatorConnection as unknown as RTCPeerConnection,
+    });
+
+    await responderService.start('responder');
+    await initiatorService.start('initiator');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    initiatorService.stop();
+
+    await expect(
+      initiatorService.broadcastUpdate({ text: 'should fail' }),
+    ).rejects.toThrow('Collaboration channel is not ready');
+
+    responderService.stop();
+  });
+});

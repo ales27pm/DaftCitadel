@@ -93,7 +93,7 @@ echo "[rvictl] using interface $RVI_INTERFACE"
 
 echo "[tcpdump] writing capture to $OUTPUT_FILE"
 
-sudo tcpdump -i "$RVI_INTERFACE" -w "$OUTPUT_FILE" ${TCPDUMP_FILTER:+$TCPDUMP_FILTER} &
+sudo tcpdump -i "$RVI_INTERFACE" -w "$OUTPUT_FILE" ${TCPDUMP_FILTER:+"$TCPDUMP_FILTER"} &
 CAPTURE_PID=$!
 
 if [[ -n "$DURATION" ]]; then

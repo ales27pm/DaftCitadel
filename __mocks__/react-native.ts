@@ -26,6 +26,11 @@ class MockNativeEventEmitter {
   removeAllListeners(eventName: string): void {
     this.listeners.delete(eventName);
   }
+
+  listenerCount(eventName: string): number {
+    const listeners = this.listeners.get(eventName);
+    return listeners ? listeners.size : 0;
+  }
 }
 
 const audioEngineModule = {
@@ -91,14 +96,48 @@ export const NativeModules: Record<string, unknown> = {
 };
 
 export class NativeEventEmitter extends MockNativeEventEmitter {
+  private readonly delegate?: MockNativeEventEmitter;
+
   constructor(module?: unknown) {
     super();
     if (module === pluginHostModule) {
-      return pluginHostEmitter as unknown as NativeEventEmitter;
+      this.delegate = pluginHostEmitter;
+    } else if (module === collabNetworkDiagnosticsModule) {
+      this.delegate = collabDiagnosticsEmitter;
     }
-    if (module === collabNetworkDiagnosticsModule) {
-      return collabDiagnosticsEmitter as unknown as NativeEventEmitter;
+  }
+
+  override addListener(
+    eventName: string,
+    listener: (...args: unknown[]) => void,
+  ): { remove: () => void } {
+    if (this.delegate) {
+      return this.delegate.addListener(eventName, listener);
     }
+    return super.addListener(eventName, listener);
+  }
+
+  override emit(eventName: string, payload?: unknown): void {
+    if (this.delegate) {
+      this.delegate.emit(eventName, payload);
+      return;
+    }
+    super.emit(eventName, payload);
+  }
+
+  override removeAllListeners(eventName: string): void {
+    if (this.delegate) {
+      this.delegate.removeAllListeners(eventName);
+      return;
+    }
+    super.removeAllListeners(eventName);
+  }
+
+  override listenerCount(eventName: string): number {
+    if (this.delegate) {
+      return this.delegate.listenerCount(eventName);
+    }
+    return super.listenerCount(eventName);
   }
 }
 

@@ -25,7 +25,7 @@ declare module 'react-native-webrtc' {
     onerror: ((event: unknown) => void) | null;
     onmessage: ((event: { data: unknown }) => void) | null;
     close(): void;
-    send(data: string): void;
+    send(data: string | ArrayBuffer | ArrayBufferView): void;
   }
 
   export interface RTCDataChannelEvent {
@@ -44,7 +44,16 @@ declare module 'react-native-webrtc' {
     ondatachannel: ((event: RTCDataChannelEvent) => void) | null;
   }
 
-  export type RTCConfiguration = Record<string, unknown>;
+  export interface RTCConfiguration {
+    iceServers?: Array<{
+      urls: string | string[];
+      username?: string;
+      credential?: string;
+    }>;
+    iceTransportPolicy?: 'all' | 'relay';
+    bundlePolicy?: 'balanced' | 'max-compat' | 'max-bundle';
+    [key: string]: unknown;
+  }
 
   export const RTCPeerConnection: new (
     configuration?: RTCConfiguration,

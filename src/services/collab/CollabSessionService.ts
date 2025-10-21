@@ -1,18 +1,13 @@
 import {
   RTCPeerConnection as NativeRTCPeerConnection,
-  type RTCConfiguration,
   type RTCDataChannel,
-  type RTCDataChannelEvent,
+  type RTCDataChannelInit,
+  type RTCConfiguration,
   type RTCIceCandidateInit,
   type RTCPeerConnection,
   type RTCSessionDescriptionInit,
 } from 'react-native-webrtc';
-import {
-  EncryptionContext,
-  generateIdentityKeyPair,
-  type CollabPayload,
-  type Ciphertext,
-} from './encryption';
+import type { CollabPayload, Ciphertext } from './encryption';
 import { LatencyCompensator } from './LatencyCompensator';
 import {
   type PeerSignalingClient,
@@ -25,8 +20,10 @@ import {
   type LinkMetrics,
   type NetworkDiagnostics,
 } from './diagnostics/NetworkDiagnostics';
-
-type Logger = (message: string, context?: Record<string, unknown>) => void;
+import { ConnectionManager } from './ConnectionManager';
+import { EncryptionManager } from './EncryptionManager';
+import { DiagnosticsManager } from './DiagnosticsManager';
+import type { Logger } from './types';
 
 export interface CollabSessionOptions<T> {
   readonly signalingClient: PeerSignalingClient;
@@ -37,37 +34,44 @@ export interface CollabSessionOptions<T> {
   readonly connectionFactory?: () => RTCPeerConnection;
   readonly logger?: Logger;
   readonly onRemoteUpdate?: (payload: CollabPayload<T>) => void;
+  readonly channelLabel?: string;
+  readonly channelConfig?: RTCDataChannelInit;
+  readonly minBufferedAmountLowThreshold?: number;
+  readonly maxBufferedAmountLowThreshold?: number;
 }
 
 export type CollabSessionRole = 'initiator' | 'responder';
 
-const CHANNEL_LABEL = 'daft-collab';
-const CHANNEL_CONFIG = { ordered: true, maxRetransmits: 2 };
+const DEFAULT_CHANNEL_LABEL = 'daft-collab';
+const DEFAULT_CHANNEL_CONFIG: RTCDataChannelInit = { ordered: true, maxRetransmits: 2 };
+const DEFAULT_MIN_BUFFERED_AMOUNT_LOW_THRESHOLD = 16 * 1024;
+const DEFAULT_MAX_BUFFERED_AMOUNT_LOW_THRESHOLD = 512 * 1024;
+const INITIAL_BUFFERED_AMOUNT_LOW_THRESHOLD = 256 * 1024;
 
 type RTCPeerConnectionConstructor = new (
   configuration?: RTCConfiguration,
 ) => RTCPeerConnection;
 
 function createDefaultPeerConnection(): RTCPeerConnection {
-  return new (NativeRTCPeerConnection as RTCPeerConnectionConstructor)();
+  return new (NativeRTCPeerConnection as unknown as RTCPeerConnectionConstructor)();
 }
 
 export class CollabSessionService<T = unknown> {
   private readonly signalingClient: PeerSignalingClient;
   private readonly latencyCompensator: LatencyCompensator;
   private readonly logger: Logger;
-  private readonly identityKeyPair = generateIdentityKeyPair();
-  private readonly networkDiagnostics: NetworkDiagnostics;
   private readonly schemaVersion: number;
-  private readonly preSharedKey?: Uint8Array;
-  private readonly connectionFactory: () => RTCPeerConnection;
+  private readonly channelLabel: string;
+  private readonly channelConfig: RTCDataChannelInit;
+  private readonly minBufferedThreshold: number;
+  private readonly maxBufferedThreshold: number;
   private readonly externalUpdateListener?: (payload: CollabPayload<T>) => void;
+  private readonly connectionManager: ConnectionManager;
+  private readonly encryptionManager: EncryptionManager;
+  private readonly diagnosticsManager: DiagnosticsManager;
 
-  private encryptionContext?: EncryptionContext;
-  private remotePublicKey?: string;
-  private peerConnection?: RTCPeerConnection;
   private dataChannel?: RTCDataChannel;
-  private unsubscribeNetwork?: () => void;
+
   private readonly boundOfferHandler: (offer: SignalingOffer) => void;
   private readonly boundAnswerHandler: (answer: SignalingAnswer) => void;
   private readonly boundIceHandler: (candidate: SignalingIceCandidate) => void;
@@ -78,44 +82,89 @@ export class CollabSessionService<T = unknown> {
     this.signalingClient = options.signalingClient;
     this.latencyCompensator = options.latencyCompensator ?? new LatencyCompensator();
     this.logger = options.logger ?? (() => {});
-    this.networkDiagnostics = options.networkDiagnostics ?? createNetworkDiagnostics();
     this.schemaVersion = options.schemaVersion ?? 1;
-    this.preSharedKey = options.preSharedKey;
-    this.connectionFactory =
-      options.connectionFactory ?? (() => createDefaultPeerConnection());
+    this.channelLabel = options.channelLabel ?? DEFAULT_CHANNEL_LABEL;
+    this.channelConfig = options.channelConfig ?? DEFAULT_CHANNEL_CONFIG;
+    this.minBufferedThreshold =
+      options.minBufferedAmountLowThreshold ?? DEFAULT_MIN_BUFFERED_AMOUNT_LOW_THRESHOLD;
+    this.maxBufferedThreshold =
+      options.maxBufferedAmountLowThreshold ?? DEFAULT_MAX_BUFFERED_AMOUNT_LOW_THRESHOLD;
     this.externalUpdateListener = options.onRemoteUpdate;
 
+    const connectionFactory =
+      options.connectionFactory ?? (() => createDefaultPeerConnection());
+
+    const networkDiagnostics = options.networkDiagnostics ?? createNetworkDiagnostics();
+
+    this.connectionManager = new ConnectionManager({
+      connectionFactory,
+      logger: this.logger,
+      onLocalIceCandidate: async (candidate) => {
+        await this.signalingClient.sendIceCandidate(
+          this.normalizeIceCandidate(candidate),
+        );
+      },
+      onDataChannel: (channel) => this.attachDataChannel(channel),
+    });
+
+    this.encryptionManager = new EncryptionManager({
+      logger: this.logger,
+      preSharedKey: options.preSharedKey,
+    });
+
+    this.diagnosticsManager = new DiagnosticsManager({
+      diagnostics: networkDiagnostics,
+      logger: this.logger,
+      onMetrics: (metrics) => this.tuneDataChannel(metrics),
+    });
+
     this.boundOfferHandler = (offer) => {
-      this.handleOffer(offer).catch(() => {});
+      this.handleOffer(offer).catch((error) => {
+        this.logger('collab.handleOfferUnhandledError', { error: String(error) });
+      });
     };
     this.boundAnswerHandler = (answer) => {
-      this.handleAnswer(answer).catch(() => {});
+      this.handleAnswer(answer).catch((error) => {
+        this.logger('collab.handleAnswerUnhandledError', { error: String(error) });
+      });
     };
     this.boundIceHandler = (candidate) => {
-      this.handleIceCandidate(candidate).catch(() => {});
+      this.handleIceCandidate(candidate).catch((error) => {
+        this.logger('collab.handleIceCandidateUnhandledError', { error: String(error) });
+      });
     };
-    this.boundPublicKeyHandler = this.handleRemotePublicKey.bind(this);
+    this.boundPublicKeyHandler = (publicKey) => {
+      try {
+        this.encryptionManager.setRemotePublicKey(publicKey);
+      } catch (error) {
+        // The encryption manager already logs detailed context for failures.
+      }
+    };
     this.boundShutdownHandler = this.stop.bind(this);
 
     this.registerSignalingListeners();
   }
 
   getLocalPublicKey(): string {
-    return this.identityKeyPair.publicKey;
+    return this.encryptionManager.getLocalPublicKey();
   }
 
   async start(role: CollabSessionRole): Promise<void> {
-    const connection = this.ensurePeerConnection();
+    this.connectionManager.getOrCreate();
     if (role === 'initiator') {
-      this.attachDataChannel(connection.createDataChannel(CHANNEL_LABEL, CHANNEL_CONFIG));
+      const channel = this.connectionManager.createDataChannel(
+        this.channelLabel,
+        this.channelConfig,
+      );
+      this.attachDataChannel(channel);
     }
 
     await this.broadcastPublicKey();
-    this.startNetworkSampling();
+    this.diagnosticsManager.start();
 
     if (role === 'initiator') {
-      const offer = await connection.createOffer();
-      await connection.setLocalDescription(offer);
+      const offer = await this.connectionManager.createOffer();
+      await this.connectionManager.setLocalDescription(offer);
       await this.signalingClient.sendOffer(this.normalizeOffer(offer));
     }
   }
@@ -124,7 +173,8 @@ export class CollabSessionService<T = unknown> {
     if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
       throw new Error('Collaboration channel is not ready');
     }
-    const encryption = this.requireEncryptionContext();
+    await this.encryptionManager.waitUntilReady();
+    const encryption = this.encryptionManager.requireContext();
     const now = Date.now();
     const encrypted = encryption.encrypt<T>({
       clock: now,
@@ -144,8 +194,7 @@ export class CollabSessionService<T = unknown> {
     this.signalingClient.disconnect().catch((error) => {
       this.logger('collab.signalingDisconnectError', { error: String(error) });
     });
-    this.unsubscribeNetwork?.();
-    this.unsubscribeNetwork = undefined;
+    this.diagnosticsManager.stop();
     if (this.dataChannel) {
       try {
         this.dataChannel.close();
@@ -153,42 +202,13 @@ export class CollabSessionService<T = unknown> {
         this.logger('collab.dataChannelCloseError', { error: String(error) });
       }
     }
-    if (this.peerConnection) {
-      try {
-        this.peerConnection.close();
-      } catch (error) {
-        this.logger('collab.peerConnectionCloseError', { error: String(error) });
-      }
-    }
-    this.peerConnection = undefined;
+    this.connectionManager.close();
     this.dataChannel = undefined;
-    this.encryptionContext = undefined;
-  }
-
-  private ensurePeerConnection(): RTCPeerConnection {
-    if (this.peerConnection) {
-      return this.peerConnection;
-    }
-    const connection = this.connectionFactory();
-    connection.onicecandidate = (event: { candidate: RTCIceCandidateInit | null }) => {
-      if (event.candidate) {
-        this.signalingClient
-          .sendIceCandidate(this.normalizeIceCandidate(event.candidate))
-          .catch(() => {});
-      }
-    };
-    connection.ondatachannel = (event: RTCDataChannelEvent) => {
-      this.attachDataChannel(event.channel);
-    };
-    this.peerConnection = connection;
-    return connection;
+    this.encryptionManager.reset();
   }
 
   private attachDataChannel(channel: RTCDataChannel): void {
     this.dataChannel = channel;
-    if ('binaryType' in this.dataChannel) {
-      (this.dataChannel as unknown as { binaryType: string }).binaryType = 'arraybuffer';
-    }
     channel.onopen = () => {
       this.logger('collab.dataChannel.open', {
         label: channel.label,
@@ -211,64 +231,33 @@ export class CollabSessionService<T = unknown> {
     if (!this.dataChannel) {
       return;
     }
-    this.dataChannel.bufferedAmountLowThreshold = 256 * 1024;
+    const initial = Math.min(
+      this.maxBufferedThreshold,
+      Math.max(this.minBufferedThreshold, INITIAL_BUFFERED_AMOUNT_LOW_THRESHOLD),
+    );
+    this.dataChannel.bufferedAmountLowThreshold = initial;
   }
 
   private async handleOffer(offer: SignalingOffer): Promise<void> {
-    try {
-      const connection = this.ensurePeerConnection();
-      await connection.setRemoteDescription({
-        type: offer.type,
-        sdp: offer.sdp,
-      });
-      const answer = await connection.createAnswer();
-      await connection.setLocalDescription(answer);
-      await this.signalingClient.sendAnswer(this.normalizeAnswer(answer));
-    } catch (error) {
-      this.logger('collab.handleOfferError', { error: String(error) });
-    }
+    const description: RTCSessionDescriptionInit = { type: offer.type, sdp: offer.sdp };
+    await this.connectionManager.setRemoteDescription(description);
+    const answer = await this.connectionManager.createAnswer();
+    await this.connectionManager.setLocalDescription(answer);
+    await this.signalingClient.sendAnswer(this.normalizeAnswer(answer));
   }
 
   private async handleAnswer(answer: SignalingAnswer): Promise<void> {
-    try {
-      const connection = this.ensurePeerConnection();
-      await connection.setRemoteDescription({
-        type: answer.type,
-        sdp: answer.sdp,
-      });
-    } catch (error) {
-      this.logger('collab.handleAnswerError', { error: String(error) });
-    }
+    const description: RTCSessionDescriptionInit = { type: answer.type, sdp: answer.sdp };
+    await this.connectionManager.setRemoteDescription(description);
   }
 
   private async handleIceCandidate(candidate: SignalingIceCandidate): Promise<void> {
-    if (!this.peerConnection) {
-      return;
-    }
-    try {
-      await this.peerConnection.addIceCandidate({
-        candidate: candidate.candidate,
-        sdpMid: candidate.sdpMid ?? undefined,
-        sdpMLineIndex: candidate.sdpMLineIndex ?? undefined,
-      });
-    } catch (error) {
-      this.logger('collab.handleIceCandidateError', { error: String(error) });
-      throw error;
-    }
-  }
-
-  private handleRemotePublicKey(publicKey: string): void {
-    this.remotePublicKey = publicKey;
-    try {
-      this.encryptionContext = new EncryptionContext({
-        identityKeyPair: this.identityKeyPair,
-        remotePublicKey: publicKey,
-        preSharedKey: this.preSharedKey,
-      });
-      this.logger('collab.encryptionReady');
-    } catch (error) {
-      this.logger('collab.encryptionError', { error: String(error) });
-    }
+    const rtcCandidate: RTCIceCandidateInit = {
+      candidate: candidate.candidate,
+      sdpMid: candidate.sdpMid ?? undefined,
+      sdpMLineIndex: candidate.sdpMLineIndex ?? undefined,
+    };
+    await this.connectionManager.addIceCandidate(rtcCandidate);
   }
 
   private handleIncomingFrame(frame: unknown): void {
@@ -286,7 +275,7 @@ export class CollabSessionService<T = unknown> {
 
     let payload: CollabPayload<T>;
     try {
-      const encryption = this.requireEncryptionContext();
+      const encryption = this.encryptionManager.requireContext();
       payload = encryption.decrypt<T>(ciphertext);
     } catch (error) {
       this.logger('collab.decryptError', { error: String(error) });
@@ -307,48 +296,17 @@ export class CollabSessionService<T = unknown> {
     this.externalUpdateListener?.(normalizedPayload);
   }
 
-  private requireEncryptionContext(): EncryptionContext {
-    if (this.encryptionContext) {
-      return this.encryptionContext;
-    }
-    if (!this.remotePublicKey) {
-      throw new Error('Remote key not available');
-    }
-    this.encryptionContext = new EncryptionContext({
-      identityKeyPair: this.identityKeyPair,
-      remotePublicKey: this.remotePublicKey,
-      preSharedKey: this.preSharedKey,
-    });
-    return this.encryptionContext;
-  }
-
-  private startNetworkSampling(): void {
-    this.unsubscribeNetwork?.();
-    this.unsubscribeNetwork = this.networkDiagnostics.subscribe((metrics) => {
-      this.logger('collab.networkMetrics', { ...metrics });
-      this.tuneDataChannel(metrics);
-    });
-    this.networkDiagnostics
-      .getCurrentLinkMetrics()
-      .then((metrics) => {
-        this.logger('collab.networkMetrics.initial', { ...metrics });
-        this.tuneDataChannel(metrics);
-      })
-      .catch((error) => {
-        this.logger('collab.networkMetrics.error', { error: String(error) });
-      });
-  }
-
   private tuneDataChannel(metrics: LinkMetrics): void {
     if (!this.dataChannel) {
       return;
     }
     if (typeof metrics.linkSpeedMbps === 'number') {
       const bytesPerSecond = (metrics.linkSpeedMbps * 1_000_000) / 8;
-      this.dataChannel.bufferedAmountLowThreshold = Math.max(
-        16 * 1024,
-        Math.min(512 * 1024, Math.round(bytesPerSecond * 0.2)),
+      const threshold = Math.max(
+        this.minBufferedThreshold,
+        Math.min(this.maxBufferedThreshold, Math.round(bytesPerSecond * 0.2)),
       );
+      this.dataChannel.bufferedAmountLowThreshold = threshold;
     }
   }
 
@@ -375,7 +333,7 @@ export class CollabSessionService<T = unknown> {
   }
 
   private async broadcastPublicKey(): Promise<void> {
-    await this.signalingClient.sendPublicKey(this.identityKeyPair.publicKey);
+    await this.signalingClient.sendPublicKey(this.encryptionManager.getLocalPublicKey());
   }
 
   private registerSignalingListeners(): void {
