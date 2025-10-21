@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "audio_engine/SceneGraph.h"
@@ -22,6 +23,7 @@ class AudioEngineBridge {
 
  private:
   static std::unique_ptr<SceneGraph> graph_;
+  static std::mutex mutex_;
 };
 
 }  // namespace daft::audio::bridge

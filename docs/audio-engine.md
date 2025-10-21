@@ -15,8 +15,8 @@ React Native (TypeScript) ── TurboModules ──> Platform Bridges (JNI / Ob
                                          C++ Core (audio-engine/)
 ```
 
-The native module supports reusable DSP nodes, a lock-free scheduler, and automation lanes
-that align to buffer boundaries for deterministic playback.
+The native module supports reusable DSP nodes, a bounded real-time scheduler, and automation
+lanes that align to buffer boundaries for deterministic playback.
 
 ## Initialization Flow
 
@@ -33,11 +33,11 @@ that align to buffer boundaries for deterministic playback.
 
 ## Threading Model
 
-| Thread          | Responsibilities                                                                                        | Real-time Constraints                                               |
-| --------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| Audio render    | `SceneGraph::render` mixes connected nodes into an output buffer and drains the scheduler.              | No dynamic allocation; lock-free queues ensure bounded work.        |
-| Control / UI    | React Native publishes automation lanes, node configuration, and tempo changes via TurboModule methods. | Uses mutex-protected bridge objects; never blocks the audio thread. |
-| Asset / tooling | Shell automation from `scripts/daftcitadel.sh` can prepare plugins and assets.                          | External to the engine; informs configuration defaults only.        |
+| Thread          | Responsibilities                                                                                        | Real-time Constraints                                                    |
+| --------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Audio render    | `SceneGraph::render` mixes connected nodes into an output buffer and drains the scheduler.              | No dynamic allocation; bounded vectors avoid unbounded queue growth.     |
+| Control / UI    | React Native publishes automation lanes, node configuration, and tempo changes via TurboModule methods. | Uses mutex-protected bridge objects (Android & iOS) without blocking RT. |
+| Asset / tooling | Shell automation from `scripts/daftcitadel.sh` can prepare plugins and assets.                          | External to the engine; informs configuration defaults only.             |
 
 The render thread never locks user-facing mutexes. Control APIs acquire a bridge-level mutex
 once per transaction to mutate the scene graph safely.
@@ -48,15 +48,18 @@ once per transaction to mutate the scene graph safely.
 - `GainNode` – multiplicative gain stage, frequently scheduled for automation curves.
 - `MixerNode` – collects upstream buffers into a summing bus.
 
-Connections are stored as ordered `source → destination` pairs. The renderer walks the
-connections in insertion order, clearing a stack-based scratch buffer for each pass before
-accumulating into the destination.
+Connections are stored as ordered `source → destination` pairs. Each render pass walks the
+graph in topological order, accumulating upstream audio into per-node scratch buffers before
+invoking `DSPNode::process`. To emit audio to the hardware output, connect a node to the
+special destination `SceneGraph::kOutputBusId` (mirrored in TypeScript as `OUTPUT_BUS`). If no
+explicit output is connected, sink nodes (those without outgoing edges) are mixed into the
+final buffer as a fallback.
 
 ## Automation and Scheduling
 
 - `StaticAutomationLane` (header-only) – lock-free ring buffer for control events.
-- `RealTimeScheduler` – deterministic queue that executes callbacks when the render clock
-  reaches the target frame.
+- `RealTimeScheduler` – deterministic queue backed by a pre-allocated vector that executes
+  callbacks when the render clock reaches the target frame.
 - `ClockSyncService` (TypeScript) – converts tempo and buffer information into frame
   positions, ensuring UI automation remains buffer-aligned before being submitted to native
   code.

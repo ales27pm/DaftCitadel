@@ -48,14 +48,15 @@ export class AudioEngine {
   }
 
   public async configureNodes(nodes: NodeConfiguration[]): Promise<void> {
-    for (const node of nodes) {
-      await NativeAudioEngine.addNode(
-        this.graphId,
-        node.id,
-        node.type,
-        node.options ?? {},
-      );
+    if (nodes.length === 0) {
+      return;
     }
+
+    await Promise.all(
+      nodes.map((node) =>
+        NativeAudioEngine.addNode(this.graphId, node.id, node.type, node.options ?? {}),
+      ),
+    );
   }
 
   public async connect(source: string, destination: string): Promise<void> {
@@ -82,3 +83,4 @@ export class AudioEngine {
 }
 
 export { AutomationLane, publishAutomationLane, ClockSyncService };
+export const OUTPUT_BUS = '__output__';
