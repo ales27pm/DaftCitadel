@@ -49,19 +49,24 @@ declare module 'tweetnacl' {
   export const scalarMult: {
     (n: Uint8Array, p: Uint8Array): Uint8Array;
     base(n: Uint8Array): Uint8Array;
+    readonly scalarLength: number;
     readonly groupElementLength: number;
   };
+  export interface SignKeyPair {
+    publicKey: Uint8Array;
+    secretKey: Uint8Array;
+  }
   export const sign: {
     (message: Uint8Array, secretKey: Uint8Array): Uint8Array;
-    detached(message: Uint8Array, secretKey: Uint8Array): Uint8Array;
+    open(signedMessage: Uint8Array, publicKey: Uint8Array): Uint8Array | null;
     readonly detached: {
       (message: Uint8Array, secretKey: Uint8Array): Uint8Array;
       verify(message: Uint8Array, signature: Uint8Array, publicKey: Uint8Array): boolean;
     };
     keyPair: {
-      (): BoxKeyPair;
-      fromSecretKey(secretKey: Uint8Array): BoxKeyPair;
-      fromSeed(seed: Uint8Array): BoxKeyPair;
+      (): SignKeyPair;
+      fromSecretKey(secretKey: Uint8Array): SignKeyPair;
+      fromSeed(seed: Uint8Array): SignKeyPair;
     };
     readonly publicKeyLength: number;
     readonly secretKeyLength: number;
