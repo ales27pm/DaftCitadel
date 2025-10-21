@@ -10,7 +10,6 @@ namespace daft::audio {
 
 SceneGraph::SceneGraph(double sampleRate, std::uint32_t framesPerBuffer)
     : sampleRate_(sampleRate),
-      framesPerBuffer_(framesPerBuffer),
       clock_(sampleRate, framesPerBuffer),
       scheduler_(clock_) {}
 
@@ -109,7 +108,6 @@ void SceneGraph::render(AudioBufferView outputBuffer) {
     }
   }
 
-  framesPerBuffer_ = static_cast<std::uint32_t>(frameCount);
   clock_.advanceBy(static_cast<std::uint32_t>(frameCount));
 }
 

@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -61,7 +60,6 @@ class SceneGraph {
   };
 
   double sampleRate_;
-  std::uint32_t framesPerBuffer_;
   std::unordered_map<std::string, std::unique_ptr<DSPNode>> nodes_;
   std::vector<Connection> connections_;
   RenderClock clock_;
