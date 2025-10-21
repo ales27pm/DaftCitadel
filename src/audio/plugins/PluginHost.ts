@@ -32,7 +32,13 @@ export class PluginHost {
   private readonly sandboxManager: PluginSandboxManager;
   private readonly crashListeners = new Set<CrashListener>();
   private readonly sandboxListeners = new Set<SandboxPermissionListener>();
-  private readonly instances = new Map<string, PluginInstanceHandle>();
+  private readonly instances = new Map<
+    string,
+    {
+      handle: PluginInstanceHandle;
+      nativeInstanceId: string;
+    }
+  >();
   private subscriptions: Array<{ remove: () => void }> = [];
 
   constructor(sandboxManager?: PluginSandboxManager) {
@@ -63,29 +69,35 @@ export class PluginHost {
     if (sandboxContext) {
       this.sandboxManager.recordSandbox(sandboxContext);
     }
-    this.instances.set(handle.instanceId, handle);
+    this.instances.set(handle.instanceId, {
+      handle,
+      nativeInstanceId: handle.instanceId,
+    });
     return handle;
   }
 
   async releasePlugin(instanceId: string): Promise<void> {
-    await NativePluginHost.releasePlugin(instanceId);
-    this.instances.delete(instanceId);
+    const binding = this.instances.get(instanceId);
+    await NativePluginHost.releasePlugin(binding?.nativeInstanceId ?? instanceId);
+    if (binding) {
+      this.instances.delete(instanceId);
+    }
   }
 
   async loadPreset(instanceId: string, presetId: string): Promise<void> {
-    const instance = this.instances.get(instanceId);
-    if (!instance) {
+    const binding = this.instances.get(instanceId);
+    if (!binding) {
       throw new Error(`Unknown plugin instance: ${instanceId}`);
     }
-    const preset = instance.descriptor.factoryPresets?.find(
+    const preset = binding.handle.descriptor.factoryPresets?.find(
       (candidate) => candidate.id === presetId,
     );
     if (!preset) {
       throw new Error(
-        `Preset ${presetId} not found for ${instance.descriptor.identifier}`,
+        `Preset ${presetId} not found for ${binding.handle.descriptor.identifier}`,
       );
     }
-    await NativePluginHost.loadPreset(instanceId, preset);
+    await NativePluginHost.loadPreset(binding.nativeInstanceId, preset);
   }
 
   async automateParameter(
@@ -93,10 +105,15 @@ export class PluginHost {
     parameterId: string,
     envelope: PluginAutomationEnvelope[],
   ): Promise<void> {
-    if (!this.instances.has(instanceId)) {
+    const binding = this.instances.get(instanceId);
+    if (!binding) {
       throw new Error(`Cannot automate unknown plugin instance ${instanceId}`);
     }
-    await NativePluginHost.scheduleAutomation(instanceId, parameterId, envelope);
+    await NativePluginHost.scheduleAutomation(
+      binding.nativeInstanceId,
+      parameterId,
+      envelope,
+    );
   }
 
   async setParameter(
@@ -104,10 +121,15 @@ export class PluginHost {
     parameterId: string,
     value: number,
   ): Promise<void> {
-    if (!this.instances.has(instanceId)) {
+    const binding = this.instances.get(instanceId);
+    if (!binding) {
       throw new Error(`Cannot set parameter on unknown plugin instance ${instanceId}`);
     }
-    await NativePluginHost.setParameterValue(instanceId, parameterId, value);
+    await NativePluginHost.setParameterValue(
+      binding.nativeInstanceId,
+      parameterId,
+      value,
+    );
   }
 
   onCrash(listener: CrashListener): () => void {
@@ -169,29 +191,36 @@ export class PluginHost {
     report: PluginCrashReport,
     restartToken?: string,
   ): Promise<void> {
-    const instance = this.instances.get(report.instanceId);
-    if (!instance) {
+    const binding = this.instances.get(report.instanceId);
+    if (!binding) {
       return;
     }
     try {
-      this.instances.delete(report.instanceId);
-      const sandboxContext = instance.sandboxPath
+      const sandboxContext = binding.handle.sandboxPath
         ? ({
-            descriptor: instance.descriptor,
-            identifier: instance.descriptor.identifier,
-            path: instance.sandboxPath,
+            descriptor: binding.handle.descriptor,
+            identifier: binding.handle.descriptor.identifier,
+            path: binding.handle.sandboxPath,
           } as SandboxContext)
         : undefined;
       if (restartToken) {
         const newHandle = await NativePluginHost.instantiatePlugin(
-          instance.descriptor.identifier,
+          binding.handle.descriptor.identifier,
           {
             sandboxIdentifier: sandboxContext?.identifier,
-            initialPresetId: instance.descriptor.factoryPresets?.[0]?.id,
-            cpuBudgetPercent: instance.cpuLoadPercent,
+            initialPresetId: binding.handle.descriptor.factoryPresets?.[0]?.id,
+            cpuBudgetPercent: binding.handle.cpuLoadPercent,
           },
         );
-        this.instances.set(newHandle.instanceId, newHandle);
+        const revivedHandle: PluginInstanceHandle = {
+          ...newHandle,
+          instanceId: report.instanceId,
+        };
+        this.instances.set(report.instanceId, {
+          handle: revivedHandle,
+          nativeInstanceId: newHandle.instanceId,
+        });
+      } else {
         this.instances.delete(report.instanceId);
       }
     } catch (error) {
