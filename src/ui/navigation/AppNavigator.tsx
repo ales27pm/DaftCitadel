@@ -16,6 +16,7 @@ import {
   SettingsScreen,
 } from '../screens';
 import { useAdaptiveLayout } from '../layout';
+import { SessionAppProvider } from '../session';
 
 export type ArrangementStackParamList = {
   ArrangementHome: undefined;
@@ -86,8 +87,10 @@ const TabBarThemeProvider: React.FC<{ children?: React.ReactNode }> = ({ childre
 
 export const AppNavigator: React.FC = () => (
   <ThemeProvider>
-    <TabBarThemeProvider>
-      {/** Additional portals (e.g., toasts) can be injected as children here. */}
-    </TabBarThemeProvider>
+    <SessionAppProvider>
+      <TabBarThemeProvider>
+        {/** Additional portals (e.g., toasts) can be injected as children here. */}
+      </TabBarThemeProvider>
+    </SessionAppProvider>
   </ThemeProvider>
 );

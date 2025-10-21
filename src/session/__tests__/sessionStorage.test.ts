@@ -377,4 +377,24 @@ describe('SessionManager', () => {
     expect(merged?.name).toBe('Remote Session');
     expect(merged?.tracks[0].id).toBe('track-remote');
   });
+
+  it('notifies subscribers when sessions change', async () => {
+    const snapshots: Session[] = [];
+    const unsubscribe = manager.subscribe((session) => {
+      if (session) {
+        snapshots.push(session);
+      }
+    });
+
+    await manager.updateSession((session) => {
+      session.name = 'Subscribed Session';
+    });
+
+    unsubscribe();
+
+    expect(snapshots.length).toBeGreaterThanOrEqual(2);
+    snapshots[0].name = 'Mutated Locally';
+    const latest = manager.getSession();
+    expect(latest?.name).toBe('Subscribed Session');
+  });
 });
