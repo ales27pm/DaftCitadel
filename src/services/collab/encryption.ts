@@ -1,5 +1,5 @@
 import nacl from 'tweetnacl';
-import * as naclUtil from 'tweetnacl-util';
+import { Buffer } from 'buffer';
 
 export interface KeyPair {
   publicKey: string;
@@ -26,6 +26,33 @@ const SYMMETRIC_KEY_SIZE = nacl.secretbox.keyLength;
 const NONCE_LENGTH = nacl.secretbox.nonceLength;
 const HASH_BYTES = 32;
 
+const sharedTextEncoder =
+  typeof TextEncoder !== 'undefined' ? new TextEncoder() : undefined;
+const sharedTextDecoder =
+  typeof TextDecoder !== 'undefined' ? new TextDecoder() : undefined;
+
+function encodeBase64(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString('base64');
+}
+
+function decodeBase64String(value: string): Uint8Array {
+  return new Uint8Array(Buffer.from(value, 'base64'));
+}
+
+function encodeUtf8(value: string): Uint8Array {
+  if (sharedTextEncoder) {
+    return sharedTextEncoder.encode(value);
+  }
+  return new Uint8Array(Buffer.from(value, 'utf8'));
+}
+
+function decodeUtf8(bytes: Uint8Array): string {
+  if (sharedTextDecoder) {
+    return sharedTextDecoder.decode(bytes);
+  }
+  return Buffer.from(bytes).toString('utf8');
+}
+
 function hashSharedSecret(sharedSecret: Uint8Array): Uint8Array {
   const hash = nacl.hash(sharedSecret);
   return hash.slice(0, HASH_BYTES);
@@ -34,7 +61,7 @@ function hashSharedSecret(sharedSecret: Uint8Array): Uint8Array {
 export function generateIdentityKeyPair(): KeyPair {
   const keyPair = nacl.box.keyPair();
   return {
-    publicKey: naclUtil.encodeBase64(keyPair.publicKey),
+    publicKey: encodeBase64(keyPair.publicKey),
     secretKey: keyPair.secretKey,
   };
 }
@@ -44,7 +71,11 @@ export function deriveSharedSecret(
   remotePublicKeyBase64: string,
   preSharedKey?: Uint8Array,
 ): Uint8Array {
-  const remotePublicKey = naclUtil.decodeBase64(remotePublicKeyBase64);
+  const remotePublicKey = decodeBase64String(remotePublicKeyBase64);
+  if (remotePublicKey.length !== nacl.box.publicKeyLength) {
+    throw new Error('Invalid remote public key length');
+  }
+  // nacl.box.before expects the peer's public key followed by the local secret key.
   const shared = nacl.box.before(remotePublicKey, localSecretKey);
   if (!preSharedKey) {
     return hashSharedSecret(shared);
@@ -67,31 +98,39 @@ export class EncryptionContext {
     remotePublicKey: string;
     preSharedKey?: Uint8Array;
   }) {
-    this.key = deriveSharedSecret(
+    const sharedSecret = deriveSharedSecret(
       identityKeyPair.secretKey,
       remotePublicKey,
       preSharedKey,
-    ).slice(0, SYMMETRIC_KEY_SIZE);
+    );
+    if (sharedSecret.length < SYMMETRIC_KEY_SIZE) {
+      throw new Error(
+        `Derived shared secret length (${sharedSecret.length}) is less than required symmetric key size (${SYMMETRIC_KEY_SIZE}). This may reduce entropy and weaken security.`,
+      );
+    }
+    // The derived shared secret uses nacl.hash (SHA-512) to expand entropy. Truncating to
+    // SYMMETRIC_KEY_SIZE bytes is safe because the hash output is larger than the requested key.
+    this.key = sharedSecret.slice(0, SYMMETRIC_KEY_SIZE);
   }
 
   encrypt<T>(payload: CollabPayload<T>): Ciphertext {
     const nonce = nacl.randomBytes(NONCE_LENGTH);
-    const messageBytes = naclUtil.decodeUTF8(JSON.stringify(payload));
+    const messageBytes = encodeUtf8(JSON.stringify(payload));
     const box = nacl.secretbox(messageBytes, nonce, this.key);
     return {
-      nonce: naclUtil.encodeBase64(nonce),
-      box: naclUtil.encodeBase64(box),
+      nonce: encodeBase64(nonce),
+      box: encodeBase64(box),
     };
   }
 
   decrypt<T>(ciphertext: Ciphertext): CollabPayload<T> {
-    const nonce = naclUtil.decodeBase64(ciphertext.nonce);
-    const box = naclUtil.decodeBase64(ciphertext.box);
+    const nonce = decodeBase64String(ciphertext.nonce);
+    const box = decodeBase64String(ciphertext.box);
     const decrypted = nacl.secretbox.open(box, nonce, this.key);
     if (!decrypted) {
       throw new Error('Unable to decrypt collaboration payload');
     }
-    const decoded = naclUtil.encodeUTF8(decrypted);
+    const decoded = decodeUtf8(decrypted);
     return JSON.parse(decoded) as CollabPayload<T>;
   }
 }
@@ -102,7 +141,7 @@ export function serializeKeyPair(keyPair: KeyPair): {
 } {
   return {
     publicKey: keyPair.publicKey,
-    secretKey: naclUtil.encodeBase64(keyPair.secretKey),
+    secretKey: encodeBase64(keyPair.secretKey),
   };
 }
 
@@ -112,6 +151,6 @@ export function deserializeKeyPair(serialized: {
 }): KeyPair {
   return {
     publicKey: serialized.publicKey,
-    secretKey: naclUtil.decodeBase64(serialized.secretKey),
+    secretKey: decodeBase64String(serialized.secretKey),
   };
 }

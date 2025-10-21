@@ -1,3 +1,4 @@
+import { EventEmitter } from 'events';
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 
 type NullableNumber = number | null | undefined;
@@ -28,12 +29,20 @@ interface NativeDiagnosticsModule {
 }
 
 const COLLAPSED_INTERFACE_KEYS = ['interface', 'ssid', 'bssid'];
+const EVENT_NAME = 'CollabNetworkDiagnosticsEvent';
 
 function normalizeNumber(value: NullableNumber): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value;
   }
   return undefined;
+}
+
+function clamp(value: number | undefined, min: number, max: number): number | undefined {
+  if (typeof value !== 'number') {
+    return undefined;
+  }
+  return Math.min(max, Math.max(min, value));
 }
 
 function evaluateQuality({
@@ -71,10 +80,18 @@ function coerceInterfaceName(raw: Record<string, unknown>): string | undefined {
 }
 
 function normalizeMetrics(raw: Record<string, unknown>): LinkMetrics {
-  const rssi = normalizeNumber(raw.rssi as NullableNumber);
-  const noise = normalizeNumber(raw.noise as NullableNumber);
-  const linkSpeedMbps = normalizeNumber(raw.linkSpeedMbps as NullableNumber);
-  const transmitRateMbps = normalizeNumber(raw.transmitRateMbps as NullableNumber);
+  const rssi = clamp(normalizeNumber(raw.rssi as NullableNumber), -120, -10);
+  const noise = clamp(normalizeNumber(raw.noise as NullableNumber), -140, -20);
+  const linkSpeedMbps = clamp(
+    normalizeNumber(raw.linkSpeedMbps as NullableNumber),
+    0,
+    10_000,
+  );
+  const transmitRateMbps = clamp(
+    normalizeNumber(raw.transmitRateMbps as NullableNumber),
+    0,
+    10_000,
+  );
 
   return {
     interfaceName: coerceInterfaceName(raw),
@@ -87,65 +104,69 @@ function normalizeMetrics(raw: Record<string, unknown>): LinkMetrics {
   };
 }
 
-class NativeNetworkDiagnostics implements NetworkDiagnostics {
-  private readonly module: NativeDiagnosticsModule;
-  private readonly emitter: NativeEventEmitter;
-  private activeListeners = 0;
+class DefaultNetworkDiagnostics implements NetworkDiagnostics {
+  private readonly module?: NativeDiagnosticsModule;
+  private readonly emitter: NativeEventEmitter | EventEmitter;
+  private cachedFallbackMetrics: LinkMetrics | null = null;
 
-  constructor(module: NativeDiagnosticsModule) {
+  constructor(module?: NativeDiagnosticsModule) {
     this.module = module;
-    const emitterModule = module as unknown as {
-      addListener: (eventType: string) => void;
-      removeListeners: (count: number) => void;
-    };
-    this.emitter = new NativeEventEmitter(emitterModule);
+    if (module) {
+      this.emitter = new NativeEventEmitter(
+        module as unknown as {
+          addListener: (eventType: string) => void;
+          removeListeners: (count: number) => void;
+        },
+      );
+    } else {
+      this.emitter = new EventEmitter();
+    }
   }
 
   async getCurrentLinkMetrics(): Promise<LinkMetrics> {
+    if (!this.module) {
+      return this.getFallbackMetrics();
+    }
     const metrics = await this.module.getCurrentLinkMetrics();
     return normalizeMetrics(metrics);
   }
 
   subscribe(listener: NetworkMetricsListener): () => void {
-    if (this.activeListeners === 0) {
+    if (!this.module) {
+      const metrics = this.getFallbackMetrics();
+      listener(metrics);
+      return () => {};
+    }
+
+    if (this.emitter.listenerCount(EVENT_NAME) === 0) {
       this.module.startObserving();
     }
-    this.activeListeners += 1;
-    const subscription = this.emitter.addListener(
-      'CollabNetworkDiagnosticsEvent',
-      (payload: Record<string, unknown>) => {
-        listener(normalizeMetrics(payload));
-      },
+
+    const handler = (payload: Record<string, unknown>) => {
+      listener(normalizeMetrics(payload));
+    };
+
+    const subscription = (this.emitter as NativeEventEmitter).addListener(
+      EVENT_NAME,
+      handler,
     );
+
     return () => {
       subscription.remove();
-      this.activeListeners = Math.max(0, this.activeListeners - 1);
-      if (this.activeListeners === 0) {
-        this.module.stopObserving();
+      if (this.emitter.listenerCount(EVENT_NAME) === 0) {
+        this.module?.stopObserving();
       }
     };
   }
-}
 
-class NoopNetworkDiagnostics implements NetworkDiagnostics {
-  private cached: LinkMetrics | null = null;
-
-  async getCurrentLinkMetrics(): Promise<LinkMetrics> {
-    if (!this.cached) {
-      this.cached = {
+  private getFallbackMetrics(): LinkMetrics {
+    if (!this.cachedFallbackMetrics) {
+      this.cachedFallbackMetrics = {
         timestamp: Date.now(),
         category: 'unusable',
       };
     }
-    return this.cached;
-  }
-
-  subscribe(listener: NetworkMetricsListener): () => void {
-    listener({
-      timestamp: Date.now(),
-      category: 'unusable',
-    });
-    return () => {};
+    return this.cachedFallbackMetrics;
   }
 }
 
@@ -154,11 +175,7 @@ export function createNetworkDiagnostics(): NetworkDiagnostics {
     | NativeDiagnosticsModule
     | undefined;
 
-  if (nativeModule) {
-    return new NativeNetworkDiagnostics(nativeModule);
-  }
-
-  return new NoopNetworkDiagnostics();
+  return new DefaultNetworkDiagnostics(nativeModule);
 }
 
 export function requiresLocationPermission(): boolean {
