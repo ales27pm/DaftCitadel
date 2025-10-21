@@ -229,6 +229,62 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeAddNode(JNIEnv* env, jobject 
   }
 }
 
+JNIEXPORT void JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeRegisterClipBuffer(JNIEnv* env, jobject /*thiz*/, jstring bufferKey,
+                                                                      jdouble sampleRate, jint channels, jint frames,
+                                                                      jobjectArray channelData) {
+  const std::string key = ToStdString(env, bufferKey);
+  if (key.empty()) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException", "bufferKey is required");
+    return;
+  }
+  if (!std::isfinite(sampleRate) || sampleRate <= 0.0) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException", "sampleRate must be positive and finite");
+    return;
+  }
+  if (channels <= 0 || frames <= 0) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException", "channels and frames must be positive integers");
+    return;
+  }
+  if (channelData == nullptr) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException", "channelData is required");
+    return;
+  }
+  const jsize providedChannels = env->GetArrayLength(channelData);
+  if (providedChannels != channels) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException", "channelData length must equal channels");
+    return;
+  }
+
+  const std::size_t channelCount = static_cast<std::size_t>(channels);
+  const std::size_t frameCount = static_cast<std::size_t>(frames);
+
+  std::vector<std::vector<float>> nativeChannels;
+  nativeChannels.reserve(channelCount);
+
+  for (jsize index = 0; index < channels; ++index) {
+    jfloatArray channelArray = static_cast<jfloatArray>(env->GetObjectArrayElement(channelData, index));
+    if (channelArray == nullptr) {
+      ThrowJavaException(env, "java/lang/IllegalArgumentException", "channelData contains null entries");
+      return;
+    }
+    const jsize length = env->GetArrayLength(channelArray);
+    if (length < frames) {
+      env->DeleteLocalRef(channelArray);
+      ThrowJavaException(env, "java/lang/IllegalArgumentException", "channelData entry is shorter than frames");
+      return;
+    }
+    std::vector<float> channel(frameCount);
+    env->GetFloatArrayRegion(channelArray, 0, frames, channel.data());
+    nativeChannels.push_back(std::move(channel));
+    env->DeleteLocalRef(channelArray);
+  }
+
+  if (!AudioEngineBridge::registerClipBuffer(key, sampleRate, channelCount, frameCount, std::move(nativeChannels))) {
+    ThrowJavaException(env, "java/lang/IllegalStateException", "Failed to register clip buffer '" + key + "'");
+  }
+}
+
 /**
  * @brief Remove a node from the native audio engine by its identifier.
  *

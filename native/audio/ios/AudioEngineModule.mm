@@ -11,6 +11,8 @@
 #include <limits>
 #include <string>
 #include <utility>
+#include <vector>
+#include <cstring>
 
 #import "audio-engine/platform/common/NodeFactory.h"
 #import "audio-engine/platform/ios/AudioEngineBridge.hpp"
@@ -179,6 +181,81 @@ RCT_EXPORT_METHOD(addNode:(NSString*)nodeId
     std::string message = "Failed to add node '" + std::string([nodeId UTF8String]) + "'";
     os_log_error(ModuleLogger(), "%{public}s", message.c_str());
     RejectPromise(reject, @"add_node_failed", message);
+    return;
+  }
+  resolve(nil);
+}
+
+RCT_EXPORT_METHOD(registerClipBuffer:(NSString*)bufferKey
+                  sampleRate:(double)sampleRate
+                  channels:(nonnull NSNumber*)channels
+                  frames:(nonnull NSNumber*)frames
+                  channelData:(NSArray*)channelData
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+  const std::string key = Trim(bufferKey.length > 0 ? [bufferKey UTF8String] : "");
+  if (key.empty()) {
+    RejectPromise(reject, @"invalid_arguments", "bufferKey is required");
+    return;
+  }
+  if (!std::isfinite(sampleRate) || sampleRate <= 0.0) {
+    RejectPromise(reject, @"invalid_arguments", "sampleRate must be positive and finite");
+    return;
+  }
+  if (channels == nil || frames == nil) {
+    RejectPromise(reject, @"invalid_arguments", "channels and frames are required");
+    return;
+  }
+
+  const auto channelCountUnsigned = channels.unsignedIntegerValue;
+  const auto framesUnsigned = frames.unsignedLongLongValue;
+  const double channelsValue = channels.doubleValue;
+  const double framesValue = frames.doubleValue;
+  if (channelCountUnsigned == 0 || framesUnsigned == 0) {
+    RejectPromise(reject, @"invalid_arguments", "channels and frames must be positive integers");
+    return;
+  }
+  if (!std::isfinite(channelsValue) || !std::isfinite(framesValue)) {
+    RejectPromise(reject, @"invalid_arguments", "channels and frames must be finite");
+    return;
+  }
+  if (std::fabs(channelsValue - static_cast<double>(channelCountUnsigned)) > std::numeric_limits<double>::epsilon() ||
+      std::fabs(framesValue - static_cast<double>(framesUnsigned)) > std::numeric_limits<double>::epsilon()) {
+    RejectPromise(reject, @"invalid_arguments", "channels and frames must be integer values");
+    return;
+  }
+  if (channelData == nil || channelData.count != channelCountUnsigned) {
+    RejectPromise(reject, @"invalid_arguments", "channelData length must equal channels");
+    return;
+  }
+
+  const std::size_t channelCount = static_cast<std::size_t>(channelCountUnsigned);
+  const std::size_t frameCount = static_cast<std::size_t>(framesUnsigned);
+  const std::size_t requiredBytes = frameCount * sizeof(float);
+
+  std::vector<std::vector<float>> nativeChannels;
+  nativeChannels.reserve(channelCount);
+
+  for (NSUInteger index = 0; index < channelCountUnsigned; ++index) {
+    id entry = channelData[index];
+    if (![entry isKindOfClass:[NSData class]]) {
+      RejectPromise(reject, @"invalid_arguments", "channelData entries must be ArrayBuffer instances");
+      return;
+    }
+    NSData* data = (NSData*)entry;
+    if (data.length < requiredBytes) {
+      RejectPromise(reject, @"invalid_arguments", "channelData entry is smaller than the expected frame count");
+      return;
+    }
+    std::vector<float> channel(frameCount);
+    std::memcpy(channel.data(), data.bytes, requiredBytes);
+    nativeChannels.push_back(std::move(channel));
+  }
+
+  const bool ok = AudioEngineBridge::registerClipBuffer(key, sampleRate, channelCount, frameCount, std::move(nativeChannels));
+  if (!ok) {
+    os_log_error(ModuleLogger(), "Failed to register clip buffer %{public}@", bufferKey);
+    RejectPromise(reject, @"register_clip_failed", "Failed to register clip buffer");
     return;
   }
   resolve(nil);
