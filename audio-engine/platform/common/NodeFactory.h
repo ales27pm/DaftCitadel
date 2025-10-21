@@ -10,6 +10,18 @@
 
 #include "audio_engine/DSPNode.h"
 
+/**
+ * Create a DSPNode instance matching the given node type.
+ *
+ * Creates and configures a concrete daft::audio::DSPNode (e.g., GainNode, SineOscillatorNode, MixerNode)
+ * based on a case-insensitive type name and applies numeric parameters from `options`.
+ * For mixer nodes the "inputcount" option (if present) determines the number of inputs and is not applied as a parameter.
+ *
+ * @param type Case-insensitive name of the node type to create (e.g., "gain", "sine", "mixer").
+ * @param options Mapping of parameter names to numeric values to apply to the created node.
+ * @param error Set to a human-readable message if the requested type is unsupported; left unchanged on success.
+ * @returns A unique_ptr to the created DSPNode on success, or `nullptr` if the type is unsupported.
+ */
 namespace daft::audio::bridge {
 
 using NodeOptions = std::unordered_map<std::string, double>;
