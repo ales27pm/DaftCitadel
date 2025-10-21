@@ -25,7 +25,18 @@ export class JsonSessionStorageAdapter implements SessionStorageAdapter {
   }
 
   private filePath(sessionId: string): string {
-    return path.join(this.directory, `${sessionId}.json`);
+    if (!sessionId || path.basename(sessionId) !== sessionId) {
+      throw new SessionStorageError('Invalid session identifier');
+    }
+
+    const basePath = path.resolve(this.directory);
+    const resolvedPath = path.resolve(this.directory, `${sessionId}.json`);
+    const relative = path.relative(basePath, resolvedPath);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+      throw new SessionStorageError('Invalid session identifier');
+    }
+
+    return resolvedPath;
   }
 
   private async readFile(sessionId: string): Promise<JsonSessionFile | null> {
