@@ -119,11 +119,19 @@ export class ClockSyncService {
   }
 }
 
-export const publishAutomationLane = async (nodeId: string, lane: AutomationLane): Promise<void> => {
+export const publishAutomationLane = async (
+  nodeId: string,
+  lane: AutomationLane,
+): Promise<void> => {
   const payload = lane.toPayload();
   await Promise.all(
     payload.points.map((point) =>
-      NativeAudioEngine.scheduleParameterAutomation(nodeId, payload.parameter, point.frame, point.value),
+      NativeAudioEngine.scheduleParameterAutomation(
+        nodeId,
+        payload.parameter,
+        point.frame,
+        point.value,
+      ),
     ),
   );
 };

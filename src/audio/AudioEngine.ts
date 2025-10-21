@@ -12,11 +12,7 @@ export class AudioEngine {
   private readonly framesPerBuffer: number;
   private readonly clock: ClockSyncService;
 
-  constructor(params: {
-    sampleRate: number;
-    framesPerBuffer: number;
-    bpm: number;
-  }) {
+  constructor(params: { sampleRate: number; framesPerBuffer: number; bpm: number }) {
     if (!isNativeModuleAvailable()) {
       throw new Error('AudioEngine native module is unavailable');
     }

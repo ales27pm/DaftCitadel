@@ -20,7 +20,9 @@ describe('AutomationLane', () => {
 
   it('rejects non-integer frames', () => {
     const lane = new AutomationLane('gain');
-    expect(() => lane.addPoint({ frame: 1.5, value: 0.25 })).toThrow('Automation frame must be an integer');
+    expect(() => lane.addPoint({ frame: 1.5, value: 0.25 })).toThrow(
+      'Automation frame must be an integer',
+    );
   });
 });
 

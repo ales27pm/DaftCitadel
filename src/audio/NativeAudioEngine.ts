@@ -6,7 +6,11 @@ type NodeId = string;
 export interface AudioEngineSpec extends TurboModule {
   initialize(sampleRate: number, framesPerBuffer: number): Promise<void>;
   shutdown(): Promise<void>;
-  addNode(nodeId: NodeId, nodeType: string, options: Record<string, number | string | boolean>): Promise<void>;
+  addNode(
+    nodeId: NodeId,
+    nodeType: string,
+    options: Record<string, number | string | boolean>,
+  ): Promise<void>;
   removeNode(nodeId: NodeId): Promise<void>;
   connectNodes(source: NodeId, destination: NodeId): Promise<void>;
   disconnectNodes(source: NodeId, destination: NodeId): Promise<void>;
