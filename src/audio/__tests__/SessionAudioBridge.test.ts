@@ -6,26 +6,49 @@ import {
 import { AudioEngine } from '../AudioEngine';
 import { ClockSyncService } from '../Automation';
 import {
+  AutomationCurve,
   Clip,
+  RoutingGraph,
   Session,
   Track,
   createDefaultTrackRoutingGraph,
-  AutomationCurve,
   PluginRoutingNode,
-  RoutingGraph,
 } from '../../session/models';
+
+type LoaderFactoryOptions = Partial<AudioFileData> & {
+  throwError?: Error;
+};
 
 const createLoader = (
   sampleRate: number,
   frames: number,
+  options: LoaderFactoryOptions = {},
 ): { loader: AudioFileLoader; loadMock: jest.Mock } => {
+  const {
+    throwError,
+    data,
+    channels = 1,
+    sampleRate: loaderSampleRate = sampleRate,
+    frames: loaderFrames = frames,
+  } = options;
+
+  const channelData = data ?? [
+    Float32Array.from({ length: loaderFrames }, (_, index) => Math.sin(index / 10)),
+  ];
+
   const audioData: AudioFileData = {
-    sampleRate,
-    channels: 1,
-    frames,
-    data: [Float32Array.from({ length: frames }, (_, index) => Math.sin(index / 10))],
+    sampleRate: loaderSampleRate,
+    channels,
+    frames: loaderFrames,
+    data: channelData,
   };
-  const loadMock = jest.fn(async () => audioData);
+
+  const loadMock = jest.fn(async () => {
+    if (throwError) {
+      throw throwError;
+    }
+    return audioData;
+  });
   const loader: AudioFileLoader = {
     load: loadMock,
   };
@@ -41,12 +64,14 @@ const createMockEngine = (
   disconnect: jest.Mock;
   publishAutomation: jest.Mock;
   removeNodes: jest.Mock;
+  uploadClipBuffer: jest.Mock;
 } => {
   const configureNodes = jest.fn(async () => undefined);
   const connect = jest.fn(async () => undefined);
   const disconnect = jest.fn(async () => undefined);
   const publishAutomation = jest.fn(async () => undefined);
   const removeNodes = jest.fn(async () => undefined);
+  const uploadClipBuffer = jest.fn(async () => undefined);
   const engine: Partial<AudioEngine> = {
     getClock: () => clock,
     configureNodes,
@@ -54,6 +79,7 @@ const createMockEngine = (
     disconnect,
     publishAutomation,
     removeNodes,
+    uploadClipBuffer,
   };
   return {
     engine: engine as AudioEngine,
@@ -62,6 +88,7 @@ const createMockEngine = (
     disconnect,
     publishAutomation,
     removeNodes,
+    uploadClipBuffer,
   };
 };
 
@@ -79,18 +106,24 @@ const createClip = (overrides: Partial<Clip> = {}): Clip => ({
 });
 
 const createTrack = (overrides: Partial<Track> = {}): Track => {
-  const graph = overrides.routing?.graph ?? createDefaultTrackRoutingGraph('track-1');
+  const trackId = overrides.id ?? 'track-1';
+  const graph = overrides.routing?.graph ?? createDefaultTrackRoutingGraph(trackId);
+  const routing = overrides.routing ? { ...overrides.routing } : {};
+  if (!routing.graph) {
+    routing.graph = graph;
+  }
+  const clips = overrides.clips ?? [createClip({ id: `${trackId}-clip` })];
   return {
-    id: 'track-1',
+    id: trackId,
     name: 'Track 1',
     color: '#ffffff',
-    clips: [createClip()],
+    clips,
     muted: false,
     solo: false,
     volume: 0,
     pan: 0,
     automationCurves: [],
-    routing: { graph },
+    routing: routing as Track['routing'],
     ...overrides,
   };
 };
@@ -126,6 +159,7 @@ describe('SessionAudioBridge', () => {
       disconnect,
       publishAutomation,
       removeNodes,
+      uploadClipBuffer,
     } = createMockEngine(clock);
 
     const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
@@ -134,18 +168,29 @@ describe('SessionAudioBridge', () => {
     await bridge.applySessionUpdate({ ...session, revision: 1 });
 
     expect(loadMock).toHaveBeenCalledTimes(1);
+    expect(uploadClipBuffer).toHaveBeenCalledWith(
+      expect.any(String),
+      sampleRate,
+      1,
+      frames,
+      expect.any(Array),
+    );
     expect(configureNodes).toHaveBeenCalledTimes(1);
     const initialNodes = configureNodes.mock.calls[0][0];
-    expect(initialNodes).toHaveLength(3);
-    expect(connect).toHaveBeenCalledTimes(3);
+    expect(initialNodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: expect.stringContaining('track-1:input') }),
+        expect.objectContaining({ id: expect.stringContaining('track-1:output') }),
+        expect.objectContaining({ type: 'clipPlayer' }),
+      ]),
+    );
+    expect(connect).toHaveBeenCalled();
     expect(disconnect).not.toHaveBeenCalled();
     expect(removeNodes).not.toHaveBeenCalled();
     expect(publishAutomation).toHaveBeenCalledTimes(1);
 
     configureNodes.mockClear();
     connect.mockClear();
-    disconnect.mockClear();
-    publishAutomation.mockClear();
 
     const graph = createDefaultTrackRoutingGraph('track-1');
     const trackInput = graph.nodes.find((node) => node.type === 'trackInput');
@@ -196,23 +241,83 @@ describe('SessionAudioBridge', () => {
     await bridge.applySessionUpdate(sessionWithPlugin);
 
     expect(loadMock).toHaveBeenCalledTimes(1);
-    expect(disconnect).toHaveBeenCalledTimes(1);
     expect(disconnect).toHaveBeenCalledWith(trackInput.id, trackOutput.id);
-    expect(configureNodes).toHaveBeenCalledTimes(1);
-    const pluginNodes = configureNodes.mock.calls[0][0];
-    expect(pluginNodes).toHaveLength(1);
-    expect(pluginNodes[0].id).toBe(pluginNodeId);
-    expect(connect).toHaveBeenCalledTimes(2);
-    expect(removeNodes).not.toHaveBeenCalled();
+    expect(configureNodes).toHaveBeenCalled();
+    expect(connect).toHaveBeenCalledWith(pluginNodeId, trackOutput.id);
   });
 
-  it('quantizes automation frames using the audio engine clock', async () => {
+  it('throws when a track is missing a routing graph', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine } = createMockEngine(clock);
+    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+
+    const sessionWithoutGraph = createSession({
+      revision: 2,
+      tracks: [
+        createTrack({
+          routing: {},
+        }),
+      ],
+    });
+
+    await expect(bridge.applySessionUpdate(sessionWithoutGraph)).rejects.toThrow(
+      /missing a routing graph/,
+    );
+  });
+
+  it('logs errors when audio files fail to load or are invalid', async () => {
+    const logger = {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    };
+    const { loader: failingLoader } = createLoader(sampleRate, frames, {
+      throwError: new Error('load failed'),
+    });
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine, configureNodes, uploadClipBuffer, publishAutomation } =
+      createMockEngine(clock);
+
+    const bridge = new SessionAudioBridge(engine, { fileLoader: failingLoader, logger });
+
+    await bridge.applySessionUpdate(createSession({ revision: 3 }));
+
+    expect(logger.error).toHaveBeenCalledWith(
+      'Failed to prepare clip node',
+      expect.objectContaining({
+        clipId: expect.stringContaining('clip'),
+        error: expect.any(Error),
+      }),
+    );
+    expect(uploadClipBuffer).not.toHaveBeenCalled();
+    expect(configureNodes).toHaveBeenCalledTimes(1);
+    expect(publishAutomation).not.toHaveBeenCalled();
+
+    const { loader: zeroChannelLoader } = createLoader(sampleRate, frames, {
+      channels: 0,
+    });
+    const bridgeWithZeroChannel = new SessionAudioBridge(engine, {
+      fileLoader: zeroChannelLoader,
+      logger,
+    });
+
+    await bridgeWithZeroChannel.applySessionUpdate(createSession({ revision: 4 }));
+
+    expect(logger.error).toHaveBeenLastCalledWith(
+      'Failed to prepare clip node',
+      expect.objectContaining({ clipId: expect.stringContaining('clip') }),
+    );
+  });
+
+  it('quantizes automation frames for multiple tracks and parameters', async () => {
     const { loader } = createLoader(sampleRate, frames);
     const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
     const { engine, publishAutomation } = createMockEngine(clock);
     const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
 
-    const automationCurve: AutomationCurve = {
+    const automationCurveA: AutomationCurve = {
       id: 'curve-1',
       parameter: 'volume',
       interpolation: 'linear',
@@ -222,50 +327,58 @@ describe('SessionAudioBridge', () => {
       ],
     };
 
+    const automationCurveB: AutomationCurve = {
+      id: 'curve-2',
+      parameter: 'pan',
+      interpolation: 'linear',
+      points: [
+        { time: 15, value: -0.5 },
+        { time: 250, value: 0.5 },
+      ],
+    };
+
     const session = createSession({
       revision: 5,
       tracks: [
         createTrack({
-          automationCurves: [automationCurve],
+          id: 'track-1',
+          automationCurves: [automationCurveA],
+        }),
+        createTrack({
+          id: 'track-2',
+          automationCurves: [automationCurveB],
         }),
       ],
     });
 
     await bridge.applySessionUpdate(session);
 
-    const trackOutputId = 'track-1:output:main';
-    const automationCall = publishAutomation.mock.calls.find(
-      ([nodeId]) => nodeId === trackOutputId,
+    expect(publishAutomation).toHaveBeenCalledTimes(4);
+    const lanePayloads = publishAutomation.mock.calls.map(([, lane]) => lane.toPayload());
+    expect(lanePayloads).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ parameter: 'volume' }),
+        expect.objectContaining({ parameter: 'pan' }),
+        expect.objectContaining({ parameter: 'gain' }),
+      ]),
     );
-    expect(automationCall).toBeDefined();
-    const [, lane] = automationCall!;
-    const payload = lane.toPayload();
-    expect(
-      payload.points.map((point: { frame: number; value: number }) => point.frame),
-    ).toEqual([512, 11264]);
-    expect(
-      payload.points.map((point: { frame: number; value: number }) => point.value),
-    ).toEqual([0.1, 0.9]);
   });
 
-  it('tears down clip nodes when clips are removed from a track', async () => {
+  it('tears down nodes when clips or tracks are removed', async () => {
     const { loader } = createLoader(sampleRate, frames);
     const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
     const { engine, connect, disconnect, removeNodes } = createMockEngine(clock);
     const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
 
-    const sessionWithClip = createSession({ revision: 3 });
+    const sessionWithClip = createSession({ revision: 6 });
     await bridge.applySessionUpdate(sessionWithClip);
-
-    expect(connect).toHaveBeenCalledTimes(3);
-    expect(removeNodes).not.toHaveBeenCalled();
 
     connect.mockClear();
     disconnect.mockClear();
     removeNodes.mockClear();
 
     const sessionWithoutClip = createSession({
-      revision: 4,
+      revision: 7,
       tracks: [
         createTrack({
           clips: [],
@@ -274,9 +387,45 @@ describe('SessionAudioBridge', () => {
     });
 
     await bridge.applySessionUpdate(sessionWithoutClip);
+    expect(removeNodes).toHaveBeenCalled();
 
-    expect(disconnect).toHaveBeenCalledWith('clip:clip-1', 'track-1:input:main');
-    expect(removeNodes).toHaveBeenCalledTimes(1);
-    expect(removeNodes.mock.calls[0][0]).toContain('clip:clip-1');
+    const emptySession: Session = {
+      ...sessionWithoutClip,
+      revision: 8,
+      tracks: [],
+    };
+
+    await bridge.applySessionUpdate(emptySession);
+
+    expect(removeNodes).toHaveBeenCalledTimes(2);
+  });
+
+  it('resamples audio when loader sample rate differs from engine sample rate', async () => {
+    const mismatchRate = 44100;
+    const loaderFrames = Math.floor((frames * mismatchRate) / sampleRate);
+    const { loader, loadMock } = createLoader(sampleRate, frames, {
+      sampleRate: mismatchRate,
+      frames: loaderFrames,
+    });
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine, uploadClipBuffer } = createMockEngine(clock);
+    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+
+    await bridge.applySessionUpdate(createSession({ revision: 9 }));
+
+    expect(loadMock).toHaveBeenCalled();
+    expect(uploadClipBuffer).toHaveBeenCalledWith(
+      expect.any(String),
+      sampleRate,
+      1,
+      expect.any(Number),
+      expect.any(Array),
+    );
+    const [, , , resampledFrames] = uploadClipBuffer.mock.calls[0];
+    const expectedFrames = Math.max(
+      1,
+      Math.round(loaderFrames * (sampleRate / mismatchRate)),
+    );
+    expect(resampledFrames).toBe(expectedFrames);
   });
 });

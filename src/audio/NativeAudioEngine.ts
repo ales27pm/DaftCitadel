@@ -11,6 +11,13 @@ export interface AudioEngineSpec extends TurboModule {
     nodeType: string,
     options: Record<string, number | string | boolean>,
   ): Promise<void>;
+  registerClipBuffer(
+    bufferKey: string,
+    sampleRate: number,
+    channels: number,
+    frames: number,
+    channelData: ArrayBuffer[],
+  ): Promise<void>;
   removeNode(nodeId: NodeId): Promise<void>;
   connectNodes(source: NodeId, destination: NodeId): Promise<void>;
   disconnectNodes(source: NodeId, destination: NodeId): Promise<void>;
