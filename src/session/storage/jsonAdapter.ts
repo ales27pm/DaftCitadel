@@ -139,7 +139,8 @@ class JsonSessionStorageTransaction implements SessionStorageTransaction {
 
   async write(session: Session, options?: WriteOptions): Promise<void> {
     this.assertOpen();
-    const staged = this.writes.get(session.id)?.session;
+    const previous = this.writes.get(session.id);
+    const staged = previous?.session;
     const baseline = staged ?? (await this.adapter.readDirect(session.id));
     if (options?.expectedRevision !== undefined) {
       const currentRevision = baseline?.revision ?? 0;
@@ -151,7 +152,11 @@ class JsonSessionStorageTransaction implements SessionStorageTransaction {
         );
       }
     }
-    this.writes.set(session.id, { session, expectedRevision: options?.expectedRevision });
+    const expectedRevision =
+      options?.expectedRevision !== undefined
+        ? options.expectedRevision
+        : previous?.expectedRevision;
+    this.writes.set(session.id, { session, expectedRevision });
     this.deletions.delete(session.id);
   }
 
