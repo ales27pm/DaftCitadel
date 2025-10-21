@@ -2,13 +2,11 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 namespace daft::audio {
-
-namespace {
-constexpr std::size_t kMaxChannels = 4;
-constexpr std::size_t kMaxFrames = 1024;
-}
 
 SceneGraph::SceneGraph(double sampleRate)
     : sampleRate_(sampleRate), clock_(sampleRate, 128), scheduler_(clock_) {}
@@ -18,11 +16,16 @@ bool SceneGraph::addNode(const std::string& id, std::unique_ptr<DSPNode> node) {
     return false;
   }
   node->prepare(sampleRate_);
-  return nodes_.emplace(id, std::move(node)).second;
+  const auto result = nodes_.emplace(id, std::move(node));
+  if (result.second) {
+    nodeBuffers_.try_emplace(id);
+  }
+  return result.second;
 }
 
 void SceneGraph::removeNode(const std::string& id) {
   nodes_.erase(id);
+  nodeBuffers_.erase(id);
   connections_.erase(std::remove_if(connections_.begin(), connections_.end(),
                                     [&](const auto& conn) {
                                       return conn.source == id || conn.destination == id;
@@ -31,7 +34,10 @@ void SceneGraph::removeNode(const std::string& id) {
 }
 
 bool SceneGraph::connect(const std::string& source, const std::string& destination) {
-  if (!nodes_.count(source) || !nodes_.count(destination)) {
+  if (!nodes_.count(source)) {
+    return false;
+  }
+  if (destination != kOutputBusId && !nodes_.count(destination)) {
     return false;
   }
   connections_.push_back({source, destination});
@@ -51,37 +57,88 @@ void SceneGraph::render(AudioBufferView outputBuffer) {
     throw std::runtime_error("Output buffer exceeds supported dimensions");
   }
   scheduler_.dispatchDueEvents();
+  outputBuffer.fill(0.0F);
 
-  StackAudioBuffer<kMaxChannels, kMaxFrames> scratch;
-  scratch.setFrameCount(outputBuffer.frameCount());
+  const auto channelCount = outputBuffer.channelCount();
+  const auto frameCount = outputBuffer.frameCount();
 
-  for (std::size_t ch = 0; ch < outputBuffer.channelCount(); ++ch) {
-    auto out = outputBuffer.channel(ch);
-    std::fill(out.begin(), out.end(), 0.0F);
+  for (auto& [id, buffer] : nodeBuffers_) {
+    (void)id;
+    buffer.configure(channelCount, frameCount);
+    buffer.view(channelCount).fill(0.0F);
   }
 
-  float* scratchChannels[kMaxChannels];
-  for (std::size_t ch = 0; ch < kMaxChannels; ++ch) {
-    scratchChannels[ch] = scratch.channel(ch);
-  }
+  std::unordered_map<std::string, std::vector<std::string>> inbound;
+  std::vector<std::string> outputSources;
+  inbound.reserve(nodes_.size());
+
+  std::unordered_set<std::string> nodesWithOutgoing;
 
   for (const auto& connection : connections_) {
-    auto it = nodes_.find(connection.source);
-    if (it == nodes_.end()) {
-      continue;
+    nodesWithOutgoing.insert(connection.source);
+    if (connection.destination == kOutputBusId) {
+      outputSources.push_back(connection.source);
+    } else {
+      inbound[connection.destination].push_back(connection.source);
     }
-    scratch.clear();
-    AudioBufferView scratchView(scratchChannels, outputBuffer.channelCount(),
-                                outputBuffer.frameCount());
-    it->second->process(scratchView);
+  }
 
-    for (std::size_t ch = 0; ch < outputBuffer.channelCount(); ++ch) {
-      auto out = outputBuffer.channel(ch);
-      auto in = scratchView.channel(ch);
-      for (std::size_t i = 0; i < outputBuffer.frameCount(); ++i) {
-        out[i] += in[i];
+  if (outputSources.empty()) {
+    for (const auto& [nodeId, _] : nodes_) {
+      if (nodesWithOutgoing.count(nodeId) == 0U) {
+        outputSources.push_back(nodeId);
       }
     }
+  }
+
+  std::unordered_set<std::string> visiting;
+  std::unordered_set<std::string> rendered;
+
+  auto renderNode = [&](const std::string& nodeId, const auto& self) -> AudioBufferView {
+    if (rendered.count(nodeId) > 0U) {
+      auto bufferIt = nodeBuffers_.find(nodeId);
+      if (bufferIt == nodeBuffers_.end()) {
+        throw std::runtime_error("Buffer missing for node");
+      }
+      return bufferIt->second.view(channelCount);
+    }
+
+    if (visiting.count(nodeId) > 0U) {
+      throw std::runtime_error("Cycle detected in scene graph");
+    }
+
+    const auto nodeIt = nodes_.find(nodeId);
+    if (nodeIt == nodes_.end()) {
+      throw std::runtime_error("Node missing during render");
+    }
+
+    auto bufferIt = nodeBuffers_.find(nodeId);
+    if (bufferIt == nodeBuffers_.end()) {
+      throw std::runtime_error("Buffer missing for node");
+    }
+
+    visiting.insert(nodeId);
+
+    auto view = bufferIt->second.view(channelCount);
+    view.fill(0.0F);
+
+    if (const auto inboundIt = inbound.find(nodeId); inboundIt != inbound.end()) {
+      for (const auto& sourceId : inboundIt->second) {
+        auto sourceView = self(sourceId, self);
+        view.addBufferInPlace(sourceView);
+      }
+    }
+
+    nodeIt->second->process(view);
+
+    visiting.erase(nodeId);
+    rendered.insert(nodeId);
+    return view;
+  };
+
+  for (const auto& sourceId : outputSources) {
+    auto view = renderNode(sourceId, renderNode);
+    outputBuffer.addBufferInPlace(view);
   }
 
   clock_.advance();

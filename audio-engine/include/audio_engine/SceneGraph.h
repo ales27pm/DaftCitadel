@@ -1,10 +1,12 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -29,10 +31,31 @@ class SceneGraph {
 
   [[nodiscard]] double sampleRate() const { return sampleRate_; }
 
+  static constexpr std::string_view kOutputBusId = "__output__";
+
  private:
+  static constexpr std::size_t kMaxChannels = 4;
+  static constexpr std::size_t kMaxFrames = 1024;
+
   struct Connection {
     std::string source;
     std::string destination;
+  };
+
+  struct NodeBuffer {
+    StackAudioBuffer<kMaxChannels, kMaxFrames> storage{};
+    std::array<float*, kMaxChannels> channelPointers{};
+
+    void configure(std::size_t channelCount, std::size_t frameCount) {
+      storage.setFrameCount(frameCount);
+      for (std::size_t ch = 0; ch < channelCount; ++ch) {
+        channelPointers[ch] = storage.channel(ch);
+      }
+    }
+
+    [[nodiscard]] AudioBufferView view(std::size_t channelCount) {
+      return AudioBufferView(channelPointers.data(), channelCount, storage.frameCount());
+    }
   };
 
   double sampleRate_;
@@ -40,6 +63,7 @@ class SceneGraph {
   std::vector<Connection> connections_;
   RenderClock clock_;
   RealTimeScheduler<128> scheduler_;
+  std::unordered_map<std::string, NodeBuffer> nodeBuffers_;
 };
 
 }  // namespace daft::audio
