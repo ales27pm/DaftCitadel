@@ -1,5 +1,66 @@
 const noop = async () => {};
 
+export const View = 'View';
+export const ScrollView = 'ScrollView';
+export const SafeAreaView = 'SafeAreaView';
+export const Text = 'Text';
+export const Pressable = 'Pressable';
+export const TouchableOpacity = 'TouchableOpacity';
+export const FlatList = 'FlatList';
+export const SectionList = 'SectionList';
+
+export const StyleSheet = {
+  create: <T extends Record<string, unknown>>(styles: T): T => styles,
+};
+
+export const useColorScheme = (): 'light' | 'dark' => 'dark';
+
+export const useWindowDimensions = () => ({
+  width: 1280,
+  height: 832,
+  scale: 2,
+  fontScale: 2,
+});
+
+type AccessibilityListener = (enabled: boolean) => void;
+
+const reduceMotionListeners = new Set<AccessibilityListener>();
+const screenReaderListeners = new Set<AccessibilityListener>();
+
+let reduceMotionEnabled = false;
+let screenReaderEnabled = false;
+
+const createSubscription = (set: Set<AccessibilityListener>, listener: AccessibilityListener) => {
+  set.add(listener);
+  return {
+    remove: () => {
+      set.delete(listener);
+    },
+  };
+};
+
+export const AccessibilityInfo = {
+  isReduceMotionEnabled: async () => reduceMotionEnabled,
+  isScreenReaderEnabled: async () => screenReaderEnabled,
+  addEventListener: (
+    event: 'reduceMotionChanged' | 'screenReaderChanged',
+    listener: AccessibilityListener,
+  ) => {
+    if (event === 'reduceMotionChanged') {
+      return createSubscription(reduceMotionListeners, listener);
+    }
+    return createSubscription(screenReaderListeners, listener);
+  },
+  __setReduceMotionEnabled(value: boolean) {
+    reduceMotionEnabled = value;
+    reduceMotionListeners.forEach((listener) => listener(value));
+  },
+  __setScreenReaderEnabled(value: boolean) {
+    screenReaderEnabled = value;
+    screenReaderListeners.forEach((listener) => listener(value));
+  },
+};
+
 class MockNativeEventEmitter {
   private readonly listeners = new Map<string, Set<(...args: unknown[]) => void>>();
 

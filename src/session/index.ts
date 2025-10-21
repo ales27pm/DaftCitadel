@@ -6,3 +6,4 @@ export * from './sessionManager';
 export * from './storage';
 export * from './storage/sqliteAdapter';
 export * from './storage/jsonAdapter';
+export * from './storage/memoryAdapter';

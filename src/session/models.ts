@@ -5,6 +5,24 @@ export type TrackID = string;
 export type ClipID = string;
 export type AutomationCurveID = string;
 
+export interface MidiNoteEvent {
+  id: string;
+  /** MIDI note number (0-127) */
+  pitch: number;
+  /** Beat offset relative to the beginning of the clip */
+  startBeat: number;
+  /** Beat length */
+  durationBeats: number;
+  /** MIDI velocity (0-127) */
+  velocity: number;
+}
+
+export interface MidiClipData {
+  /** Optional PPQ resolution for precise scheduling */
+  pulsesPerQuarter?: number;
+  notes: MidiNoteEvent[];
+}
+
 export interface Clip {
   id: ClipID;
   name: string;
@@ -15,6 +33,7 @@ export interface Clip {
   fadeIn: number; // milliseconds
   fadeOut: number; // milliseconds
   automationCurveIds: AutomationCurveID[];
+  midi?: MidiClipData;
 }
 
 export type AutomationInterpolation = 'linear' | 'step' | 'exponential';
@@ -208,7 +227,17 @@ export const sortAutomationPoints = (curve: AutomationCurve): AutomationCurve =>
 
 export const normalizeTrack = (track: Track): Track => ({
   ...track,
-  clips: [...track.clips].sort((a, b) => a.start - b.start),
+  clips: track.clips
+    .map((clip) => ({
+      ...clip,
+      midi: clip.midi
+        ? {
+            ...clip.midi,
+            notes: [...clip.midi.notes].sort((lhs, rhs) => lhs.startBeat - rhs.startBeat),
+          }
+        : undefined,
+    }))
+    .sort((a, b) => a.start - b.start),
   automationCurves: track.automationCurves.map(sortAutomationPoints),
   routing: normalizeTrackRouting(track.id, track.routing),
 });
@@ -239,6 +268,22 @@ export const validateSession = (session: Session): void => {
       clipIds.add(clip.id);
       if (clip.duration <= 0) {
         throw new Error('Clip duration must be positive');
+      }
+      if (clip.midi) {
+        clip.midi.notes.forEach((note) => {
+          if (!note.id) {
+            throw new Error(`MIDI note requires an id in clip ${clip.id}`);
+          }
+          if (note.pitch < 0 || note.pitch > 127) {
+            throw new Error(`Invalid MIDI pitch ${note.pitch} in clip ${clip.id}`);
+          }
+          if (note.durationBeats <= 0) {
+            throw new Error(`MIDI note duration must be positive in clip ${clip.id}`);
+          }
+          if (note.velocity < 0 || note.velocity > 127) {
+            throw new Error(`Invalid MIDI velocity ${note.velocity} in clip ${clip.id}`);
+          }
+        });
       }
     });
 
