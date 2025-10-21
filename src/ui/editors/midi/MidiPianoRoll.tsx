@@ -28,6 +28,8 @@ export interface MidiPianoRollProps {
 }
 
 const KEY_COUNT = 88;
+const FIRST_VISIBLE_MIDI_KEY = 21;
+const LAST_VISIBLE_MIDI_KEY = FIRST_VISIBLE_MIDI_KEY + KEY_COUNT - 1;
 const DEFAULT_PIXELS_PER_BEAT = 48;
 
 export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
@@ -144,7 +146,12 @@ export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
           {notes.map((note) => {
             const left = note.start * pixelsPerBeat;
             const width = Math.max(1, note.duration * pixelsPerBeat);
-            const top = (KEY_COUNT - note.pitch) * noteHeight;
+            const clampedPitch = Math.max(
+              FIRST_VISIBLE_MIDI_KEY,
+              Math.min(note.pitch, LAST_VISIBLE_MIDI_KEY),
+            );
+            const visualPitchIndex = clampedPitch - FIRST_VISIBLE_MIDI_KEY + 1;
+            const top = (KEY_COUNT - visualPitchIndex) * noteHeight;
             const color = mapIntentToColor(theme, note.intent ?? 'tertiary');
             const noteStyle = buildNoteStyle(top, left, width, noteHeight - 2, color);
 
