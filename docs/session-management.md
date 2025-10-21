@@ -14,8 +14,9 @@ The `src/session/` directory provides the following building blocks:
   `normalizeSession` and `validateSession` ensure that data remains well ordered
   before it is persisted or sent to the audio engine.
 - **Serialization (`serialization.ts`)** — Canonical JSON encoding/decoding with
-  schema versioning. `mergeSessions` implements three-way conflict resolution
-  for collaborative edits and offline caches.
+  schema versioning. `mergeSessions` performs revision-winner reconciliation that
+  keeps metadata consistent while preventing stale revisions from overwriting
+  newer work.
 - **Storage adapters (`storage/`)** —
   - `SQLiteSessionStorageAdapter` targets mobile platforms and accepts any
     SQLite bridge that implements the lightweight `SQLiteConnection` interface.
@@ -49,7 +50,7 @@ When evolving the session schema you should apply the following process:
    `JsonSessionFile` structure and handle missing fields gracefully while
    reading legacy files.
 5. **Coordinate cloud sync** — When bumping the schema, deploy server-side
-   migrations prior to pushing client updates. The optional
+   migrations before pushing client updates. The optional
    `CloudSyncProvider.resolveConflict` hook can upgrade remote documents during
    merge operations.
 6. **Document breaking changes** — Record any manual steps (e.g., re-exporting

@@ -2,7 +2,6 @@ import { Session } from './models';
 
 export interface CloudSyncResult {
   session: Session | null;
-  revision: number;
 }
 
 export interface CloudSyncProvider {
@@ -17,7 +16,7 @@ export interface CloudSyncProvider {
 
 export class NoopCloudSyncProvider implements CloudSyncProvider {
   async pull(_sessionId: string): Promise<CloudSyncResult> {
-    return { session: null, revision: 0 };
+    return { session: null };
   }
 
   async push(_session: Session): Promise<void> {
