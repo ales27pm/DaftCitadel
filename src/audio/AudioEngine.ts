@@ -66,6 +66,14 @@ export class AudioEngine {
   public async publishAutomation(nodeId: string, lane: AutomationLane): Promise<void> {
     await publishAutomationLane(nodeId, lane);
   }
+
+  public async removeNodes(nodeIds: string[]): Promise<void> {
+    if (nodeIds.length === 0) {
+      return;
+    }
+
+    await Promise.all(nodeIds.map((nodeId) => NativeAudioEngine.removeNode(nodeId)));
+  }
 }
 
 export { AutomationLane, publishAutomationLane, ClockSyncService };
