@@ -71,6 +71,32 @@ final buffer as a fallback.
 Unit tests in `src/audio/__tests__/automation.test.ts` guarantee buffer-accurate quantization
 and sorted automation points.
 
+## Clip Buffer Registry
+
+Audio clips used by native playback nodes are registered explicitly so the real-time render
+thread never touches React Native memory. The flow is:
+
+1. Prepare Float32 PCM channel data on the JavaScript side and call
+   `AudioEngine.uploadClipBuffer(bufferKey, sampleRate, channels, frames, channelData)`.
+   The method validates payload size and forwards the request to
+   `NativeAudioEngine.registerClipBuffer`.
+2. Platform bridges (`native/audio/ios/AudioEngineModule.mm` and
+   `native/audio/android/src/main/java/com/daftcitadel/audio/AudioEngineModule.kt`) copy the
+   channel data into native heap storage and register it with
+   `daft::audio::bridge::AudioEngineBridge::registerClipBuffer`.
+   - **iOS** accepts `ArrayBuffer` instances (bridged as `NSData`) and stores them as immutable
+     `std::vector<float>` per channel.
+   - **Android** supports Float32 sample arrays, Node-style `{ type: 'Buffer', data: number[] }`
+     payloads, or base64-encoded Float32 PCM. All forms are normalised into `FloatArray` slices
+     before crossing the JNI boundary.
+3. The bridge exposes `AudioEngineBridge::clipBufferForKey` so future clip playback nodes can
+   resolve the metadata and channel spans without re-copying data across language boundaries.
+
+The Jest harness (`src/audio/__tests__/AudioEngineNative.test.ts`) now uploads a clip buffer
+before configuring playback nodes to guarantee coverage of the new registration path and the
+React Native mock in `__mocks__/react-native.ts` mirrors the native registry for deterministic
+tests.
+
 ## Extension Points
 
 - **Custom DSP nodes**: Derive from `DSPNode`, implement `process`, and register via the

@@ -5,13 +5,18 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReadableMap
+import com.facebook.react.bridge.ReadableType
 import com.facebook.react.module.annotations.ReactModule
 import com.facebook.react.turbomodule.core.interfaces.TurboModule
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToLong
+import android.util.Base64
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 @ReactModule(name = AudioEngineModule.NAME)
 class AudioEngineModule(private val reactContext: ReactApplicationContext) :
@@ -118,6 +123,95 @@ override fun getName(): String = NAME
       promise.resolve(null)
     } catch (error: Exception) {
       promise.reject("add_node_failed", error)
+    }
+  }
+
+  /**
+   * Registers a PCM clip buffer for later playback by native clip nodes.
+   *
+   * Validates that the provided buffer metadata and channel payloads are well formed and forwards
+   * the data to the native bridge. Channel payloads are accepted as:
+   * - Float sample arrays (ReadableArray of numbers),
+   * - Base64-encoded Float32 PCM strings,
+   * - Node-style Buffer maps ({ type: "Buffer", data: number[] }).
+   *
+   * On validation failure the promise is rejected with `"invalid_arguments"`; native errors yield
+   * `"register_clip_failed"`.
+   */
+  @ReactMethod
+  fun registerClipBuffer(
+    bufferKey: String,
+    sampleRate: Double,
+    channels: Double,
+    frames: Double,
+    channelData: ReadableArray,
+    promise: Promise
+  ) {
+    val sanitizedKey = bufferKey.trim()
+    if (sanitizedKey.isEmpty()) {
+      promise.reject("invalid_arguments", "bufferKey is required")
+      return
+    }
+    if (!sampleRate.isFinite() || sampleRate <= 0.0) {
+      promise.reject("invalid_arguments", "sampleRate must be positive and finite")
+      return
+    }
+    if (!channels.isFinite() || channels <= 0.0) {
+      promise.reject("invalid_arguments", "channels must be positive and finite")
+      return
+    }
+    val channelCount = channels.toInt()
+    if (abs(channels - channelCount.toDouble()) > 1e-6) {
+      promise.reject("invalid_arguments", "channels must be an integer value")
+      return
+    }
+    if (channelCount == 0 || channelCount > 64) {
+      promise.reject("invalid_arguments", "channels must be between 1 and 64")
+      return
+    }
+    if (!frames.isFinite() || frames <= 0.0) {
+      promise.reject("invalid_arguments", "frames must be positive and finite")
+      return
+    }
+    val frameCountLong = frames.roundToLong()
+    if (abs(frames - frameCountLong.toDouble()) > 1e-6) {
+      promise.reject("invalid_arguments", "frames must be an integer value")
+      return
+    }
+    if (frameCountLong <= 0 || frameCountLong > 10_000_000L) {
+      promise.reject("invalid_arguments", "frames must be between 1 and 10000000")
+      return
+    }
+    if (frameCountLong > Int.MAX_VALUE) {
+      promise.reject("invalid_arguments", "frames exceed platform limits")
+      return
+    }
+    if (channelData.size() != channelCount) {
+      promise.reject("invalid_arguments", "channelData length must equal channels")
+      return
+    }
+
+    val frameCount = frameCountLong.toInt()
+    val channelMatrix = Array(channelCount) { FloatArray(frameCount) }
+
+    try {
+      for (index in 0 until channelCount) {
+        val samples = extractChannelSamples(channelData, index, frameCount)
+        if (samples.size != frameCount) {
+          throw IllegalArgumentException("channelData[$index] length does not match frames")
+        }
+        samples.copyInto(channelMatrix[index])
+      }
+    } catch (error: IllegalArgumentException) {
+      promise.reject("invalid_arguments", error)
+      return
+    }
+
+    try {
+      nativeRegisterClipBuffer(sanitizedKey, sampleRate, channelCount, frameCount, channelMatrix)
+      promise.resolve(null)
+    } catch (error: Exception) {
+      promise.reject("register_clip_failed", error)
     }
   }
 
@@ -315,6 +409,22 @@ private external fun nativeDisconnectNodes(source: String, destination: String)
  */
 private external fun nativeScheduleAutomation(nodeId: String, parameter: String, frame: Long, value: Double)
   /**
+ * Registers a multi-channel Float32 clip buffer with the native audio engine.
+ *
+ * @param bufferKey Identifier for the buffer that native clip nodes will reference.
+ * @param sampleRate Sample rate of the buffer in Hz.
+ * @param channels Number of interleaved channels provided in `channelData`.
+ * @param frames Frame count stored in each channel array.
+ * @param channelData Matrix of Float32 PCM channel data sized [channels][frames].
+ */
+private external fun nativeRegisterClipBuffer(
+  bufferKey: String,
+  sampleRate: Double,
+  channels: Int,
+  frames: Int,
+  channelData: Array<FloatArray>
+)
+  /**
  * Fetches render diagnostics from the native audio engine.
  *
  * @return A DoubleArray with two elements:
@@ -369,6 +479,115 @@ private external fun nativeMaxFramesPerBuffer(): Int
       }
     }
     return sanitized
+  }
+
+  private fun extractChannelSamples(channelData: ReadableArray, index: Int, frameCount: Int): FloatArray {
+    return when (channelData.getType(index)) {
+      ReadableType.Array -> convertReadableArrayToFloatChannel(channelData.getArray(index), frameCount)
+      ReadableType.Map -> parseChannelMap(channelData.getMap(index), frameCount)
+      ReadableType.String -> decodeBase64Channel(channelData.getString(index), frameCount)
+      else -> throw IllegalArgumentException("channelData[$index] must be an ArrayBuffer payload")
+    }
+  }
+
+  private fun parseChannelMap(map: ReadableMap?, frameCount: Int): FloatArray {
+    if (map == null) {
+      throw IllegalArgumentException("channelData entry cannot be null")
+    }
+    val loweredType = if (map.hasKey("type") && !map.isNull("type") && map.getType("type") == ReadableType.String) {
+      map.getString("type")?.trim()?.lowercase(Locale.US)
+    } else {
+      null
+    }
+    if (map.hasKey("base64") && map.getType("base64") == ReadableType.String) {
+      return decodeBase64Channel(map.getString("base64"), frameCount)
+    }
+    if (map.hasKey("data")) {
+      return when (map.getType("data")) {
+        ReadableType.Array -> {
+          val dataArray = map.getArray("data")
+          if (loweredType == "buffer" || loweredType == "bytes" || loweredType == "arraybuffer") {
+            convertByteReadableArray(dataArray, frameCount)
+          } else {
+            convertReadableArrayToFloatChannel(dataArray, frameCount)
+          }
+        }
+        ReadableType.String -> decodeBase64Channel(map.getString("data"), frameCount)
+        else -> throw IllegalArgumentException("Unsupported channel payload in data map")
+      }
+    }
+    if (map.hasKey("buffer")) {
+      return when (map.getType("buffer")) {
+        ReadableType.Map -> parseChannelMap(map.getMap("buffer"), frameCount)
+        ReadableType.Array -> convertByteReadableArray(map.getArray("buffer"), frameCount)
+        ReadableType.String -> decodeBase64Channel(map.getString("buffer"), frameCount)
+        else -> throw IllegalArgumentException("Unsupported buffer payload in channel map")
+      }
+    }
+    throw IllegalArgumentException("channelData map does not contain supported payload")
+  }
+
+  private fun convertReadableArrayToFloatChannel(array: ReadableArray?, frameCount: Int): FloatArray {
+    if (array == null || array.size() < frameCount) {
+      throw IllegalArgumentException("channel sample array is shorter than frames")
+    }
+    val floats = FloatArray(frameCount)
+    for (i in 0 until frameCount) {
+      val value = array.getDouble(i)
+      if (!value.isFinite()) {
+        throw IllegalArgumentException("channel sample value must be finite")
+      }
+      floats[i] = value.toFloat()
+    }
+    return floats
+  }
+
+  private fun convertByteReadableArray(array: ReadableArray?, frameCount: Int): FloatArray {
+    if (array == null) {
+      throw IllegalArgumentException("channel byte payload is missing")
+    }
+    val expectedBytes = frameCount * java.lang.Float.BYTES
+    if (array.size() < expectedBytes) {
+      throw IllegalArgumentException("channel byte payload is shorter than expected")
+    }
+    val byteBuffer = ByteBuffer.allocate(expectedBytes).order(ByteOrder.LITTLE_ENDIAN)
+    for (i in 0 until expectedBytes) {
+      val numeric = array.getDouble(i)
+      if (!numeric.isFinite()) {
+        throw IllegalArgumentException("channel byte payload must contain finite values")
+      }
+      val byteValue = numeric.toInt()
+      if (byteValue < 0 || byteValue > 255) {
+        throw IllegalArgumentException("channel byte payload contains invalid byte value")
+      }
+      byteBuffer.put(byteValue.toByte())
+    }
+    byteBuffer.rewind()
+    val floatBuffer = byteBuffer.asFloatBuffer()
+    if (floatBuffer.remaining() < frameCount) {
+      throw IllegalArgumentException("channel byte payload cannot supply requested frames")
+    }
+    val floats = FloatArray(frameCount)
+    floatBuffer.get(floats)
+    return floats
+  }
+
+  private fun decodeBase64Channel(payload: String?, frameCount: Int): FloatArray {
+    if (payload.isNullOrEmpty()) {
+      throw IllegalArgumentException("channel base64 payload is empty")
+    }
+    val decoded = Base64.decode(payload, Base64.DEFAULT)
+    val requiredBytes = frameCount * java.lang.Float.BYTES
+    if (decoded.size < requiredBytes) {
+      throw IllegalArgumentException("channel base64 payload is shorter than expected")
+    }
+    val floatBuffer = ByteBuffer.wrap(decoded).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer()
+    if (floatBuffer.remaining() < frameCount) {
+      throw IllegalArgumentException("channel base64 payload cannot supply requested frames")
+    }
+    val floats = FloatArray(frameCount)
+    floatBuffer.get(floats)
+    return floats
   }
 
   companion object {
