@@ -67,6 +67,22 @@ export class AudioEngine {
     await publishAutomationLane(nodeId, lane);
   }
 
+  public async uploadClipBuffer(
+    bufferKey: string,
+    sampleRate: number,
+    channels: number,
+    frames: number,
+    channelData: ReadonlyArray<ArrayBuffer>,
+  ): Promise<void> {
+    await NativeAudioEngine.registerClipBuffer(
+      bufferKey,
+      sampleRate,
+      channels,
+      frames,
+      Array.from(channelData),
+    );
+  }
+
   public async removeNodes(nodeIds: string[]): Promise<void> {
     if (nodeIds.length === 0) {
       return;
