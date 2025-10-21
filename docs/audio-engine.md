@@ -34,11 +34,11 @@ lanes that align to buffer boundaries for deterministic playback.
 
 ## Threading Model
 
-| Thread          | Responsibilities                                                                                        | Real-time Constraints                                                    |
-| --------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Thread          | Responsibilities                                                                                        | Real-time Constraints                                                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | Audio render    | `SceneGraph::render` mixes connected nodes into an output buffer and drains the scheduler.              | Non-blocking try-lock guards against control mutations; render returns silence on contention. |
 | Control / UI    | React Native publishes automation lanes, node configuration, and tempo changes via TurboModule methods. | Uses short-lived mutexes on mutation paths; render keeps playing even if a lock is contended. |
-| Asset / tooling | Shell automation from `scripts/daftcitadel.sh` can prepare plugins and assets.                          | External to the engine; informs configuration defaults only.             |
+| Asset / tooling | Shell automation from `scripts/daftcitadel.sh` can prepare plugins and assets.                          | External to the engine; informs configuration defaults only.                                  |
 
 The render thread attempts to acquire the bridge mutex with `std::try_to_lock`; on contention it
 renders silence for the current quantum, preventing audio drop-outs caused by blocking locks.
