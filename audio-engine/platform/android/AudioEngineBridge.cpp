@@ -17,7 +17,7 @@ std::unique_ptr<SceneGraph> AudioEngineBridge::graph_;
 std::mutex AudioEngineBridge::mutex_;
 std::atomic<std::uint64_t> AudioEngineBridge::xruns_{0};
 std::atomic<double> AudioEngineBridge::lastRenderDurationMicros_{0.0};
-std::unordered_map<std::string, std::shared_ptr<AudioEngineBridge::ClipBuffer>> AudioEngineBridge::clipBuffers_;
+std::unordered_map<std::string, AudioEngineBridge::ClipBufferEntry> AudioEngineBridge::clipBuffers_;
 
 /**
  * @brief Initializes the audio engine and creates a new scene graph.
@@ -179,16 +179,39 @@ bool AudioEngineBridge::registerClipBuffer(const std::string& key, double sample
   buffer->sampleRate = sampleRate;
   buffer->frameCount = frameCount;
   buffer->channelSamples = std::move(channelData);
+  const std::size_t byteSize = channelCount * frameCount * sizeof(float);
 
   std::lock_guard<std::mutex> lock(mutex_);
-  clipBuffers_[key] = std::move(buffer);
+  auto& entry = clipBuffers_[key];
+  entry.buffer = std::move(buffer);
+  entry.byteSize = byteSize;
+  entry.referenceCount += 1;
+  return true;
+}
+
+bool AudioEngineBridge::unregisterClipBuffer(const std::string& key) {
+  if (key.empty()) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = clipBuffers_.find(key);
+  if (it == clipBuffers_.end()) {
+    return true;
+  }
+  auto& entry = it->second;
+  if (entry.referenceCount > 0) {
+    entry.referenceCount -= 1;
+  }
+  if (entry.referenceCount == 0) {
+    clipBuffers_.erase(it);
+  }
   return true;
 }
 
 std::shared_ptr<const AudioEngineBridge::ClipBuffer> AudioEngineBridge::clipBufferForKey(const std::string& key) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (const auto it = clipBuffers_.find(key); it != clipBuffers_.end()) {
-    return it->second;
+    return it->second.buffer;
   }
   return nullptr;
 }
@@ -204,7 +227,12 @@ std::shared_ptr<const AudioEngineBridge::ClipBuffer> AudioEngineBridge::clipBuff
  *  - lastRenderDurationMicros: duration of the last render call in microseconds.
  */
 AudioEngineBridge::RenderDiagnostics AudioEngineBridge::getDiagnostics() {
-  return RenderDiagnostics{xruns_.load(), lastRenderDurationMicros_.load()};
+  RenderDiagnostics diagnostics{xruns_.load(), lastRenderDurationMicros_.load(), 0};
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (const auto& [_, entry] : clipBuffers_) {
+    diagnostics.clipBufferBytes += entry.byteSize;
+  }
+  return diagnostics;
 }
 
 }  // namespace daft::audio::bridge

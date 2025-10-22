@@ -12,6 +12,7 @@ import {
 import {
   AudioFileLoader,
   ClipBufferCache,
+  ClipBufferDescriptor,
   createClipBufferUploader,
 } from './bridge/ClipBufferCache';
 import {
@@ -34,6 +35,7 @@ type SessionState = {
   automations: Map<string, AutomationRequest>;
   pluginAutomations: Map<string, PluginAutomationRequest>;
   activePluginInstances: Set<string>;
+  clipBuffers: Map<string, ClipBufferDescriptor>;
 };
 
 const isTrackEndpointNode = (node: RoutingNode): node is TrackEndpointNode =>
@@ -95,6 +97,8 @@ export class SessionAudioBridge {
 
   private readonly pluginAutomationState = new Map<string, string>();
 
+  private readonly activeClipBuffers = new Map<string, ClipBufferDescriptor>();
+
   constructor(
     private readonly audioEngine: AudioEngine,
     options: SessionAudioBridgeOptions,
@@ -144,6 +148,7 @@ export class SessionAudioBridge {
     await this.automationPublisher.applyChanges(desiredState.automations);
     await this.applyPluginAutomations(desiredState.pluginAutomations);
     await this.releaseStalePluginInstances(desiredState.activePluginInstances);
+    await this.reconcileClipBuffers(desiredState.clipBuffers);
 
     this.previousSessionRevision = session.revision;
   }
@@ -157,6 +162,7 @@ export class SessionAudioBridge {
     const automations = new Map<string, AutomationRequest>();
     const pluginAutomations = new Map<string, PluginAutomationRequest>();
     const activePluginInstances = new Set<string>();
+    const clipBuffers = new Map<string, ClipBufferDescriptor>();
 
     await Promise.all(
       session.tracks.map(async (track) => {
@@ -241,6 +247,7 @@ export class SessionAudioBridge {
                 lane: clipState.lane,
                 signature: describeAutomation(clipState.node.id, clipState.lane),
               });
+              clipBuffers.set(clip.id, clipState.bufferDescriptor);
             } catch (error) {
               this.logger.error('Failed to prepare clip node', {
                 clipId: clip.id,
@@ -258,6 +265,7 @@ export class SessionAudioBridge {
       automations,
       pluginAutomations,
       activePluginInstances,
+      clipBuffers,
     };
   }
 
@@ -338,6 +346,7 @@ export class SessionAudioBridge {
     destinationNodeId: TrackNodeId;
     lane: AutomationLane;
     automationKey: string;
+    bufferDescriptor: ClipBufferDescriptor;
   }> {
     const bufferDescriptor = await this.bufferCache.getClipBuffer(
       clip.audioFile,
@@ -401,7 +410,41 @@ export class SessionAudioBridge {
       destinationNodeId,
       lane,
       automationKey,
+      bufferDescriptor,
     };
+  }
+
+  private async reconcileClipBuffers(
+    nextClipBuffers: Map<string, ClipBufferDescriptor>,
+  ): Promise<void> {
+    const releaseOperations: Array<Promise<void>> = [];
+
+    nextClipBuffers.forEach((descriptor, clipId) => {
+      const previous = this.activeClipBuffers.get(clipId);
+      if (!previous) {
+        this.bufferCache.retainClipBuffer(descriptor.bufferKey);
+        return;
+      }
+      if (previous.bufferKey !== descriptor.bufferKey) {
+        this.bufferCache.retainClipBuffer(descriptor.bufferKey);
+        releaseOperations.push(this.bufferCache.releaseClipBuffer(previous.bufferKey));
+      }
+    });
+
+    this.activeClipBuffers.forEach((descriptor, clipId) => {
+      if (!nextClipBuffers.has(clipId)) {
+        releaseOperations.push(this.bufferCache.releaseClipBuffer(descriptor.bufferKey));
+      }
+    });
+
+    if (releaseOperations.length > 0) {
+      await Promise.all(releaseOperations);
+    }
+
+    this.activeClipBuffers.clear();
+    nextClipBuffers.forEach((descriptor, clipId) => {
+      this.activeClipBuffers.set(clipId, descriptor);
+    });
   }
 
   private msToFrames(ms: number, sampleRate: number): number {

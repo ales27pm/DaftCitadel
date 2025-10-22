@@ -71,6 +71,7 @@ const createMockEngine = (
   publishAutomation: jest.Mock;
   removeNodes: jest.Mock;
   uploadClipBuffer: jest.Mock;
+  releaseClipBuffer: jest.Mock;
 } => {
   const configureNodes = jest.fn(async () => undefined);
   const connect = jest.fn(async () => undefined);
@@ -78,6 +79,7 @@ const createMockEngine = (
   const publishAutomation = jest.fn(async () => undefined);
   const removeNodes = jest.fn(async () => undefined);
   const uploadClipBuffer = jest.fn(async () => undefined);
+  const releaseClipBuffer = jest.fn(async () => undefined);
   const engine: Partial<AudioEngine> = {
     getClock: () => clock,
     configureNodes,
@@ -86,6 +88,7 @@ const createMockEngine = (
     publishAutomation,
     removeNodes,
     uploadClipBuffer,
+    releaseClipBuffer,
   };
   return {
     engine: engine as AudioEngine,
@@ -95,6 +98,7 @@ const createMockEngine = (
     publishAutomation,
     removeNodes,
     uploadClipBuffer,
+    releaseClipBuffer,
   };
 };
 
@@ -716,5 +720,76 @@ describe('SessionAudioBridge', () => {
     await bridge.applySessionUpdate({ ...session, revision: 3 });
 
     expect(scheduleAutomation).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases clip buffers when clips are removed between revisions', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine, uploadClipBuffer, releaseClipBuffer } = createMockEngine(clock);
+    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+
+    await bridge.applySessionUpdate(
+      createSession({
+        revision: 40,
+        tracks: [
+          createTrack({
+            id: 'track-clip',
+            clips: [createClip({ id: 'clip-a', audioFile: 'a.wav' })],
+          }),
+        ],
+      }),
+    );
+
+    expect(uploadClipBuffer).toHaveBeenCalledTimes(1);
+    const [firstKey] = uploadClipBuffer.mock.calls[0];
+
+    await bridge.applySessionUpdate(
+      createSession({
+        revision: 41,
+        tracks: [createTrack({ id: 'track-clip', clips: [] })],
+      }),
+    );
+
+    expect(releaseClipBuffer).toHaveBeenCalledTimes(1);
+    expect(releaseClipBuffer).toHaveBeenCalledWith(firstKey);
+  });
+
+  it('reloads clip buffers when clip sources change and releases stale entries', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine, uploadClipBuffer, releaseClipBuffer } = createMockEngine(clock);
+    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+
+    await bridge.applySessionUpdate(
+      createSession({
+        revision: 50,
+        tracks: [
+          createTrack({
+            id: 'track-clip',
+            clips: [createClip({ id: 'clip-shared', audioFile: 'first.wav' })],
+          }),
+        ],
+      }),
+    );
+
+    const [initialKey] = uploadClipBuffer.mock.calls[0];
+
+    await bridge.applySessionUpdate(
+      createSession({
+        revision: 51,
+        tracks: [
+          createTrack({
+            id: 'track-clip',
+            clips: [createClip({ id: 'clip-shared', audioFile: 'second.wav' })],
+          }),
+        ],
+      }),
+    );
+
+    expect(uploadClipBuffer).toHaveBeenCalledTimes(2);
+    const [nextKey] = uploadClipBuffer.mock.calls[1];
+    expect(nextKey).not.toBe(initialKey);
+    expect(releaseClipBuffer).toHaveBeenCalledTimes(1);
+    expect(releaseClipBuffer).toHaveBeenCalledWith(initialKey);
   });
 });
