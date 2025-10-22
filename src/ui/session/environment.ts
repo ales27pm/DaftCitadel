@@ -433,11 +433,17 @@ function createPluginDescriptorResolver(
     descriptor: PluginDescriptor,
   ) => {
     instanceKeyById.set(instanceId, cacheKey);
-    instanceSlotById.set(instanceId, slot);
-    const currentAssociation = slotAssociations.get(slot);
-    if (!currentAssociation || currentAssociation.instanceId === instanceId) {
-      slotAssociations.set(slot, { descriptor, instanceId });
+
+    const previousSlot = instanceSlotById.get(instanceId);
+    if (previousSlot && previousSlot !== slot) {
+      const previousAssociation = slotAssociations.get(previousSlot);
+      if (!previousAssociation || previousAssociation.instanceId === instanceId) {
+        slotAssociations.delete(previousSlot);
+      }
     }
+
+    instanceSlotById.set(instanceId, slot);
+    slotAssociations.set(slot, { descriptor, instanceId });
   };
 
   const cacheDescriptor = (
@@ -458,15 +464,76 @@ function createPluginDescriptorResolver(
       instanceCache.delete(cacheKey);
       instanceKeyById.delete(instanceId);
     }
-    const slot = instanceSlotById.get(instanceId);
+    let slot = instanceSlotById.get(instanceId);
+    if (!slot) {
+      for (const [candidateSlot, association] of slotAssociations.entries()) {
+        if (association.instanceId === instanceId) {
+          slot = candidateSlot;
+          break;
+        }
+      }
+    }
     if (slot) {
       const association = slotAssociations.get(slot);
-      if (association?.instanceId === instanceId) {
+      if (!association || association.instanceId === instanceId) {
         slotAssociations.delete(slot);
       }
       instanceSlotById.delete(instanceId);
     }
     warnedMissing.delete(instanceId);
+  };
+
+  const canReuseSlotAssociation = (
+    association: SlotAssociation,
+    metadata: PluginNodeMetadata,
+  ): boolean => {
+    if (metadata.format && association.descriptor.format !== metadata.format) {
+      return false;
+    }
+
+    const normalizedDescriptorId = normalize(association.descriptor.identifier);
+    const metadataIdentifiers = [
+      metadata.descriptorId,
+      metadata.pluginIdentifier,
+      metadata.identifier,
+    ]
+      .map((value) => normalize(value))
+      .filter((value): value is string => Boolean(value));
+
+    if (
+      metadataIdentifiers.length > 0 &&
+      (!normalizedDescriptorId || !metadataIdentifiers.includes(normalizedDescriptorId))
+    ) {
+      return false;
+    }
+
+    const normalizedManufacturer = normalize(metadata.manufacturer);
+    if (normalizedManufacturer) {
+      const descriptorManufacturer = normalize(association.descriptor.manufacturer);
+      if (descriptorManufacturer !== normalizedManufacturer) {
+        return false;
+      }
+    }
+
+    const metadataNames = [metadata.pluginName, metadata.name]
+      .map((value) => normalize(value))
+      .filter((value): value is string => Boolean(value));
+    if (metadataNames.length > 0) {
+      const descriptorName = normalize(association.descriptor.name);
+      const descriptorIdentifier = normalizedDescriptorId;
+      const matchesName = metadataNames.some(
+        (name) =>
+          descriptorName === name ||
+          descriptorIdentifier === name ||
+          descriptorName?.includes(name) ||
+          descriptorIdentifier?.includes(name),
+      );
+      if (!matchesName) {
+        return false;
+      }
+    }
+
+    return true;
   };
 
   const resolver: PluginDescriptorResolver = Object.assign(
@@ -494,6 +561,8 @@ function createPluginDescriptorResolver(
 
       const descriptorsByFormat = filterByFormat(descriptors, metadata.format);
 
+      const slotAssociation = slotAssociations.get(node.slot);
+
       const descriptor =
         matchByIdentifier(
           descriptorsByFormat,
@@ -506,7 +575,9 @@ function createPluginDescriptorResolver(
           metadata.manufacturer,
         ) ||
         matchByInstanceId(descriptorsByFormat, instanceId) ||
-        slotAssociations.get(node.slot)?.descriptor;
+        (slotAssociation && canReuseSlotAssociation(slotAssociation, metadata)
+          ? slotAssociation.descriptor
+          : undefined);
 
       if (!descriptor) {
         if (!warnedMissing.has(instanceId)) {
