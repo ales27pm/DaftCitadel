@@ -259,7 +259,11 @@ const buildPluginChain = (
 
 export const buildDiagnosticsView = (
   diagnostics: SessionDiagnosticsView,
-  rawDiagnostics?: { xruns: number; lastRenderDurationMicros: number },
+  rawDiagnostics?: {
+    xruns: number;
+    lastRenderDurationMicros: number;
+    clipBufferBytes: number;
+  },
 ): SessionDiagnosticsView => {
   if (!rawDiagnostics) {
     return diagnostics;
@@ -269,6 +273,7 @@ export const buildDiagnosticsView = (
     status: 'ready',
     xruns: rawDiagnostics.xruns,
     lastRenderDurationMicros: rawDiagnostics.lastRenderDurationMicros,
+    clipBufferBytes: rawDiagnostics.clipBufferBytes,
     renderLoad,
     updatedAt: Date.now(),
   };

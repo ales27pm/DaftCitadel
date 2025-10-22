@@ -215,6 +215,21 @@ override fun getName(): String = NAME
     }
   }
 
+  @ReactMethod
+  fun unregisterClipBuffer(bufferKey: String, promise: Promise) {
+    val sanitizedKey = bufferKey.trim()
+    if (sanitizedKey.isEmpty()) {
+      promise.reject("invalid_arguments", "bufferKey is required")
+      return
+    }
+    try {
+      nativeUnregisterClipBuffer(sanitizedKey)
+      promise.resolve(null)
+    } catch (error: Exception) {
+      promise.reject("unregister_clip_failed", error)
+    }
+  }
+
   /**
    * Removes a node from the audio engine by its identifier.
    *
@@ -348,6 +363,9 @@ override fun getName(): String = NAME
       val diagnostics = Arguments.createMap().apply {
         putDouble("xruns", payload[0])
         putDouble("lastRenderDurationMicros", payload[1])
+        if (payload.size >= 3) {
+          putDouble("clipBufferBytes", payload[2])
+        }
       }
       promise.resolve(diagnostics)
     } catch (error: Exception) {
@@ -424,12 +442,14 @@ private external fun nativeScheduleAutomation(nodeId: String, parameter: String,
     frames: Int,
     channelData: Array<FloatArray>
   )
+  private external fun nativeUnregisterClipBuffer(bufferKey: String)
   /**
  * Fetches render diagnostics from the native audio engine.
  *
- * @return A DoubleArray with two elements:
+ * @return A DoubleArray with three elements:
  *         - index 0 — the number of xruns (underruns),
- *         - index 1 — the last render duration in microseconds.
+ *         - index 1 — the last render duration in microseconds,
+ *         - index 2 — total clip buffer bytes currently registered.
  */
 private external fun nativeGetDiagnostics(): DoubleArray
   /**

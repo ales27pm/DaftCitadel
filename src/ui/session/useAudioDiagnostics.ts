@@ -9,13 +9,14 @@ import { SessionDiagnosticsView } from './types';
 
 interface AudioDiagnosticsHookState {
   diagnostics: SessionDiagnosticsView;
-  raw?: { xruns: number; lastRenderDurationMicros: number };
+  raw?: { xruns: number; lastRenderDurationMicros: number; clipBufferBytes: number };
 }
 
 const INITIAL_DIAGNOSTICS: SessionDiagnosticsView = {
   status: 'loading',
   xruns: 0,
   renderLoad: 0,
+  clipBufferBytes: 0,
 };
 
 export const useAudioDiagnostics = (pollIntervalMs = 1500): AudioDiagnosticsHookState => {
