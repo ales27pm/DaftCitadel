@@ -1,4 +1,5 @@
 import { NativeModules, Platform } from 'react-native';
+import { useEffect, useRef } from 'react';
 
 import type { PluginRoutingNode, Session } from '../../session/models';
 import { demoSession, DEMO_SESSION_ID } from '../../session/fixtures/demoSession';
@@ -31,13 +32,21 @@ class PassiveAudioEngineBridge implements AudioEngineBridge {
   getSnapshot(): Session | null {
     return this.lastSession;
   }
+
+  async dispose(): Promise<void> {
+    this.lastSession = null;
+  }
 }
 
 export class NativeAudioUnavailableError extends Error {}
 
+export interface DisposableAudioEngineBridge extends AudioEngineBridge {
+  dispose?: () => Promise<void> | void;
+}
+
 export interface SessionEnvironment {
   manager: SessionManager;
-  audioBridge: AudioEngineBridge;
+  audioBridge: DisposableAudioEngineBridge;
   sessionId: string;
   pluginHost?: PluginHost;
   dispose?: () => Promise<void> | void;
@@ -67,7 +76,12 @@ export const createDemoSessionEnvironment = async (): Promise<SessionEnvironment
   const audioBridge = new PassiveAudioEngineBridge();
   const manager = new SessionManager(storage, audioBridge);
   await manager.createSession(cloneDemoSession(DEMO_SESSION_ID));
-  return { manager, audioBridge, sessionId: DEMO_SESSION_ID };
+  const dispose = async () => {
+    if (typeof audioBridge.dispose === 'function') {
+      await audioBridge.dispose();
+    }
+  };
+  return { manager, audioBridge, sessionId: DEMO_SESSION_ID, dispose };
 };
 
 export const createPassiveSessionEnvironment = async (
@@ -75,13 +89,18 @@ export const createPassiveSessionEnvironment = async (
 ): Promise<SessionEnvironment> => {
   const sessionId = options.sessionId ?? DEMO_SESSION_ID;
   const storage = createSessionStorageAdapter(
-    resolveStorageDirectory(options.storageDirectory),
+    await resolveStorageDirectory(options.storageDirectory),
   );
   await storage.initialize();
   const audioBridge = new PassiveAudioEngineBridge();
   const manager = new SessionManager(storage, audioBridge);
   await bootstrapSessionIfNeeded(manager, storage, sessionId);
-  return { manager, audioBridge, sessionId };
+  const dispose = async () => {
+    if (typeof audioBridge.dispose === 'function') {
+      await audioBridge.dispose();
+    }
+  };
+  return { manager, audioBridge, sessionId, dispose };
 };
 
 export const createProductionSessionEnvironment = async (
@@ -112,13 +131,20 @@ export const createProductionSessionEnvironment = async (
     resolvePluginDescriptor,
   });
   const storage = createSessionStorageAdapter(
-    resolveStorageDirectory(options.storageDirectory),
+    await resolveStorageDirectory(options.storageDirectory),
   );
   await storage.initialize();
   const manager = new SessionManager(storage, bridge);
   await bootstrapSessionIfNeeded(manager, storage, sessionId);
 
   const dispose = async () => {
+    if (typeof bridge.dispose === 'function') {
+      try {
+        await bridge.dispose();
+      } catch (error) {
+        console.error('Failed to dispose session audio bridge', error);
+      }
+    }
     try {
       pluginHost?.dispose();
     } catch (error) {
@@ -159,7 +185,15 @@ const cloneDemoSession = (sessionId: string): Session => {
   return sessionId === cloned.id ? cloned : { ...cloned, id: sessionId };
 };
 
-const resolveStorageDirectory = (override?: string): string => {
+type DirectoryModule = {
+  sessionDirectory?: unknown;
+  getSessionDirectory?: () => string | Promise<string>;
+  getDirectories?: () =>
+    | { sessionDirectory?: unknown }
+    | Promise<{ sessionDirectory?: unknown }>;
+};
+
+const resolveStorageDirectory = async (override?: string): Promise<string> => {
   if (override) {
     return override;
   }
@@ -171,17 +205,58 @@ const resolveStorageDirectory = (override?: string): string => {
   }
   if (Platform.OS === 'ios' || Platform.OS === 'android') {
     const directoryModule = NativeModules.DaftCitadelDirectories as
-      | { sessionDirectory?: string }
+      | DirectoryModule
       | undefined;
-    const baseDirectory =
-      directoryModule?.sessionDirectory ??
-      `${Platform.OS === 'ios' ? '/tmp' : '/data/local/tmp'}/daft-citadel`;
-    return joinPath(baseDirectory, 'sessions');
+    const sessionDirectory = await resolveNativeSessionDirectory(directoryModule);
+    if (sessionDirectory) {
+      return joinPath(sessionDirectory, 'sessions');
+    }
+    const fallbackBase =
+      Platform.OS === 'ios' ? '/tmp/daft-citadel' : '/data/local/tmp/daft-citadel';
+    return joinPath(fallbackBase, 'sessions');
   }
   if (typeof process !== 'undefined' && typeof process.cwd === 'function') {
     return joinPath(process.cwd(), 'var', 'sessions');
   }
   return 'sessions';
+};
+
+const resolveNativeSessionDirectory = async (
+  directoryModule?: DirectoryModule,
+): Promise<string | undefined> => {
+  if (!directoryModule) {
+    return undefined;
+  }
+  try {
+    if (typeof directoryModule.getSessionDirectory === 'function') {
+      const resolved = await directoryModule.getSessionDirectory();
+      const normalized = normalizeDirectory(resolved);
+      if (normalized) {
+        return normalized;
+      }
+    }
+    if (typeof directoryModule.getDirectories === 'function') {
+      const directories = await directoryModule.getDirectories();
+      const normalized = normalizeDirectory(directories?.sessionDirectory);
+      if (normalized) {
+        return normalized;
+      }
+    }
+    const normalized = normalizeDirectory(directoryModule.sessionDirectory);
+    if (normalized) {
+      return normalized;
+    }
+  } catch (error) {
+    console.error('Failed to resolve native session directory', error);
+  }
+  return undefined;
+};
+
+const normalizeDirectory = (value: unknown): string | undefined => {
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return value;
+  }
+  return undefined;
 };
 
 const joinPath = (...segments: Array<string | undefined>): string => {
@@ -653,3 +728,45 @@ function createPluginDescriptorResolver(
 }
 
 export { PassiveAudioEngineBridge, createPluginDescriptorResolver };
+
+export const disposeSessionEnvironment = async (
+  environment: SessionEnvironment,
+  context: string = 'session environment',
+): Promise<void> => {
+  if (environment.dispose) {
+    try {
+      await environment.dispose();
+    } catch (error) {
+      console.error(`Failed to dispose ${context}`, error);
+    }
+    return;
+  }
+  const bridgeDispose = environment.audioBridge.dispose;
+  if (typeof bridgeDispose === 'function') {
+    try {
+      await bridgeDispose.call(environment.audioBridge);
+    } catch (error) {
+      console.error(`Failed to dispose session audio bridge (${context})`, error);
+    }
+  }
+};
+
+export const useSessionEnvironmentLifecycle = (
+  environment: SessionEnvironment | null,
+  options: { context?: string } = {},
+) => {
+  const context = options.context ?? 'session environment';
+  const previous = useRef<SessionEnvironment | null>(null);
+  useEffect(() => {
+    const prior = previous.current;
+    if (prior && prior !== environment) {
+      disposeSessionEnvironment(prior, context).catch(() => undefined);
+    }
+    previous.current = environment;
+    return () => {
+      if (environment) {
+        disposeSessionEnvironment(environment, context).catch(() => undefined);
+      }
+    };
+  }, [context, environment]);
+};

@@ -1,8 +1,13 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 
+import {
+  CloudSyncProvider,
+  InMemorySessionStorageAdapter,
+  Session,
+  SessionManager,
+} from '../../../session';
 import { demoSession, DEMO_SESSION_ID } from '../../../session/fixtures/demoSession';
-import { InMemorySessionStorageAdapter, SessionManager } from '../../../session';
 import { PassiveAudioEngineBridge } from '../environment';
 import {
   SessionViewModelProvider,
@@ -130,5 +135,110 @@ describe('SessionViewModelProvider', () => {
     });
 
     expect(alerts).toHaveLength(1);
+  });
+
+  it('surfaces audio engine failures as an error status', async () => {
+    const storage = new InMemorySessionStorageAdapter();
+    await storage.initialize();
+    await storage.write(demoSession, { expectedRevision: 0 });
+
+    class FailingBridge extends PassiveAudioEngineBridge {
+      private failed = false;
+
+      override async applySessionUpdate(session: Session): Promise<void> {
+        if (!this.failed) {
+          this.failed = true;
+          throw new Error('Audio engine initialization failed');
+        }
+        await super.applySessionUpdate(session);
+      }
+    }
+
+    const bridge = new FailingBridge();
+    const manager = new SessionManager(storage, bridge);
+
+    let latestStatus: string | undefined;
+    let latestError: Error | undefined;
+
+    const Consumer = () => {
+      const viewModel = useSessionViewModel();
+      latestStatus = viewModel.status;
+      latestError = viewModel.error;
+      return null;
+    };
+
+    await act(async () => {
+      TestRenderer.create(
+        React.createElement(
+          SessionViewModelProvider,
+          {
+            manager,
+            sessionId: DEMO_SESSION_ID,
+            bootstrapSession: () => demoSession,
+            diagnosticsPollIntervalMs: 0,
+          },
+          React.createElement(Consumer, null),
+        ),
+      );
+      await Promise.resolve();
+    });
+
+    expect(latestStatus).toBe('error');
+    expect(latestError).toBeInstanceOf(Error);
+    expect(latestError?.message).toContain('Audio engine initialization failed');
+  });
+
+  it('pushes session updates to the cloud after manager mutations', async () => {
+    const storage = new InMemorySessionStorageAdapter();
+    await storage.initialize();
+    const bridge = new PassiveAudioEngineBridge();
+    const cloud: CloudSyncProvider = {
+      pull: jest.fn(async () => ({ session: null })),
+      push: jest.fn(async () => undefined),
+    };
+    const manager = new SessionManager(storage, bridge, { cloudSyncProvider: cloud });
+
+    let capturedManager: SessionManager | null = null;
+    let sessionName: string | undefined;
+
+    const Consumer = () => {
+      const viewModel = useSessionViewModel();
+      capturedManager = viewModel.manager;
+      sessionName = viewModel.sessionName;
+      return null;
+    };
+
+    await act(async () => {
+      TestRenderer.create(
+        React.createElement(
+          SessionViewModelProvider,
+          {
+            manager,
+            sessionId: DEMO_SESSION_ID,
+            bootstrapSession: () => demoSession,
+            diagnosticsPollIntervalMs: 0,
+          },
+          React.createElement(Consumer, null),
+        ),
+      );
+      await Promise.resolve();
+    });
+
+    const pullMock = cloud.pull as jest.Mock;
+    const pushMock = cloud.push as jest.Mock;
+    expect(pullMock).toHaveBeenCalledWith(DEMO_SESSION_ID);
+    expect(pushMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await capturedManager?.updateSession((current) => ({
+        ...current,
+        name: 'Updated via provider',
+      }));
+    });
+
+    expect(pushMock).toHaveBeenCalledTimes(2);
+    const pushedSession = pushMock.mock.calls[pushMock.mock.calls.length - 1]?.[0];
+    expect(pushedSession?.name).toBe('Updated via provider');
+    expect(sessionName).toBe('Updated via provider');
   });
 });
