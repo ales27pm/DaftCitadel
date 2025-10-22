@@ -17,6 +17,15 @@ type AudioEngineMockState = {
   connections: Set<string>;
   diagnostics: { xruns: number; lastRenderDurationMicros: number };
   automations: Map<string, Map<string, { frame: number; value: number }[]>>;
+  clipBuffers: Map<
+    string,
+    {
+      sampleRate: number;
+      channels: number;
+      frames: number;
+      channelData: Float32Array[];
+    }
+  >;
 };
 
 const resolveMockState = (): AudioEngineMockState => {
@@ -34,6 +43,7 @@ describe('NativeAudioEngine TurboModule', () => {
     state.diagnostics.xruns = 0;
     state.diagnostics.lastRenderDurationMicros = 0;
     state.automations.clear();
+    state.clipBuffers.clear();
   });
 
   describe('Initialization and Lifecycle', () => {
@@ -197,6 +207,34 @@ describe('NativeAudioEngine TurboModule', () => {
       expect(state.nodes.get('gain')).toMatchObject({
         type: 'gain',
         options: { gain: 0.8 },
+      });
+    });
+
+    it('uploads clip buffers before configuring clip playback nodes', async () => {
+      const frames = 128;
+      const channel = new Float32Array(frames);
+      for (let index = 0; index < frames; index += 1) {
+        channel[index] = index / frames;
+      }
+      const rawBuffer = new ArrayBuffer(frames * Float32Array.BYTES_PER_ELEMENT);
+      new Float32Array(rawBuffer).set(channel);
+
+      await engine.uploadClipBuffer('intro', 48000, 1, frames, [rawBuffer]);
+
+      await engine.configureNodes([
+        { id: 'clip-player', type: 'clip', options: { bufferKey: 'intro' } },
+      ]);
+
+      const state = resolveMockState();
+      const registered = state.clipBuffers.get('intro');
+      expect(registered).toBeDefined();
+      expect(registered?.sampleRate).toBe(48000);
+      expect(registered?.frames).toBe(frames);
+      expect(registered?.channels).toBe(1);
+      expect(registered?.channelData[0][0]).toBeCloseTo(0);
+      expect(state.nodes.get('clip-player')).toMatchObject({
+        type: 'clip',
+        options: { bufferKey: 'intro' },
       });
     });
 

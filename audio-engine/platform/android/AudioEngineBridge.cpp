@@ -2,6 +2,7 @@
 
 #include <android/log.h>
 #include <chrono>
+#include <cmath>
 #include <exception>
 
 #include "audio_engine/DSPNode.h"
@@ -16,6 +17,7 @@ std::unique_ptr<SceneGraph> AudioEngineBridge::graph_;
 std::mutex AudioEngineBridge::mutex_;
 std::atomic<std::uint64_t> AudioEngineBridge::xruns_{0};
 std::atomic<double> AudioEngineBridge::lastRenderDurationMicros_{0.0};
+std::unordered_map<std::string, std::shared_ptr<AudioEngineBridge::ClipBuffer>> AudioEngineBridge::clipBuffers_;
 
 /**
  * @brief Initializes the audio engine and creates a new scene graph.
@@ -44,6 +46,7 @@ void AudioEngineBridge::shutdown() {
   graph_.reset();
   xruns_.store(0);
   lastRenderDurationMicros_.store(0.0);
+  clipBuffers_.clear();
   __android_log_print(ANDROID_LOG_INFO, kTag, "Audio engine shutdown");
 }
 
@@ -156,6 +159,38 @@ void AudioEngineBridge::scheduleParameterAutomation(const std::string& nodeId, c
   } catch (const std::exception& ex) {
     __android_log_print(ANDROID_LOG_ERROR, kTag, "Failed to schedule automation: %s", ex.what());
   }
+}
+
+bool AudioEngineBridge::registerClipBuffer(const std::string& key, double sampleRate, std::size_t channelCount,
+                                           std::size_t frameCount, std::vector<std::vector<float>> channelData) {
+  if (key.empty() || !std::isfinite(sampleRate) || sampleRate <= 0.0 || channelCount == 0 || frameCount == 0) {
+    return false;
+  }
+  if (channelData.size() != channelCount) {
+    return false;
+  }
+  for (const auto& channel : channelData) {
+    if (channel.size() != frameCount) {
+      return false;
+    }
+  }
+
+  auto buffer = std::make_shared<ClipBuffer>();
+  buffer->sampleRate = sampleRate;
+  buffer->frameCount = frameCount;
+  buffer->channelSamples = std::move(channelData);
+
+  std::lock_guard<std::mutex> lock(mutex_);
+  clipBuffers_[key] = std::move(buffer);
+  return true;
+}
+
+std::shared_ptr<const AudioEngineBridge::ClipBuffer> AudioEngineBridge::clipBufferForKey(const std::string& key) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (const auto it = clipBuffers_.find(key); it != clipBuffers_.end()) {
+    return it->second;
+  }
+  return nullptr;
 }
 
 /**
