@@ -255,4 +255,133 @@ describe('createPluginDescriptorResolver', () => {
     await expect(resolver(node.instanceId, node)).resolves.toBe(descriptor);
     expect(listAvailablePlugins).toHaveBeenCalledTimes(2);
   });
+
+  it('updates slot associations when plugins are replaced and clears stale mappings', async () => {
+    const slot = 'insert';
+    const descriptorA = createDescriptor({
+      identifier: 'com.daftcitadel.echo',
+      name: 'Echo Chamber',
+      manufacturer: 'Daft Citadel',
+    });
+    const descriptorB = createDescriptor({
+      identifier: 'com.daftcitadel.galaxy',
+      name: 'Galaxy Verb',
+      manufacturer: 'Galactic Audio',
+    });
+
+    const listAvailablePlugins: ListPluginsMock = jest.fn(async () => [
+      descriptorA,
+      descriptorB,
+    ]);
+    const resolver = createPluginDescriptorResolver({
+      listAvailablePlugins,
+    } as unknown as PluginHost);
+
+    const firstInstanceId = 'session-plugin-echo';
+    const firstNode = createPluginNode({
+      slot,
+      instanceId: firstInstanceId,
+      metadata: { descriptorId: descriptorA.identifier },
+      label: descriptorA.name,
+    });
+
+    await expect(resolver(firstInstanceId, firstNode)).resolves.toBe(descriptorA);
+
+    const secondInstanceId = 'session-plugin-galaxy';
+    const secondNode = createPluginNode({
+      slot,
+      instanceId: secondInstanceId,
+      metadata: { descriptorId: descriptorB.identifier },
+      label: descriptorB.name,
+    });
+
+    await expect(resolver(secondInstanceId, secondNode)).resolves.toBe(descriptorB);
+
+    const fallbackNode = createPluginNode({
+      slot,
+      instanceId: 'session-plugin-fallback',
+      metadata: { manufacturer: descriptorB.manufacturer },
+      label: 'Unrelated Label',
+    });
+
+    await expect(resolver(fallbackNode.instanceId, fallbackNode)).resolves.toBe(
+      descriptorB,
+    );
+
+    resolver.clearInstance?.(secondInstanceId);
+    resolver.clearInstance?.(fallbackNode.instanceId);
+
+    const clearedSlotNode = createPluginNode({
+      slot,
+      instanceId: 'session-plugin-cleared',
+      metadata: {},
+      label: 'Unrelated Label',
+    });
+
+    await expect(
+      resolver(clearedSlotNode.instanceId, clearedSlotNode),
+    ).resolves.toBeUndefined();
+  });
+
+  it('avoids reusing slot associations when metadata conflicts with cached descriptors', async () => {
+    const slot = 'insert';
+    const descriptorA = createDescriptor({
+      identifier: 'com.daftcitadel.echo',
+      name: 'Echo Chamber',
+      manufacturer: 'Daft Citadel',
+    });
+    const descriptorB = createDescriptor({
+      identifier: 'com.daftcitadel.galaxy',
+      name: 'Galaxy Verb',
+      manufacturer: 'Galactic Audio',
+    });
+
+    const listAvailablePlugins: ListPluginsMock = jest.fn(async () => [
+      descriptorA,
+      descriptorB,
+    ]);
+    const resolver = createPluginDescriptorResolver({
+      listAvailablePlugins,
+    } as unknown as PluginHost);
+
+    const firstNode = createPluginNode({
+      slot,
+      instanceId: 'session-plugin-echo',
+      metadata: { descriptorId: descriptorA.identifier },
+      label: descriptorA.name,
+    });
+
+    await expect(resolver(firstNode.instanceId, firstNode)).resolves.toBe(descriptorA);
+
+    const secondNode = createPluginNode({
+      slot,
+      instanceId: 'session-plugin-galaxy',
+      metadata: { descriptorId: descriptorB.identifier },
+      label: descriptorB.name,
+    });
+
+    await expect(resolver(secondNode.instanceId, secondNode)).resolves.toBe(descriptorB);
+
+    const compatibleNode = createPluginNode({
+      slot,
+      instanceId: 'session-plugin-compatible',
+      metadata: { manufacturer: descriptorB.manufacturer },
+      label: 'No Matching Name',
+    });
+
+    await expect(resolver(compatibleNode.instanceId, compatibleNode)).resolves.toBe(
+      descriptorB,
+    );
+
+    const mismatchNode = createPluginNode({
+      slot,
+      instanceId: 'session-plugin-mismatch',
+      metadata: { manufacturer: 'Unrelated Manufacturer' },
+      label: 'No Matching Name',
+    });
+
+    await expect(
+      resolver(mismatchNode.instanceId, mismatchNode),
+    ).resolves.toBeUndefined();
+  });
 });
