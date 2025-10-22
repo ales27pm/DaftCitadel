@@ -109,6 +109,15 @@ type AudioEngineMockState = {
   connections: Set<string>;
   diagnostics: { xruns: number; lastRenderDurationMicros: number };
   automations: Map<string, Map<string, AutomationPoint[]>>;
+  clipBuffers: Map<
+    string,
+    {
+      sampleRate: number;
+      channels: number;
+      frames: number;
+      channelData: Float32Array[];
+    }
+  >;
 };
 
 const audioEngineState: AudioEngineMockState = {
@@ -119,6 +128,7 @@ const audioEngineState: AudioEngineMockState = {
   connections: new Set(),
   diagnostics: { xruns: 0, lastRenderDurationMicros: 0 },
   automations: new Map(),
+  clipBuffers: new Map(),
 };
 
 export const connectionKey = (source: string, destination: string) =>
@@ -141,6 +151,7 @@ const audioEngineModule = {
     audioEngineState.automations.clear();
     audioEngineState.diagnostics.xruns = 0;
     audioEngineState.diagnostics.lastRenderDurationMicros = 0;
+    audioEngineState.clipBuffers.clear();
   },
   addNode: async (
     nodeId: string,
@@ -158,6 +169,46 @@ const audioEngineModule = {
     audioEngineState.nodes.set(trimmedId, {
       type: trimmedType,
       options: { ...options },
+    });
+  },
+  registerClipBuffer: async (
+    bufferKey: string,
+    sampleRate: number,
+    channels: number,
+    frames: number,
+    channelData: ArrayBuffer[],
+  ) => {
+    const key = bufferKey.trim();
+    if (!key) {
+      throw new Error('bufferKey is required');
+    }
+    if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
+      throw new Error('sampleRate must be a positive number');
+    }
+    if (!Number.isInteger(channels) || channels <= 0) {
+      throw new Error('channels must be a positive integer');
+    }
+    if (!Number.isInteger(frames) || frames <= 0) {
+      throw new Error('frames must be a positive integer');
+    }
+    if (channelData.length !== channels) {
+      throw new Error('channelData length must equal channels');
+    }
+    const floatChannels = channelData.map((buffer, index) => {
+      if (!(buffer instanceof ArrayBuffer)) {
+        throw new Error(`channelData[${index}] must be an ArrayBuffer`);
+      }
+      const view = new Float32Array(buffer);
+      if (view.length < frames) {
+        throw new Error(`channelData[${index}] is shorter than expected`);
+      }
+      return new Float32Array(view.slice(0, frames));
+    });
+    audioEngineState.clipBuffers.set(key, {
+      sampleRate,
+      channels,
+      frames,
+      channelData: floatChannels,
     });
   },
   removeNode: async (nodeId: string) => {
