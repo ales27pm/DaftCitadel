@@ -283,13 +283,14 @@ RCT_EXPORT_METHOD(registerClipBuffer:(NSString*)bufferKey
 RCT_EXPORT_METHOD(unregisterClipBuffer:(NSString*)bufferKey
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
-  if (bufferKey.length == 0) {
+  NSString* trimmedKey = [bufferKey stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  if (trimmedKey.length == 0) {
     RejectPromise(reject, @"invalid_arguments", "bufferKey is required");
     return;
   }
-  const bool ok = AudioEngineBridge::unregisterClipBuffer([bufferKey UTF8String]);
+  const bool ok = AudioEngineBridge::unregisterClipBuffer([trimmedKey UTF8String]);
   if (!ok) {
-    os_log_error(ModuleLogger(), "Failed to unregister clip buffer %{public}@", bufferKey);
+    os_log_error(ModuleLogger(), "Failed to unregister clip buffer %{public}@", trimmedKey);
     RejectPromise(reject, @"unregister_clip_failed", "Failed to unregister clip buffer");
     return;
   }
