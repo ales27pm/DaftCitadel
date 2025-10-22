@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cctype>
 #include <cstddef>
@@ -13,11 +14,12 @@
 #include <vector>
 
 #include "audio_engine/DSPNode.h"
+#include "audio_engine/PluginNode.h"
 
 #if defined(__ANDROID__)
-#include "audio-engine/platform/android/AudioEngineBridge.h"
+#include "../android/AudioEngineBridge.h"
 #else
-#include "audio-engine/platform/ios/AudioEngineBridge.hpp"
+#include "../ios/AudioEngineBridge.hpp"
 #endif
 
 /**
@@ -63,6 +65,9 @@ inline std::string normalize(std::string value) {
   });
   return value;
 }
+
+bool parseBoolean(const NodeOptions& options, const std::string& key, bool defaultValue = false);
+std::optional<std::string> stringFromOptions(const NodeOptions& options, const std::string& key);
 
 template <typename T>
 inline void applyParameters(T& node, const NodeOptions& options, const std::initializer_list<std::string>& excluded = {}) {
@@ -155,7 +160,8 @@ inline std::unique_ptr<daft::audio::DSPNode> CreateNode(const std::string& type,
     descriptor.key = *key;
     descriptor.sampleRate = clipBuffer->sampleRate;
     descriptor.frameCount = clipBuffer->frameCount;
-    descriptor.owner = clipBuffer;
+    descriptor.owner =
+        std::const_pointer_cast<void>(std::static_pointer_cast<const void>(clipBuffer));
     const auto channelCount = clipBuffer->channelCount();
     if (channelCount == 0 || clipBuffer->frameCount == 0) {
       error = "clip buffer '" + *key + "' has no audio data";
@@ -190,6 +196,33 @@ inline std::unique_ptr<daft::audio::DSPNode> CreateNode(const std::string& type,
     auto node = std::make_unique<daft::audio::ClipPlayerNode>();
     node->setClipBuffer(std::move(descriptor));
     detail::applyParameters(*node, options, {"bufferkey"});
+    return node;
+  }
+
+  if (normalized == "plugin" || normalized.rfind("plugin:", 0) == 0 || normalized == "pluginnode") {
+    auto hostId = detail::stringFromOptions(options, "hostinstanceid");
+    if (!hostId || hostId->empty()) {
+      error = "plugin nodes require a hostInstanceId option";
+      return nullptr;
+    }
+
+    daft::audio::PluginBusCapabilities capabilities{};
+    const std::array<std::pair<const char*, bool*>, 6> capabilityMap = {{
+        {"acceptsaudio", &capabilities.acceptsAudio},
+        {"emitsaudio", &capabilities.emitsAudio},
+        {"acceptsmidi", &capabilities.acceptsMidi},
+        {"emitsmidi", &capabilities.emitsMidi},
+        {"acceptssidechain", &capabilities.acceptsSidechain},
+        {"emitssidechain", &capabilities.emitsSidechain},
+    }};
+    for (const auto& [key, flag] : capabilityMap) {
+      *flag = detail::parseBoolean(options, key);
+    }
+
+    auto node = std::make_unique<daft::audio::PluginNode>(*hostId, capabilities);
+    detail::applyParameters(*node, options,
+                           {"hostinstanceid", "acceptsaudio", "emitsaudio", "acceptsmidi", "emitsmidi",
+                            "acceptssidechain", "emitssidechain"});
     return node;
   }
 
