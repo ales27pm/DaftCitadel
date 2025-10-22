@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "audio_engine/DSPNode.h"
+#include "audio_engine/PluginNode.h"
 
 #if defined(__ANDROID__)
 #include "audio-engine/platform/android/AudioEngineBridge.h"
@@ -62,6 +63,38 @@ inline std::string normalize(std::string value) {
     return static_cast<char>(std::tolower(c));
   });
   return value;
+}
+
+inline bool parseBoolean(const NodeOptions& options, const std::string& key, bool defaultValue = false) {
+  if (const auto numeric = options.numericValue(key)) {
+    return std::fabs(*numeric) > std::numeric_limits<double>::epsilon();
+  }
+  if (auto stringValue = options.stringValue(key)) {
+    auto normalized = normalize(*stringValue);
+    if (normalized == "true" || normalized == "yes" || normalized == "on") {
+      return true;
+    }
+    if (normalized == "false" || normalized == "no" || normalized == "off") {
+      return false;
+    }
+  }
+  return defaultValue;
+}
+
+inline std::optional<std::string> stringFromOptions(const NodeOptions& options, const std::string& key) {
+  if (auto str = options.stringValue(key)) {
+    if (!str->empty()) {
+      return str;
+    }
+  }
+  if (auto numeric = options.numericValue(key)) {
+    if (auto converted = toIntegerString(*numeric)) {
+      if (!converted->empty()) {
+        return converted;
+      }
+    }
+  }
+  return std::nullopt;
 }
 
 template <typename T>
@@ -190,6 +223,28 @@ inline std::unique_ptr<daft::audio::DSPNode> CreateNode(const std::string& type,
     auto node = std::make_unique<daft::audio::ClipPlayerNode>();
     node->setClipBuffer(std::move(descriptor));
     detail::applyParameters(*node, options, {"bufferkey"});
+    return node;
+  }
+
+  if (normalized == "plugin" || normalized.rfind("plugin:", 0) == 0 || normalized == "pluginnode") {
+    auto hostId = detail::stringFromOptions(options, "hostinstanceid");
+    if (!hostId || hostId->empty()) {
+      error = "plugin nodes require a hostInstanceId option";
+      return nullptr;
+    }
+
+    daft::audio::PluginBusCapabilities capabilities{};
+    capabilities.acceptsAudio = detail::parseBoolean(options, "acceptsaudio");
+    capabilities.emitsAudio = detail::parseBoolean(options, "emitsaudio");
+    capabilities.acceptsMidi = detail::parseBoolean(options, "acceptsmidi");
+    capabilities.emitsMidi = detail::parseBoolean(options, "emitsmidi");
+    capabilities.acceptsSidechain = detail::parseBoolean(options, "acceptssidechain");
+    capabilities.emitsSidechain = detail::parseBoolean(options, "emitssidechain");
+
+    auto node = std::make_unique<daft::audio::PluginNode>(*hostId, capabilities);
+    detail::applyParameters(*node, options,
+                           {"hostinstanceid", "acceptsaudio", "acceptsmidi", "acceptssidechain", "emitsaudio",
+                            "emitsmidi", "emitssidechain"});
     return node;
   }
 

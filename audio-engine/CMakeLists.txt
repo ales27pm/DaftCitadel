@@ -14,6 +14,8 @@ add_library(daft_audio_engine
     src/SceneGraph.cpp
     src/Automation.cpp
     src/Clock.cpp
+    src/PluginHost.cpp
+    src/PluginNode.cpp
 )
 
 target_include_directories(daft_audio_engine
@@ -30,6 +32,7 @@ if(DAFT_AUDIO_ENGINE_BUILD_TESTS)
         tests/TestMain.cpp
         tests/SchedulerTests.cpp
         tests/ClipPlayerNodeTests.cpp
+        tests/PluginNodeTests.cpp
     )
     target_link_libraries(daft_audio_engine_tests PRIVATE daft_audio_engine)
     add_test(NAME AudioEngineTests COMMAND daft_audio_engine_tests)
