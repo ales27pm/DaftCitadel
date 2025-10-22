@@ -275,7 +275,12 @@ function createPluginDescriptorResolver(
 ): PluginDescriptorResolver {
   let catalogPromise: Promise<PluginDescriptor[]> | null = null;
   const descriptorCache = new Map<string, PluginDescriptor>();
-  const instanceCache = new Map<string, PluginDescriptor>();
+  type CachedDescriptorEntry = {
+    descriptor: PluginDescriptor;
+    metadataSignature: string | null;
+    slot: string;
+  };
+  const instanceCache = new Map<string, CachedDescriptorEntry>();
   const slotAssociations = new Map<string, PluginDescriptor>();
   const warnedMissing = new Set<string>();
   let catalogFailureLogged = false;
@@ -385,64 +390,148 @@ function createPluginDescriptorResolver(
     return matches.length > 0 ? matches : descriptors;
   };
 
+  const computeMetadataSignature = (
+    metadata: PluginNodeMetadata,
+    node: PluginRoutingNode,
+  ): string | null => {
+    const segments: Array<[string, string]> = [];
+    if (metadata.descriptorId) segments.push(['descriptorId', metadata.descriptorId]);
+    if (metadata.pluginIdentifier)
+      segments.push(['pluginIdentifier', metadata.pluginIdentifier]);
+    if (metadata.identifier) segments.push(['identifier', metadata.identifier]);
+    if (metadata.pluginName) segments.push(['pluginName', metadata.pluginName]);
+    if (metadata.name) segments.push(['name', metadata.name]);
+    if (metadata.manufacturer) segments.push(['manufacturer', metadata.manufacturer]);
+    if (metadata.format) segments.push(['format', metadata.format]);
+    if (node.label) segments.push(['label', node.label]);
+    if (segments.length === 0) {
+      return null;
+    }
+    return JSON.stringify(segments);
+  };
+
+  const isCachedDescriptorCurrent = (
+    entry: CachedDescriptorEntry,
+    metadata: PluginNodeMetadata,
+    metadataSignature: string | null,
+  ): boolean => {
+    const identifierCandidates = [
+      metadata.descriptorId,
+      metadata.pluginIdentifier,
+      metadata.identifier,
+    ];
+    if (
+      identifierCandidates.some(
+        (identifier) => identifier && identifier !== entry.descriptor.identifier,
+      )
+    ) {
+      return false;
+    }
+    if (metadata.format && metadata.format !== entry.descriptor.format) {
+      return false;
+    }
+    if (entry.metadataSignature && !metadataSignature) {
+      return false;
+    }
+    if (
+      entry.metadataSignature &&
+      metadataSignature &&
+      entry.metadataSignature !== metadataSignature
+    ) {
+      return false;
+    }
+    return true;
+  };
+
   const cacheDescriptor = (
     instanceId: string,
     slot: string,
     descriptor: PluginDescriptor,
+    metadataSignature: string | null,
   ): PluginDescriptor => {
     descriptorCache.set(descriptor.identifier, descriptor);
-    instanceCache.set(instanceId, descriptor);
+    instanceCache.set(instanceId, { descriptor, metadataSignature, slot });
     if (!slotAssociations.has(slot)) {
       slotAssociations.set(slot, descriptor);
     }
     return descriptor;
   };
 
-  return async (instanceId, node) => {
+  const clearInstance = (instanceId: string) => {
     const cached = instanceCache.get(instanceId);
-    if (cached) {
-      return cached;
+    if (!cached) {
+      warnedMissing.delete(instanceId);
+      return;
     }
-
-    let descriptors: PluginDescriptor[];
-    try {
-      descriptors = await ensureCatalog();
-    } catch (_error) {
-      return undefined;
-    }
-
-    const metadata = extractMetadata(node);
-    const descriptorsByFormat = filterByFormat(descriptors, metadata.format);
-
-    const descriptor =
-      matchByIdentifier(descriptorsByFormat, [
-        metadata.descriptorId,
-        metadata.pluginIdentifier,
-        metadata.identifier,
-      ]) ||
-      matchByName(
-        descriptorsByFormat,
-        [metadata.pluginName, metadata.name, node.label],
-        metadata.manufacturer,
-      ) ||
-      matchByInstanceId(descriptorsByFormat, instanceId) ||
-      slotAssociations.get(node.slot);
-
-    if (!descriptor) {
-      if (!warnedMissing.has(instanceId)) {
-        warnedMissing.add(instanceId);
-        console.warn('No matching plugin descriptor found', {
-          instanceId,
-          label: node.label,
-          slot: node.slot,
-        });
-      }
-      return undefined;
-    }
-
+    instanceCache.delete(instanceId);
     warnedMissing.delete(instanceId);
-    return cacheDescriptor(instanceId, node.slot, descriptor);
+    const associated = slotAssociations.get(cached.slot);
+    if (associated && associated.identifier === cached.descriptor.identifier) {
+      slotAssociations.delete(cached.slot);
+    }
   };
+
+  const resolver: PluginDescriptorResolver = Object.assign(
+    async (instanceId: string, node: PluginRoutingNode) => {
+      const metadata = extractMetadata(node);
+      const metadataSignature = computeMetadataSignature(metadata, node);
+      const cached = instanceCache.get(instanceId);
+      if (cached) {
+        if (isCachedDescriptorCurrent(cached, metadata, metadataSignature)) {
+          return cached.descriptor;
+        }
+        clearInstance(instanceId);
+      }
+
+      let descriptors: PluginDescriptor[];
+      try {
+        descriptors = await ensureCatalog();
+      } catch (_error) {
+        return undefined;
+      }
+
+      const descriptorsByFormat = filterByFormat(descriptors, metadata.format);
+
+      const descriptor =
+        matchByIdentifier(descriptorsByFormat, [
+          metadata.descriptorId,
+          metadata.pluginIdentifier,
+          metadata.identifier,
+        ]) ||
+        matchByName(
+          descriptorsByFormat,
+          [metadata.pluginName, metadata.name, node.label],
+          metadata.manufacturer,
+        ) ||
+        matchByInstanceId(descriptorsByFormat, instanceId) ||
+        slotAssociations.get(node.slot);
+
+      if (!descriptor) {
+        if (!warnedMissing.has(instanceId)) {
+          warnedMissing.add(instanceId);
+          console.warn('No matching plugin descriptor found', {
+            instanceId,
+            label: node.label,
+            slot: node.slot,
+          });
+        }
+        return undefined;
+      }
+
+      warnedMissing.delete(instanceId);
+      return cacheDescriptor(instanceId, node.slot, descriptor, metadataSignature);
+    },
+    {
+      clearInstance,
+      clearAll: () => {
+        instanceCache.clear();
+        slotAssociations.clear();
+        warnedMissing.clear();
+      },
+    },
+  );
+
+  return resolver;
 }
 
 export { PassiveAudioEngineBridge, createPluginDescriptorResolver };

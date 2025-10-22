@@ -66,14 +66,20 @@ const DEFAULT_LOGGER: Logger = {
   error: (...args: unknown[]) => console.error('[SessionAudioBridge]', ...args),
 };
 
+export interface PluginDescriptorResolver {
+  (
+    instanceId: string,
+    node: PluginRoutingNode,
+  ): Promise<PluginDescriptor | undefined> | PluginDescriptor | undefined;
+  clearInstance?(instanceId: string): void;
+  clearAll?(): void;
+}
+
 export interface SessionAudioBridgeOptions {
   fileLoader: AudioFileLoader;
   logger?: Logger;
   pluginHost?: PluginHost;
-  resolvePluginDescriptor?: (
-    instanceId: string,
-    node: PluginRoutingNode,
-  ) => Promise<PluginDescriptor | undefined> | PluginDescriptor | undefined;
+  resolvePluginDescriptor?: PluginDescriptorResolver;
 }
 
 export class SessionAudioBridge {
@@ -665,22 +671,36 @@ export class SessionAudioBridge {
   private async releaseStalePluginInstances(
     activePluginInstances: Set<string>,
   ): Promise<void> {
+    const resolver = this.resolvePluginDescriptor;
+    const staleBindings: Array<[string, PluginInstanceBinding]> = [];
+
+    this.pluginBindings.forEach((binding, instanceId) => {
+      if (!activePluginInstances.has(instanceId)) {
+        staleBindings.push([instanceId, binding]);
+        resolver?.clearInstance?.(instanceId);
+      }
+    });
+
     if (!this.pluginHost) {
-      if (this.pluginBindings.size > 0 && activePluginInstances.size === 0) {
-        this.pluginBindings.clear();
+      if (this.pluginBindings.size > 0) {
+        if (activePluginInstances.size === 0) {
+          this.pluginBindings.clear();
+        } else {
+          staleBindings.forEach(([instanceId]) => {
+            this.pluginBindings.delete(instanceId);
+          });
+        }
       }
       return;
     }
 
     const releases: Array<Promise<void>> = [];
-    this.pluginBindings.forEach((binding, instanceId) => {
-      if (!activePluginInstances.has(instanceId)) {
-        releases.push(
-          this.safeReleasePlugin(binding.hostInstanceId, instanceId).then(() => {
-            this.pluginBindings.delete(instanceId);
-          }),
-        );
-      }
+    staleBindings.forEach(([instanceId, binding]) => {
+      releases.push(
+        this.safeReleasePlugin(binding.hostInstanceId, instanceId).then(() => {
+          this.pluginBindings.delete(instanceId);
+        }),
+      );
     });
     await Promise.all(releases);
 
