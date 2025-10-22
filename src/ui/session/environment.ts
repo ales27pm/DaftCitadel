@@ -275,13 +275,11 @@ function createPluginDescriptorResolver(
 ): PluginDescriptorResolver {
   let catalogPromise: Promise<PluginDescriptor[]> | null = null;
   const descriptorCache = new Map<string, PluginDescriptor>();
-  type CachedDescriptorEntry = {
-    descriptor: PluginDescriptor;
-    metadataSignature: string | null;
-    slot: string;
-  };
-  const instanceCache = new Map<string, CachedDescriptorEntry>();
-  const slotAssociations = new Map<string, PluginDescriptor>();
+  const instanceCache = new Map<string, PluginDescriptor>();
+  const instanceKeyById = new Map<string, string>();
+  const instanceSlotById = new Map<string, string>();
+  type SlotAssociation = { descriptor: PluginDescriptor; instanceId: string };
+  const slotAssociations = new Map<string, SlotAssociation>();
   const warnedMissing = new Set<string>();
   let catalogFailureLogged = false;
 
@@ -314,15 +312,24 @@ function createPluginDescriptorResolver(
   const matchByIdentifier = (
     descriptors: PluginDescriptor[],
     identifiers: Array<string | undefined>,
+    expectedFormat?: PluginFormat,
   ): PluginDescriptor | undefined => {
     for (const identifier of identifiers) {
       if (!identifier) {
         continue;
       }
-      const descriptor =
-        descriptorCache.get(identifier) ||
-        descriptors.find((candidate) => candidate.identifier === identifier);
+      const descriptorFromCache = descriptorCache.get(identifier);
+      if (
+        descriptorFromCache &&
+        (!expectedFormat || descriptorFromCache.format === expectedFormat)
+      ) {
+        return descriptorFromCache;
+      }
+      const descriptor = descriptors.find(
+        (candidate) => candidate.identifier === identifier,
+      );
       if (descriptor) {
+        descriptorCache.set(descriptor.identifier, descriptor);
         return descriptor;
       }
     }
@@ -390,10 +397,10 @@ function createPluginDescriptorResolver(
     return matches.length > 0 ? matches : descriptors;
   };
 
-  const computeMetadataSignature = (
+  const computeMetadataKey = (
     metadata: PluginNodeMetadata,
     node: PluginRoutingNode,
-  ): string | null => {
+  ): string => {
     const segments: Array<[string, string]> = [];
     if (metadata.descriptorId) segments.push(['descriptorId', metadata.descriptorId]);
     if (metadata.pluginIdentifier)
@@ -405,82 +412,77 @@ function createPluginDescriptorResolver(
     if (metadata.format) segments.push(['format', metadata.format]);
     if (node.label) segments.push(['label', node.label]);
     if (segments.length === 0) {
-      return null;
+      return '__nometa__';
     }
-    return JSON.stringify(segments);
+    segments.sort((a, b) => {
+      if (a[0] === b[0]) {
+        return a[1].localeCompare(b[1]);
+      }
+      return a[0].localeCompare(b[0]);
+    });
+    return segments.map(([key, value]) => `${key}=${value}`).join('|');
   };
 
-  const isCachedDescriptorCurrent = (
-    entry: CachedDescriptorEntry,
-    metadata: PluginNodeMetadata,
-    metadataSignature: string | null,
-  ): boolean => {
-    const identifierCandidates = [
-      metadata.descriptorId,
-      metadata.pluginIdentifier,
-      metadata.identifier,
-    ];
-    if (
-      identifierCandidates.some(
-        (identifier) => identifier && identifier !== entry.descriptor.identifier,
-      )
-    ) {
-      return false;
+  const buildInstanceCacheKey = (instanceId: string, metadataKey: string) =>
+    `${instanceId}::${metadataKey}`;
+
+  const ensureInstanceIndex = (
+    instanceId: string,
+    cacheKey: string,
+    slot: string,
+    descriptor: PluginDescriptor,
+  ) => {
+    instanceKeyById.set(instanceId, cacheKey);
+    instanceSlotById.set(instanceId, slot);
+    const currentAssociation = slotAssociations.get(slot);
+    if (!currentAssociation || currentAssociation.instanceId === instanceId) {
+      slotAssociations.set(slot, { descriptor, instanceId });
     }
-    if (metadata.format && metadata.format !== entry.descriptor.format) {
-      return false;
-    }
-    if (entry.metadataSignature && !metadataSignature) {
-      return false;
-    }
-    if (
-      entry.metadataSignature &&
-      metadataSignature &&
-      entry.metadataSignature !== metadataSignature
-    ) {
-      return false;
-    }
-    return true;
   };
 
   const cacheDescriptor = (
     instanceId: string,
+    cacheKey: string,
     slot: string,
     descriptor: PluginDescriptor,
-    metadataSignature: string | null,
   ): PluginDescriptor => {
     descriptorCache.set(descriptor.identifier, descriptor);
-    instanceCache.set(instanceId, { descriptor, metadataSignature, slot });
-    if (!slotAssociations.has(slot)) {
-      slotAssociations.set(slot, descriptor);
-    }
+    instanceCache.set(cacheKey, descriptor);
+    ensureInstanceIndex(instanceId, cacheKey, slot, descriptor);
     return descriptor;
   };
 
   const clearInstance = (instanceId: string) => {
-    const cached = instanceCache.get(instanceId);
-    if (!cached) {
-      warnedMissing.delete(instanceId);
-      return;
+    const cacheKey = instanceKeyById.get(instanceId);
+    if (cacheKey) {
+      instanceCache.delete(cacheKey);
+      instanceKeyById.delete(instanceId);
     }
-    instanceCache.delete(instanceId);
+    const slot = instanceSlotById.get(instanceId);
+    if (slot) {
+      const association = slotAssociations.get(slot);
+      if (association?.instanceId === instanceId) {
+        slotAssociations.delete(slot);
+      }
+      instanceSlotById.delete(instanceId);
+    }
     warnedMissing.delete(instanceId);
-    const associated = slotAssociations.get(cached.slot);
-    if (associated && associated.identifier === cached.descriptor.identifier) {
-      slotAssociations.delete(cached.slot);
-    }
   };
 
   const resolver: PluginDescriptorResolver = Object.assign(
     async (instanceId: string, node: PluginRoutingNode) => {
       const metadata = extractMetadata(node);
-      const metadataSignature = computeMetadataSignature(metadata, node);
-      const cached = instanceCache.get(instanceId);
-      if (cached) {
-        if (isCachedDescriptorCurrent(cached, metadata, metadataSignature)) {
-          return cached.descriptor;
-        }
+      const metadataKey = computeMetadataKey(metadata, node);
+      const cacheKey = buildInstanceCacheKey(instanceId, metadataKey);
+      const currentKey = instanceKeyById.get(instanceId);
+      if (currentKey && currentKey !== cacheKey) {
         clearInstance(instanceId);
+      }
+      const cached = instanceCache.get(cacheKey);
+      if (cached) {
+        ensureInstanceIndex(instanceId, cacheKey, node.slot, cached);
+        warnedMissing.delete(instanceId);
+        return cached;
       }
 
       let descriptors: PluginDescriptor[];
@@ -493,18 +495,18 @@ function createPluginDescriptorResolver(
       const descriptorsByFormat = filterByFormat(descriptors, metadata.format);
 
       const descriptor =
-        matchByIdentifier(descriptorsByFormat, [
-          metadata.descriptorId,
-          metadata.pluginIdentifier,
-          metadata.identifier,
-        ]) ||
+        matchByIdentifier(
+          descriptorsByFormat,
+          [metadata.descriptorId, metadata.pluginIdentifier, metadata.identifier],
+          metadata.format,
+        ) ||
         matchByName(
           descriptorsByFormat,
           [metadata.pluginName, metadata.name, node.label],
           metadata.manufacturer,
         ) ||
         matchByInstanceId(descriptorsByFormat, instanceId) ||
-        slotAssociations.get(node.slot);
+        slotAssociations.get(node.slot)?.descriptor;
 
       if (!descriptor) {
         if (!warnedMissing.has(instanceId)) {
@@ -519,12 +521,15 @@ function createPluginDescriptorResolver(
       }
 
       warnedMissing.delete(instanceId);
-      return cacheDescriptor(instanceId, node.slot, descriptor, metadataSignature);
+      return cacheDescriptor(instanceId, cacheKey, node.slot, descriptor);
     },
     {
       clearInstance,
       clearAll: () => {
+        descriptorCache.clear();
         instanceCache.clear();
+        instanceKeyById.clear();
+        instanceSlotById.clear();
         slotAssociations.clear();
         warnedMissing.clear();
       },
