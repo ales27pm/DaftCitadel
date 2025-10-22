@@ -398,6 +398,8 @@ export const NativeModules: Record<string, unknown> = {
   AudioSampleLoaderModule: audioSampleLoaderModule,
   DaftCitadelDirectories: {
     sessionDirectory: '/tmp/daft-citadel',
+    getSessionDirectory: async () => '/tmp/daft-citadel',
+    getDirectories: async () => ({ sessionDirectory: '/tmp/daft-citadel' }),
   },
 };
 

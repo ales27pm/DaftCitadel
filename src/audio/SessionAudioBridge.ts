@@ -727,6 +727,27 @@ export class SessionAudioBridge {
       });
     }
   }
+
+  public async dispose(): Promise<void> {
+    const pending: Array<Promise<void>> = [];
+    if (this.pluginHost) {
+      this.pluginBindings.forEach((binding, instanceId) => {
+        pending.push(this.safeReleasePlugin(binding.hostInstanceId, instanceId));
+      });
+    }
+    this.pluginBindings.clear();
+    this.pluginAutomationState.clear();
+    this.resolvePluginDescriptor?.clearAll?.();
+
+    this.activeClipBuffers.forEach((descriptor) => {
+      pending.push(this.bufferCache.releaseClipBuffer(descriptor.bufferKey));
+    });
+    this.activeClipBuffers.clear();
+
+    if (pending.length > 0) {
+      await Promise.all(pending);
+    }
+  }
 }
 
 export type { AudioFileLoader, AudioFileData } from './bridge/ClipBufferCache';
