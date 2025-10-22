@@ -276,7 +276,10 @@ function createPluginDescriptorResolver(
   let catalogPromise: Promise<PluginDescriptor[]> | null = null;
   const descriptorCache = new Map<string, PluginDescriptor>();
   const instanceCache = new Map<string, PluginDescriptor>();
-  const slotAssociations = new Map<string, PluginDescriptor>();
+  const instanceKeyById = new Map<string, string>();
+  const instanceSlotById = new Map<string, string>();
+  type SlotAssociation = { descriptor: PluginDescriptor; instanceId: string };
+  const slotAssociations = new Map<string, SlotAssociation>();
   const warnedMissing = new Set<string>();
   let catalogFailureLogged = false;
 
@@ -309,15 +312,24 @@ function createPluginDescriptorResolver(
   const matchByIdentifier = (
     descriptors: PluginDescriptor[],
     identifiers: Array<string | undefined>,
+    expectedFormat?: PluginFormat,
   ): PluginDescriptor | undefined => {
     for (const identifier of identifiers) {
       if (!identifier) {
         continue;
       }
-      const descriptor =
-        descriptorCache.get(identifier) ||
-        descriptors.find((candidate) => candidate.identifier === identifier);
+      const descriptorFromCache = descriptorCache.get(identifier);
+      if (
+        descriptorFromCache &&
+        (!expectedFormat || descriptorFromCache.format === expectedFormat)
+      ) {
+        return descriptorFromCache;
+      }
+      const descriptor = descriptors.find(
+        (candidate) => candidate.identifier === identifier,
+      );
       if (descriptor) {
+        descriptorCache.set(descriptor.identifier, descriptor);
         return descriptor;
       }
     }
@@ -385,64 +397,146 @@ function createPluginDescriptorResolver(
     return matches.length > 0 ? matches : descriptors;
   };
 
+  const computeMetadataKey = (
+    metadata: PluginNodeMetadata,
+    node: PluginRoutingNode,
+  ): string => {
+    const segments: Array<[string, string]> = [];
+    if (metadata.descriptorId) segments.push(['descriptorId', metadata.descriptorId]);
+    if (metadata.pluginIdentifier)
+      segments.push(['pluginIdentifier', metadata.pluginIdentifier]);
+    if (metadata.identifier) segments.push(['identifier', metadata.identifier]);
+    if (metadata.pluginName) segments.push(['pluginName', metadata.pluginName]);
+    if (metadata.name) segments.push(['name', metadata.name]);
+    if (metadata.manufacturer) segments.push(['manufacturer', metadata.manufacturer]);
+    if (metadata.format) segments.push(['format', metadata.format]);
+    if (node.label) segments.push(['label', node.label]);
+    if (segments.length === 0) {
+      return '__nometa__';
+    }
+    segments.sort((a, b) => {
+      if (a[0] === b[0]) {
+        return a[1].localeCompare(b[1]);
+      }
+      return a[0].localeCompare(b[0]);
+    });
+    return segments.map(([key, value]) => `${key}=${value}`).join('|');
+  };
+
+  const buildInstanceCacheKey = (instanceId: string, metadataKey: string) =>
+    `${instanceId}::${metadataKey}`;
+
+  const ensureInstanceIndex = (
+    instanceId: string,
+    cacheKey: string,
+    slot: string,
+    descriptor: PluginDescriptor,
+  ) => {
+    instanceKeyById.set(instanceId, cacheKey);
+    instanceSlotById.set(instanceId, slot);
+    const currentAssociation = slotAssociations.get(slot);
+    if (!currentAssociation || currentAssociation.instanceId === instanceId) {
+      slotAssociations.set(slot, { descriptor, instanceId });
+    }
+  };
+
   const cacheDescriptor = (
     instanceId: string,
+    cacheKey: string,
     slot: string,
     descriptor: PluginDescriptor,
   ): PluginDescriptor => {
     descriptorCache.set(descriptor.identifier, descriptor);
-    instanceCache.set(instanceId, descriptor);
-    if (!slotAssociations.has(slot)) {
-      slotAssociations.set(slot, descriptor);
-    }
+    instanceCache.set(cacheKey, descriptor);
+    ensureInstanceIndex(instanceId, cacheKey, slot, descriptor);
     return descriptor;
   };
 
-  return async (instanceId, node) => {
-    const cached = instanceCache.get(instanceId);
-    if (cached) {
-      return cached;
+  const clearInstance = (instanceId: string) => {
+    const cacheKey = instanceKeyById.get(instanceId);
+    if (cacheKey) {
+      instanceCache.delete(cacheKey);
+      instanceKeyById.delete(instanceId);
     }
-
-    let descriptors: PluginDescriptor[];
-    try {
-      descriptors = await ensureCatalog();
-    } catch (_error) {
-      return undefined;
-    }
-
-    const metadata = extractMetadata(node);
-    const descriptorsByFormat = filterByFormat(descriptors, metadata.format);
-
-    const descriptor =
-      matchByIdentifier(descriptorsByFormat, [
-        metadata.descriptorId,
-        metadata.pluginIdentifier,
-        metadata.identifier,
-      ]) ||
-      matchByName(
-        descriptorsByFormat,
-        [metadata.pluginName, metadata.name, node.label],
-        metadata.manufacturer,
-      ) ||
-      matchByInstanceId(descriptorsByFormat, instanceId) ||
-      slotAssociations.get(node.slot);
-
-    if (!descriptor) {
-      if (!warnedMissing.has(instanceId)) {
-        warnedMissing.add(instanceId);
-        console.warn('No matching plugin descriptor found', {
-          instanceId,
-          label: node.label,
-          slot: node.slot,
-        });
+    const slot = instanceSlotById.get(instanceId);
+    if (slot) {
+      const association = slotAssociations.get(slot);
+      if (association?.instanceId === instanceId) {
+        slotAssociations.delete(slot);
       }
-      return undefined;
+      instanceSlotById.delete(instanceId);
     }
-
     warnedMissing.delete(instanceId);
-    return cacheDescriptor(instanceId, node.slot, descriptor);
   };
+
+  const resolver: PluginDescriptorResolver = Object.assign(
+    async (instanceId: string, node: PluginRoutingNode) => {
+      const metadata = extractMetadata(node);
+      const metadataKey = computeMetadataKey(metadata, node);
+      const cacheKey = buildInstanceCacheKey(instanceId, metadataKey);
+      const currentKey = instanceKeyById.get(instanceId);
+      if (currentKey && currentKey !== cacheKey) {
+        clearInstance(instanceId);
+      }
+      const cached = instanceCache.get(cacheKey);
+      if (cached) {
+        ensureInstanceIndex(instanceId, cacheKey, node.slot, cached);
+        warnedMissing.delete(instanceId);
+        return cached;
+      }
+
+      let descriptors: PluginDescriptor[];
+      try {
+        descriptors = await ensureCatalog();
+      } catch (_error) {
+        return undefined;
+      }
+
+      const descriptorsByFormat = filterByFormat(descriptors, metadata.format);
+
+      const descriptor =
+        matchByIdentifier(
+          descriptorsByFormat,
+          [metadata.descriptorId, metadata.pluginIdentifier, metadata.identifier],
+          metadata.format,
+        ) ||
+        matchByName(
+          descriptorsByFormat,
+          [metadata.pluginName, metadata.name, node.label],
+          metadata.manufacturer,
+        ) ||
+        matchByInstanceId(descriptorsByFormat, instanceId) ||
+        slotAssociations.get(node.slot)?.descriptor;
+
+      if (!descriptor) {
+        if (!warnedMissing.has(instanceId)) {
+          warnedMissing.add(instanceId);
+          console.warn('No matching plugin descriptor found', {
+            instanceId,
+            label: node.label,
+            slot: node.slot,
+          });
+        }
+        return undefined;
+      }
+
+      warnedMissing.delete(instanceId);
+      return cacheDescriptor(instanceId, cacheKey, node.slot, descriptor);
+    },
+    {
+      clearInstance,
+      clearAll: () => {
+        descriptorCache.clear();
+        instanceCache.clear();
+        instanceKeyById.clear();
+        instanceSlotById.clear();
+        slotAssociations.clear();
+        warnedMissing.clear();
+      },
+    },
+  );
+
+  return resolver;
 }
 
 export { PassiveAudioEngineBridge, createPluginDescriptorResolver };

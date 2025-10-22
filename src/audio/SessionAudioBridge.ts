@@ -66,14 +66,20 @@ const DEFAULT_LOGGER: Logger = {
   error: (...args: unknown[]) => console.error('[SessionAudioBridge]', ...args),
 };
 
+export interface PluginDescriptorResolver {
+  (
+    instanceId: string,
+    node: PluginRoutingNode,
+  ): Promise<PluginDescriptor | undefined> | PluginDescriptor | undefined;
+  clearInstance?(instanceId: string): void;
+  clearAll?(): void;
+}
+
 export interface SessionAudioBridgeOptions {
   fileLoader: AudioFileLoader;
   logger?: Logger;
   pluginHost?: PluginHost;
-  resolvePluginDescriptor?: (
-    instanceId: string,
-    node: PluginRoutingNode,
-  ) => Promise<PluginDescriptor | undefined> | PluginDescriptor | undefined;
+  resolvePluginDescriptor?: PluginDescriptorResolver;
 }
 
 export class SessionAudioBridge {
@@ -665,34 +671,43 @@ export class SessionAudioBridge {
   private async releaseStalePluginInstances(
     activePluginInstances: Set<string>,
   ): Promise<void> {
+    const resolver = this.resolvePluginDescriptor;
+    const staleBindings = Array.from(this.pluginBindings.entries()).filter(
+      ([instanceId]) => !activePluginInstances.has(instanceId),
+    );
+
+    staleBindings.forEach(([instanceId]) => {
+      resolver?.clearInstance?.(instanceId);
+    });
+
+    const releases = staleBindings.map(([instanceId, binding]) =>
+      (this.pluginHost
+        ? this.safeReleasePlugin(binding.hostInstanceId, instanceId)
+        : Promise.resolve()
+      ).then(() => {
+        this.pluginBindings.delete(instanceId);
+      }),
+    );
+
+    await Promise.all(releases);
+
     if (!this.pluginHost) {
-      if (this.pluginBindings.size > 0 && activePluginInstances.size === 0) {
+      if (activePluginInstances.size === 0) {
         this.pluginBindings.clear();
       }
       return;
     }
 
-    const releases: Array<Promise<void>> = [];
-    this.pluginBindings.forEach((binding, instanceId) => {
-      if (!activePluginInstances.has(instanceId)) {
-        releases.push(
-          this.safeReleasePlugin(binding.hostInstanceId, instanceId).then(() => {
-            this.pluginBindings.delete(instanceId);
-          }),
-        );
-      }
-    });
-    await Promise.all(releases);
-
     if (activePluginInstances.size === 0) {
       this.pluginAutomationState.clear();
-    } else {
-      this.pluginAutomationState.forEach((_signature, key) => {
-        const [instanceId] = key.split(':');
-        if (!activePluginInstances.has(instanceId)) {
-          this.pluginAutomationState.delete(key);
-        }
-      });
+      return;
+    }
+
+    for (const key of Array.from(this.pluginAutomationState.keys())) {
+      const [instanceId] = key.split(':');
+      if (!activePluginInstances.has(instanceId)) {
+        this.pluginAutomationState.delete(key);
+      }
     }
   }
 
