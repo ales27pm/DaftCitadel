@@ -6,3 +6,4 @@ export * from './plugins/PluginHost';
 export * from './plugins/PluginSandbox';
 export * from './plugins/NativePluginHost';
 export * from './plugins/types';
+export * from './bridge/NativeAudioFileLoader';

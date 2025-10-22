@@ -1,6 +1,78 @@
 import { NativeAudioEngine, isNativeModuleAvailable } from './NativeAudioEngine';
 import { AutomationLane, publishAutomationLane, ClockSyncService } from './Automation';
 
+type ChannelPayload =
+  | ArrayBuffer
+  | ArrayBufferView
+  | ReadonlyArray<number>
+  | { buffer: ArrayBuffer; byteOffset: number; byteLength: number };
+
+const isArrayBufferPayload = (value: unknown): value is ArrayBuffer => {
+  if (value instanceof ArrayBuffer) {
+    return true;
+  }
+  return Object.prototype.toString.call(value) === '[object ArrayBuffer]';
+};
+
+const isArrayBufferViewPayload = (value: unknown): value is ArrayBufferView => {
+  return typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(value);
+};
+
+const isNodeBufferLike = (
+  value: unknown,
+): value is { buffer: ArrayBuffer; byteOffset: number; byteLength: number } => {
+  const globalBuffer = (
+    globalThis as {
+      Buffer?: { isBuffer?: (candidate: unknown) => boolean };
+    }
+  ).Buffer;
+  if (!globalBuffer || typeof globalBuffer.isBuffer !== 'function') {
+    return false;
+  }
+  return globalBuffer.isBuffer(value);
+};
+
+const isNumericArray = (value: unknown): value is ReadonlyArray<number> => {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const element = value[index];
+    if (!Number.isFinite(element)) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const normalizeChannelPayload = (payload: ChannelPayload): ArrayBuffer => {
+  if (isArrayBufferPayload(payload)) {
+    return payload;
+  }
+  if (isArrayBufferViewPayload(payload)) {
+    return payload.buffer.slice(
+      payload.byteOffset,
+      payload.byteOffset + payload.byteLength,
+    );
+  }
+  if (isNodeBufferLike(payload)) {
+    return payload.buffer.slice(
+      payload.byteOffset,
+      payload.byteOffset + payload.byteLength,
+    );
+  }
+  if (isNumericArray(payload)) {
+    const channel = new Float32Array(payload.length);
+    for (let i = 0; i < payload.length; i += 1) {
+      channel[i] = payload[i];
+    }
+    return channel.buffer;
+  }
+  throw new Error(
+    'channelData entries must be ArrayBuffers, typed views, or numeric arrays',
+  );
+};
+
 export type NodeConfiguration = {
   id: string;
   type: string;
@@ -72,7 +144,7 @@ export class AudioEngine {
     sampleRate: number,
     channels: number,
     frames: number,
-    channelData: ReadonlyArray<ArrayBuffer>,
+    channelData: ReadonlyArray<ChannelPayload>,
   ): Promise<void> {
     if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
       throw new Error('sampleRate must be a positive number');
@@ -87,22 +159,21 @@ export class AudioEngine {
       throw new Error('channelData length must equal channels');
     }
     const bytesPerSample = 4; // Float32 PCM
-    channelData.forEach((buffer, index) => {
-      if (!(buffer instanceof ArrayBuffer)) {
-        throw new Error(`channelData[${index}] must be an ArrayBuffer`);
-      }
-      if (buffer.byteLength < frames * bytesPerSample) {
+    const normalizedChannels = channelData.map((payload, index) => {
+      const source = normalizeChannelPayload(payload);
+      if (source.byteLength < frames * bytesPerSample) {
         throw new Error(
-          `channelData[${index}] byteLength ${buffer.byteLength} is insufficient for ${frames} frames`,
+          `channelData[${index}] byteLength ${source.byteLength} is insufficient for ${frames} frames`,
         );
       }
+      return source;
     });
     await NativeAudioEngine.registerClipBuffer(
       bufferKey,
       sampleRate,
       channels,
       frames,
-      Array.from(channelData),
+      normalizedChannels,
     );
   }
 
