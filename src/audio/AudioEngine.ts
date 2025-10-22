@@ -50,6 +50,9 @@ const normalizeChannelPayload = (payload: ChannelPayload): ArrayBuffer => {
     return payload;
   }
   if (isArrayBufferViewPayload(payload)) {
+    if (!(payload instanceof Float32Array)) {
+      throw new Error('channelData typed views must be Float32Array (Float32 PCM)');
+    }
     return payload.buffer.slice(
       payload.byteOffset,
       payload.byteOffset + payload.byteLength,
@@ -69,7 +72,7 @@ const normalizeChannelPayload = (payload: ChannelPayload): ArrayBuffer => {
     return channel.buffer;
   }
   throw new Error(
-    'channelData entries must be ArrayBuffers, typed views, or numeric arrays',
+    'channelData entries must be ArrayBuffers, Float32Array views, Node Buffers, or numeric arrays',
   );
 };
 
@@ -161,6 +164,11 @@ export class AudioEngine {
     const bytesPerSample = 4; // Float32 PCM
     const normalizedChannels = channelData.map((payload, index) => {
       const source = normalizeChannelPayload(payload);
+      if (source.byteLength % bytesPerSample !== 0) {
+        throw new Error(
+          `channelData[${index}] byteLength ${source.byteLength} is not 4-byte aligned for Float32 PCM`,
+        );
+      }
       if (source.byteLength < frames * bytesPerSample) {
         throw new Error(
           `channelData[${index}] byteLength ${source.byteLength} is insufficient for ${frames} frames`,
