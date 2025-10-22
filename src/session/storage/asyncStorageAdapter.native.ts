@@ -155,7 +155,7 @@ export class AsyncStorageSessionStorageAdapter implements SessionStorageAdapter 
     await this.initialize();
     try {
       const keys = await AsyncStorage.getAllKeys();
-      const sessionKeys = keys.filter((key) => key.startsWith(this.prefix));
+      const sessionKeys = keys.filter((key: string) => key.startsWith(this.prefix));
       if (sessionKeys.length === 0) {
         return [];
       }
