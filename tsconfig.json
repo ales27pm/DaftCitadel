@@ -10,7 +10,7 @@
     "rootDir": "src",
     "outDir": "lib",
     "jsx": "react-native",
-    "types": ["jest", "node"],
+    "types": ["jest", "node", "react-test-renderer"],
     "typeRoots": [
       "./src/types",
       "./node_modules/@types",
