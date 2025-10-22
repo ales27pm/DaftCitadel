@@ -229,8 +229,28 @@ RCT_EXPORT_METHOD(registerClipBuffer:(NSString*)bufferKey
     return;
   }
 
+  constexpr std::size_t kMaxChannels = 64;
+  constexpr unsigned long long kMaxFrames = 10'000'000ULL;
+
+  if (channelCountUnsigned > kMaxChannels) {
+    RejectPromise(reject, @"invalid_arguments", "channels must be between 1 and 64");
+    return;
+  }
+  if (framesUnsigned > kMaxFrames) {
+    RejectPromise(reject, @"invalid_arguments", "frames must be between 1 and 10000000");
+    return;
+  }
+  if (framesUnsigned > std::numeric_limits<std::size_t>::max()) {
+    RejectPromise(reject, @"invalid_arguments", "frames exceed platform limits");
+    return;
+  }
+
   const std::size_t channelCount = static_cast<std::size_t>(channelCountUnsigned);
   const std::size_t frameCount = static_cast<std::size_t>(framesUnsigned);
+  if (frameCount > std::numeric_limits<std::size_t>::max() / sizeof(float)) {
+    RejectPromise(reject, @"invalid_arguments", "frames exceed platform limits");
+    return;
+  }
   const std::size_t requiredBytes = frameCount * sizeof(float);
 
   std::vector<std::vector<float>> nativeChannels;

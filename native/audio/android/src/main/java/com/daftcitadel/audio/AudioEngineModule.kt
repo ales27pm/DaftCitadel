@@ -409,21 +409,21 @@ private external fun nativeDisconnectNodes(source: String, destination: String)
  */
 private external fun nativeScheduleAutomation(nodeId: String, parameter: String, frame: Long, value: Double)
   /**
- * Registers a multi-channel Float32 clip buffer with the native audio engine.
- *
- * @param bufferKey Identifier for the buffer that native clip nodes will reference.
- * @param sampleRate Sample rate of the buffer in Hz.
- * @param channels Number of interleaved channels provided in `channelData`.
- * @param frames Frame count stored in each channel array.
- * @param channelData Matrix of Float32 PCM channel data sized [channels][frames].
- */
-private external fun nativeRegisterClipBuffer(
-  bufferKey: String,
-  sampleRate: Double,
-  channels: Int,
-  frames: Int,
-  channelData: Array<FloatArray>
-)
+   * Registers a multi-channel Float32 clip buffer with the native audio engine.
+   *
+   * @param bufferKey Identifier for the buffer that native clip nodes will reference.
+   * @param sampleRate Sample rate of the buffer in Hz.
+   * @param channels Number of channels.
+   * @param frames Frame count stored in each channel array.
+   * @param channelData Planar Float32 PCM: channelData[c][f] with size [channels][frames].
+   */
+  private external fun nativeRegisterClipBuffer(
+    bufferKey: String,
+    sampleRate: Double,
+    channels: Int,
+    frames: Int,
+    channelData: Array<FloatArray>
+  )
   /**
  * Fetches render diagnostics from the native audio engine.
  *
@@ -486,7 +486,7 @@ private external fun nativeMaxFramesPerBuffer(): Int
       ReadableType.Array -> convertReadableArrayToFloatChannel(channelData.getArray(index), frameCount)
       ReadableType.Map -> parseChannelMap(channelData.getMap(index), frameCount)
       ReadableType.String -> decodeBase64Channel(channelData.getString(index), frameCount)
-      else -> throw IllegalArgumentException("channelData[$index] must be an ArrayBuffer payload")
+      else -> throw IllegalArgumentException("channelData[$index] must be Float array, base64 string, or Buffer map")
     }
   }
 
