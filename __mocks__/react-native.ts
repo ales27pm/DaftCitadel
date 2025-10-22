@@ -30,7 +30,17 @@ const screenReaderListeners = new Set<AccessibilityListener>();
 let reduceMotionEnabled = false;
 let screenReaderEnabled = false;
 
-const createSubscription = (set: Set<AccessibilityListener>, listener: AccessibilityListener) => {
+const isArrayBufferLike = (value: unknown): value is ArrayBuffer => {
+  return (
+    value instanceof ArrayBuffer ||
+    Object.prototype.toString.call(value) === '[object ArrayBuffer]'
+  );
+};
+
+const createSubscription = (
+  set: Set<AccessibilityListener>,
+  listener: AccessibilityListener,
+) => {
   set.add(listener);
   return {
     remove: () => {
@@ -176,7 +186,7 @@ const audioEngineModule = {
     sampleRate: number,
     channels: number,
     frames: number,
-    channelData: ArrayBuffer[],
+    channelData: Array<ArrayBuffer | ArrayBufferView>,
   ) => {
     const key = bufferKey.trim();
     if (!key) {
@@ -194,11 +204,19 @@ const audioEngineModule = {
     if (channelData.length !== channels) {
       throw new Error('channelData length must equal channels');
     }
-    const floatChannels = channelData.map((buffer, index) => {
-      if (!(buffer instanceof ArrayBuffer)) {
-        throw new Error(`channelData[${index}] must be an ArrayBuffer`);
+    const floatChannels = channelData.map((payload, index) => {
+      let source: ArrayBuffer;
+      if (isArrayBufferLike(payload)) {
+        source = payload;
+      } else if (ArrayBuffer.isView(payload)) {
+        const view = payload as ArrayBufferView;
+        source = view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
+      } else {
+        throw new Error(
+          `channelData[${index}] must be an ArrayBuffer or ArrayBufferView`,
+        );
       }
-      const view = new Float32Array(buffer);
+      const view = new Float32Array(source);
       if (view.length < frames) {
         throw new Error(`channelData[${index}] is shorter than expected`);
       }
@@ -328,10 +346,29 @@ const collabNetworkDiagnosticsModule = {
   __emitter: collabDiagnosticsEmitter,
 };
 
+const audioSampleLoaderModule = {
+  decode: async (filePath: string) => {
+    const channels = filePath.includes('mono') ? 1 : 2;
+    const frames = 48000;
+    const sampleRate = 48000;
+    const channelData = Array.from({ length: channels }, (_, channelIndex) => {
+      const waveform = Float32Array.from({ length: frames }, (_, frameIndex) =>
+        Math.sin((frameIndex + channelIndex) / 64),
+      );
+      return Array.from(waveform);
+    });
+    return { sampleRate, channels, frames, channelData };
+  },
+};
+
 export const NativeModules: Record<string, unknown> = {
   AudioEngineModule: audioEngineModule,
   PluginHostModule: pluginHostModule,
   CollabNetworkDiagnostics: collabNetworkDiagnosticsModule,
+  AudioSampleLoaderModule: audioSampleLoaderModule,
+  DaftCitadelDirectories: {
+    sessionDirectory: '/tmp/daft-citadel',
+  },
 };
 
 export class NativeEventEmitter extends MockNativeEventEmitter {
