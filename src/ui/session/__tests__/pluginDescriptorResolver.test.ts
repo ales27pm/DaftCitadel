@@ -112,6 +112,50 @@ describe('createPluginDescriptorResolver', () => {
     expect(listAvailablePlugins).toHaveBeenCalledTimes(1);
   });
 
+  it('refreshes cached descriptors when metadata targets a different identifier', async () => {
+    const descriptorA = createDescriptor({
+      identifier: 'com.daftcitadel.echo',
+      name: 'Echo Chamber',
+      format: 'auv3',
+    });
+    const descriptorB = createDescriptor({
+      identifier: 'com.daftcitadel.echo.v2',
+      name: 'Echo Chamber MkII',
+      format: 'vst3',
+    });
+    const listAvailablePlugins: ListPluginsMock = jest.fn(async () => [
+      descriptorA,
+      descriptorB,
+    ]);
+    const resolver = createPluginDescriptorResolver({
+      listAvailablePlugins,
+    } as unknown as PluginHost);
+
+    const instanceId = 'session-plugin-echo';
+    const initialNode = createPluginNode({
+      instanceId,
+      metadata: {
+        descriptorId: descriptorA.identifier,
+        format: descriptorA.format,
+      },
+      label: 'Echo Chamber',
+    });
+
+    await expect(resolver(instanceId, initialNode)).resolves.toBe(descriptorA);
+
+    const swappedNode = {
+      ...initialNode,
+      metadata: {
+        descriptorId: descriptorB.identifier,
+        format: descriptorB.format,
+      },
+      label: 'Echo Chamber MkII',
+    } as TestPluginNode;
+
+    await expect(resolver(instanceId, swappedNode)).resolves.toBe(descriptorB);
+    expect(listAvailablePlugins).toHaveBeenCalledTimes(1);
+  });
+
   it('warns once when a descriptor cannot be resolved', async () => {
     const descriptors: PluginDescriptor[] = [
       createDescriptor({ identifier: 'com.daftcitadel.echo', name: 'Echo Chamber' }),
