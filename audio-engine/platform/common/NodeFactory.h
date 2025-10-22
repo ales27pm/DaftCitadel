@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cctype>
 #include <cstddef>
@@ -16,9 +17,9 @@
 #include "audio_engine/PluginNode.h"
 
 #if defined(__ANDROID__)
-#include "audio-engine/platform/android/AudioEngineBridge.h"
+#include "../android/AudioEngineBridge.h"
 #else
-#include "audio-engine/platform/ios/AudioEngineBridge.hpp"
+#include "../ios/AudioEngineBridge.hpp"
 #endif
 
 /**
@@ -65,37 +66,8 @@ inline std::string normalize(std::string value) {
   return value;
 }
 
-inline bool parseBoolean(const NodeOptions& options, const std::string& key, bool defaultValue = false) {
-  if (const auto numeric = options.numericValue(key)) {
-    return std::fabs(*numeric) > std::numeric_limits<double>::epsilon();
-  }
-  if (auto stringValue = options.stringValue(key)) {
-    auto normalized = normalize(*stringValue);
-    if (normalized == "true" || normalized == "yes" || normalized == "on") {
-      return true;
-    }
-    if (normalized == "false" || normalized == "no" || normalized == "off") {
-      return false;
-    }
-  }
-  return defaultValue;
-}
-
-inline std::optional<std::string> stringFromOptions(const NodeOptions& options, const std::string& key) {
-  if (auto str = options.stringValue(key)) {
-    if (!str->empty()) {
-      return str;
-    }
-  }
-  if (auto numeric = options.numericValue(key)) {
-    if (auto converted = toIntegerString(*numeric)) {
-      if (!converted->empty()) {
-        return converted;
-      }
-    }
-  }
-  return std::nullopt;
-}
+bool parseBoolean(const NodeOptions& options, const std::string& key, bool defaultValue = false);
+std::optional<std::string> stringFromOptions(const NodeOptions& options, const std::string& key);
 
 template <typename T>
 inline void applyParameters(T& node, const NodeOptions& options, const std::initializer_list<std::string>& excluded = {}) {
@@ -188,7 +160,8 @@ inline std::unique_ptr<daft::audio::DSPNode> CreateNode(const std::string& type,
     descriptor.key = *key;
     descriptor.sampleRate = clipBuffer->sampleRate;
     descriptor.frameCount = clipBuffer->frameCount;
-    descriptor.owner = clipBuffer;
+    descriptor.owner =
+        std::const_pointer_cast<void>(std::static_pointer_cast<const void>(clipBuffer));
     const auto channelCount = clipBuffer->channelCount();
     if (channelCount == 0 || clipBuffer->frameCount == 0) {
       error = "clip buffer '" + *key + "' has no audio data";
@@ -234,17 +207,22 @@ inline std::unique_ptr<daft::audio::DSPNode> CreateNode(const std::string& type,
     }
 
     daft::audio::PluginBusCapabilities capabilities{};
-    capabilities.acceptsAudio = detail::parseBoolean(options, "acceptsaudio");
-    capabilities.emitsAudio = detail::parseBoolean(options, "emitsaudio");
-    capabilities.acceptsMidi = detail::parseBoolean(options, "acceptsmidi");
-    capabilities.emitsMidi = detail::parseBoolean(options, "emitsmidi");
-    capabilities.acceptsSidechain = detail::parseBoolean(options, "acceptssidechain");
-    capabilities.emitsSidechain = detail::parseBoolean(options, "emitssidechain");
+    const std::array<std::pair<const char*, bool*>, 6> capabilityMap = {{
+        {"acceptsaudio", &capabilities.acceptsAudio},
+        {"emitsaudio", &capabilities.emitsAudio},
+        {"acceptsmidi", &capabilities.acceptsMidi},
+        {"emitsmidi", &capabilities.emitsMidi},
+        {"acceptssidechain", &capabilities.acceptsSidechain},
+        {"emitssidechain", &capabilities.emitsSidechain},
+    }};
+    for (const auto& [key, flag] : capabilityMap) {
+      *flag = detail::parseBoolean(options, key);
+    }
 
     auto node = std::make_unique<daft::audio::PluginNode>(*hostId, capabilities);
     detail::applyParameters(*node, options,
-                           {"hostinstanceid", "acceptsaudio", "acceptsmidi", "acceptssidechain", "emitsaudio",
-                            "emitsmidi", "emitssidechain"});
+                           {"hostinstanceid", "acceptsaudio", "emitsaudio", "acceptsmidi", "emitsmidi",
+                            "acceptssidechain", "emitssidechain"});
     return node;
   }
 
