@@ -75,20 +75,19 @@ NodeOptions ConvertOptions(NSDictionary* options) {
       if (trimmed.empty()) {
         continue;
       }
+      converted.setString(normalizedKey, trimmed);
       const std::string lowered = ToLowerCopy(trimmed);
       if (lowered == "true" || lowered == "yes" || lowered == "on") {
         converted.setNumeric(normalizedKey, 1.0);
-        continue;
-      }
-      if (lowered == "false" || lowered == "no" || lowered == "off") {
+      } else if (lowered == "false" || lowered == "no" || lowered == "off") {
         converted.setNumeric(normalizedKey, 0.0);
-        continue;
-      }
-      try {
-        const double parsed = std::stod(trimmed);
-        converted.setNumeric(normalizedKey, parsed);
-      } catch (const std::exception&) {
-        converted.setString(normalizedKey, trimmed);
+      } else {
+        try {
+          const double parsed = std::stod(trimmed);
+          converted.setNumeric(normalizedKey, parsed);
+        } catch (const std::exception&) {
+          // keep as string only
+        }
       }
     }
   }

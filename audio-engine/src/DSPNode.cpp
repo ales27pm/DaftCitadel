@@ -100,6 +100,10 @@ void ClipPlayerNode::setClipBuffer(ClipBufferData data) {
     declaredBufferSampleRate_ = clipBuffer_.sampleRate;
     declaredBufferFrames_ = clipBuffer_.frameCount;
     declaredBufferChannels_ = clipBuffer_.channelCount();
+  } else {
+    declaredBufferSampleRate_ = 0.0;
+    declaredBufferFrames_ = 0;
+    declaredBufferChannels_ = 0;
   }
 }
 
