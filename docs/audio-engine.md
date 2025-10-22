@@ -35,6 +35,23 @@ lanes that align to buffer boundaries for deterministic playback.
    automation point to `SceneGraph::scheduleAutomation`, which queues callbacks in the bounded
    scheduler so parameter updates execute on the exact frame requested.
 
+## Build Prerequisites
+
+Before running the React Native shell against the native engine ensure the runtime matches the
+assumptions baked into `createProductionSessionEnvironment`:
+
+- **Sample rate** – The engine expects a 48 kHz output device. On iOS set
+  `AVAudioSession.sharedInstance().setPreferredSampleRate(48000)` before the TurboModule loads.
+  On Android request a 48 kHz output with `AudioTrack`/`AAudio` attributes or fall back to
+  `AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE`.
+- **Frames per buffer** – Both mobile platforms should target a 256 frame quantum to match the
+  render scratch buffers allocated by the C++ bridge. iOS achieves this through
+  `setPreferredIOBufferDuration(256.0 / 48000.0)` and Android by supplying
+  `AudioTrack.getMinBufferSize(sampleRate, channelConfig, format)` tuned for 256 frames.
+- **Error handling** – If the device cannot satisfy the requested configuration the JavaScript
+  bootstrap falls back to a passive environment. Keep the native logging (`os_log` / Logcat)
+  enabled so configuration mismatches can be diagnosed during bring-up.
+
 ## Threading Model
 
 | Thread          | Responsibilities                                                                                        | Real-time Constraints                                                                         |
