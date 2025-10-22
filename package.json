@@ -10,6 +10,7 @@
     "manage:agents": "node scripts/manageAgents.js"
   },
   "dependencies": {
+    "@react-native-async-storage/async-storage": "^2.2.0",
     "@react-navigation/bottom-tabs": "^6.5.20",
     "@react-navigation/native": "^6.1.17",
     "@react-navigation/native-stack": "^6.9.25",
@@ -81,7 +82,8 @@
       "^react-native$": "<rootDir>/__mocks__/react-native.ts",
       "^react-native-reanimated$": "<rootDir>/__mocks__/react-native-reanimated.ts",
       "^@shopify/react-native-skia$": "<rootDir>/__mocks__/@shopify/react-native-skia.ts",
-      "^react-native-webrtc$": "<rootDir>/__mocks__/react-native-webrtc.ts"
+      "^react-native-webrtc$": "<rootDir>/__mocks__/react-native-webrtc.ts",
+      "^@react-native-async-storage/async-storage$": "<rootDir>/__mocks__/@react-native-async-storage/async-storage.ts"
     }
   }
 }

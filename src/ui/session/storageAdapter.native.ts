@@ -1,8 +1,6 @@
 import type { SessionStorageAdapter } from '../../session/storage';
-import { InMemorySessionStorageAdapter } from '../../session/storage/memoryAdapter';
+import { AsyncStorageSessionStorageAdapter } from '../../session/storage/asyncStorageAdapter.native';
 
-export const createSessionStorageAdapter = (
-  _directory: string,
-): SessionStorageAdapter => {
-  return new InMemorySessionStorageAdapter();
+export const createSessionStorageAdapter = (directory: string): SessionStorageAdapter => {
+  return new AsyncStorageSessionStorageAdapter(directory);
 };
