@@ -1,14 +1,11 @@
 import { NativeModules, Platform } from 'react-native';
 
-import {
-  AudioEngineBridge,
-  InMemorySessionStorageAdapter,
-  JsonSessionStorageAdapter,
-  Session,
-  SessionManager,
-  SessionStorageAdapter,
-} from '../../session';
+import type { Session } from '../../session/models';
 import { demoSession, DEMO_SESSION_ID } from '../../session/fixtures/demoSession';
+import { InMemorySessionStorageAdapter } from '../../session/storage/memoryAdapter';
+import type { SessionStorageAdapter } from '../../session/storage';
+import { SessionManager } from '../../session/sessionManager';
+import type { AudioEngineBridge } from '../../session/sessionManager';
 import {
   AudioEngine,
   NativeAudioFileLoader,
@@ -19,6 +16,7 @@ import {
   isPluginHostAvailable,
   type AudioFileLoader,
 } from '../../audio';
+import { createSessionStorageAdapter } from './storageAdapter';
 
 class PassiveAudioEngineBridge implements AudioEngineBridge {
   private lastSession: Session | null = null;
@@ -73,7 +71,7 @@ export const createPassiveSessionEnvironment = async (
   options: PassiveEnvironmentOptions = {},
 ): Promise<SessionEnvironment> => {
   const sessionId = options.sessionId ?? DEMO_SESSION_ID;
-  const storage = new JsonSessionStorageAdapter(
+  const storage = createSessionStorageAdapter(
     resolveStorageDirectory(options.storageDirectory),
   );
   await storage.initialize();
@@ -106,7 +104,7 @@ export const createProductionSessionEnvironment = async (
     fileLoader,
     pluginHost: pluginHost ?? undefined,
   });
-  const storage = new JsonSessionStorageAdapter(
+  const storage = createSessionStorageAdapter(
     resolveStorageDirectory(options.storageDirectory),
   );
   await storage.initialize();
@@ -180,16 +178,16 @@ const resolveStorageDirectory = (override?: string): string => {
 };
 
 const joinPath = (...segments: Array<string | undefined>): string => {
-  const normalized = segments
+  const parts = segments
     .filter((segment): segment is string => Boolean(segment && segment.length > 0))
     .map((segment) => segment.replace(/^\/+|\/+$/g, ''))
     .filter((segment) => segment.length > 0);
-  return normalized.reduce((acc, segment) => {
-    if (!acc) {
-      return segment;
-    }
-    return `${acc}/${segment}`;
-  }, '');
+  if (parts.length === 0) {
+    return '';
+  }
+  const hasRoot = segments.some((segment) => segment?.startsWith('/'));
+  const joined = parts.join('/');
+  return hasRoot ? `/${joined}` : joined;
 };
 
 const instantiatePluginHost = (): PluginHost | null => {
