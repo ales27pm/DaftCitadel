@@ -672,47 +672,42 @@ export class SessionAudioBridge {
     activePluginInstances: Set<string>,
   ): Promise<void> {
     const resolver = this.resolvePluginDescriptor;
-    const staleBindings: Array<[string, PluginInstanceBinding]> = [];
+    const staleBindings = Array.from(this.pluginBindings.entries()).filter(
+      ([instanceId]) => !activePluginInstances.has(instanceId),
+    );
 
-    this.pluginBindings.forEach((binding, instanceId) => {
-      if (!activePluginInstances.has(instanceId)) {
-        staleBindings.push([instanceId, binding]);
-        resolver?.clearInstance?.(instanceId);
-      }
+    staleBindings.forEach(([instanceId]) => {
+      resolver?.clearInstance?.(instanceId);
     });
 
+    const releases = staleBindings.map(([instanceId, binding]) =>
+      (this.pluginHost
+        ? this.safeReleasePlugin(binding.hostInstanceId, instanceId)
+        : Promise.resolve()
+      ).then(() => {
+        this.pluginBindings.delete(instanceId);
+      }),
+    );
+
+    await Promise.all(releases);
+
     if (!this.pluginHost) {
-      if (this.pluginBindings.size > 0) {
-        if (activePluginInstances.size === 0) {
-          this.pluginBindings.clear();
-        } else {
-          staleBindings.forEach(([instanceId]) => {
-            this.pluginBindings.delete(instanceId);
-          });
-        }
+      if (activePluginInstances.size === 0) {
+        this.pluginBindings.clear();
       }
       return;
     }
 
-    const releases: Array<Promise<void>> = [];
-    staleBindings.forEach(([instanceId, binding]) => {
-      releases.push(
-        this.safeReleasePlugin(binding.hostInstanceId, instanceId).then(() => {
-          this.pluginBindings.delete(instanceId);
-        }),
-      );
-    });
-    await Promise.all(releases);
-
     if (activePluginInstances.size === 0) {
       this.pluginAutomationState.clear();
-    } else {
-      this.pluginAutomationState.forEach((_signature, key) => {
-        const [instanceId] = key.split(':');
-        if (!activePluginInstances.has(instanceId)) {
-          this.pluginAutomationState.delete(key);
-        }
-      });
+      return;
+    }
+
+    for (const key of Array.from(this.pluginAutomationState.keys())) {
+      const [instanceId] = key.split(':');
+      if (!activePluginInstances.has(instanceId)) {
+        this.pluginAutomationState.delete(key);
+      }
     }
   }
 
