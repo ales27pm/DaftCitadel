@@ -72,12 +72,12 @@ void ThrowJavaException(JNIEnv* env, const char* className, const std::string& m
 }
 
 /**
- * @brief Converts a Java Map<String, Object> into a NodeOptions map with numeric values.
+ * @brief Converts a Java Map<String, Object> into a NodeOptions structure.
  *
  * Keys are normalized to lowercase; values are converted to doubles when possible:
  * - Java Numbers are stored as their double value.
  * - Java Booleans are stored as `1.0` for `true` and `0.0` for `false`.
- * - Java Strings are parsed as doubles and stored if parsing succeeds; unparsable strings are ignored.
+ * - Java Strings are parsed as doubles and stored if parsing succeeds; unparsable strings are retained as strings.
  *
  * @param env JNI environment pointer.
  * @param map Java `java.util.Map<String, Object>` instance to convert. If `nullptr`, an empty NodeOptions is returned.
@@ -124,16 +124,16 @@ NodeOptions ConvertOptions(JNIEnv* env, jobject map) {
     if (valueObject != nullptr) {
       if (env->IsInstanceOf(valueObject, numberClass) == JNI_TRUE) {
         const double numeric = env->CallDoubleMethod(valueObject, doubleValueMethod);
-        options[key] = numeric;
+        options.setNumeric(key, numeric);
       } else if (env->IsInstanceOf(valueObject, booleanClass) == JNI_TRUE) {
         const jboolean flag = env->CallBooleanMethod(valueObject, booleanValueMethod);
-        options[key] = flag ? 1.0 : 0.0;
+        options.setNumeric(key, flag ? 1.0 : 0.0);
       } else if (env->IsInstanceOf(valueObject, stringClass) == JNI_TRUE) {
         auto str = ToStdString(env, static_cast<jstring>(valueObject));
         try {
-          options[key] = std::stod(str);
+          options.setNumeric(key, std::stod(str));
         } catch (const std::exception&) {
-          // ignore strings that cannot be parsed into numbers
+          options.setString(key, std::move(str));
         }
       }
     }
