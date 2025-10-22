@@ -7,6 +7,12 @@ type ChannelPayload =
   | ReadonlyArray<number>
   | { buffer: ArrayBuffer; byteOffset: number; byteLength: number };
 
+type NormalizedChannel = {
+  buffer: ArrayBuffer;
+  byteOffset: number;
+  byteLength: number;
+};
+
 const isArrayBufferPayload = (value: unknown): value is ArrayBuffer => {
   if (value instanceof ArrayBuffer) {
     return true;
@@ -45,31 +51,41 @@ const isNumericArray = (value: unknown): value is ReadonlyArray<number> => {
   return true;
 };
 
-const normalizeChannelPayload = (payload: ChannelPayload): ArrayBuffer => {
+const normalizeChannelPayload = (payload: ChannelPayload): NormalizedChannel => {
   if (isArrayBufferPayload(payload)) {
-    return payload;
+    return {
+      buffer: payload,
+      byteOffset: 0,
+      byteLength: payload.byteLength,
+    };
   }
   if (isArrayBufferViewPayload(payload)) {
     if (!(payload instanceof Float32Array)) {
       throw new Error('channelData typed views must be Float32Array (Float32 PCM)');
     }
-    return payload.buffer.slice(
-      payload.byteOffset,
-      payload.byteOffset + payload.byteLength,
-    );
+    return {
+      buffer: payload.buffer,
+      byteOffset: payload.byteOffset,
+      byteLength: payload.byteLength,
+    };
   }
   if (isNodeBufferLike(payload)) {
-    return payload.buffer.slice(
-      payload.byteOffset,
-      payload.byteOffset + payload.byteLength,
-    );
+    return {
+      buffer: payload.buffer,
+      byteOffset: payload.byteOffset,
+      byteLength: payload.byteLength,
+    };
   }
   if (isNumericArray(payload)) {
     const channel = new Float32Array(payload.length);
     for (let i = 0; i < payload.length; i += 1) {
       channel[i] = payload[i];
     }
-    return channel.buffer;
+    return {
+      buffer: channel.buffer,
+      byteOffset: channel.byteOffset,
+      byteLength: channel.byteLength,
+    };
   }
   throw new Error(
     'channelData entries must be ArrayBuffers, Float32Array views, Node Buffers, or numeric arrays',
@@ -164,17 +180,40 @@ export class AudioEngine {
     const bytesPerSample = 4; // Float32 PCM
     const normalizedChannels = channelData.map((payload, index) => {
       const source = normalizeChannelPayload(payload);
-      if (source.byteLength % bytesPerSample !== 0) {
+      let workingBuffer = source.buffer;
+      let byteOffset = source.byteOffset;
+      let byteLength = source.byteLength;
+
+      const hasAlignmentMetadata =
+        Number.isInteger(byteOffset) && Number.isInteger(byteLength);
+
+      if (
+        hasAlignmentMetadata &&
+        (byteOffset % bytesPerSample !== 0 || byteLength % bytesPerSample !== 0)
+      ) {
+        const alignedCopy = new Uint8Array(byteLength);
+        alignedCopy.set(new Uint8Array(workingBuffer, byteOffset, byteLength));
+        workingBuffer = alignedCopy.buffer;
+        byteOffset = 0;
+        byteLength = alignedCopy.byteLength;
+      }
+
+      const contiguousBuffer =
+        byteOffset === 0 && byteLength === workingBuffer.byteLength
+          ? workingBuffer
+          : workingBuffer.slice(byteOffset, byteOffset + byteLength);
+
+      if (contiguousBuffer.byteLength % bytesPerSample !== 0) {
         throw new Error(
-          `channelData[${index}] byteLength ${source.byteLength} is not 4-byte aligned for Float32 PCM`,
+          `channelData[${index}] byteLength ${contiguousBuffer.byteLength} is not 4-byte aligned for Float32 PCM`,
         );
       }
-      if (source.byteLength < frames * bytesPerSample) {
+      if (contiguousBuffer.byteLength < frames * bytesPerSample) {
         throw new Error(
-          `channelData[${index}] byteLength ${source.byteLength} is insufficient for ${frames} frames`,
+          `channelData[${index}] byteLength ${contiguousBuffer.byteLength} is insufficient for ${frames} frames`,
         );
       }
-      return source;
+      return contiguousBuffer;
     });
     await NativeAudioEngine.registerClipBuffer(
       bufferKey,
