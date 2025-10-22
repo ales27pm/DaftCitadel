@@ -68,27 +68,26 @@ NodeOptions ConvertOptions(NSDictionary* options) {
     }
     const std::string normalizedKey = NormalizeKey(key);
     if ([value isKindOfClass:[NSNumber class]]) {
-      converted[normalizedKey] = [value doubleValue];
+      converted.setNumeric(normalizedKey, [value doubleValue]);
     } else if ([value isKindOfClass:[NSString class]]) {
       NSString* stringValue = (NSString*)value;
       std::string trimmed = Trim([stringValue UTF8String] ? [stringValue UTF8String] : "");
       if (trimmed.empty()) {
         continue;
       }
+      converted.setString(normalizedKey, trimmed);
       const std::string lowered = ToLowerCopy(trimmed);
       if (lowered == "true" || lowered == "yes" || lowered == "on") {
-        converted[normalizedKey] = 1.0;
-        continue;
-      }
-      if (lowered == "false" || lowered == "no" || lowered == "off") {
-        converted[normalizedKey] = 0.0;
-        continue;
-      }
-      try {
-        const double parsed = std::stod(trimmed);
-        converted[normalizedKey] = parsed;
-      } catch (const std::exception&) {
-        os_log_info(ModuleLogger(), "Ignoring non-numeric option '%@' for key %{public}@", stringValue, key);
+        converted.setNumeric(normalizedKey, 1.0);
+      } else if (lowered == "false" || lowered == "no" || lowered == "off") {
+        converted.setNumeric(normalizedKey, 0.0);
+      } else {
+        try {
+          const double parsed = std::stod(trimmed);
+          converted.setNumeric(normalizedKey, parsed);
+        } catch (const std::exception&) {
+          // keep as string only
+        }
       }
     }
   }

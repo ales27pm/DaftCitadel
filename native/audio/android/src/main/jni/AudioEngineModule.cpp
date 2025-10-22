@@ -51,6 +51,26 @@ std::string NormalizeKey(const std::string& key) {
   return normalized;
 }
 
+std::string TrimCopy(std::string value) {
+  const auto first = std::find_if_not(value.begin(), value.end(), [](unsigned char c) {
+    return std::isspace(c) != 0;
+  });
+  const auto last = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c) {
+                    return std::isspace(c) != 0;
+                  }).base();
+  if (first >= last) {
+    return std::string();
+  }
+  return std::string(first, last);
+}
+
+std::string ToLowerCopy(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  return value;
+}
+
 /**
  * @brief Throws a Java exception of the specified class with the provided message.
  *
@@ -72,16 +92,18 @@ void ThrowJavaException(JNIEnv* env, const char* className, const std::string& m
 }
 
 /**
- * @brief Converts a Java Map<String, Object> into a NodeOptions map with numeric values.
+ * @brief Converts a Java Map<String, Object> into a NodeOptions structure.
  *
  * Keys are normalized to lowercase; values are converted to doubles when possible:
  * - Java Numbers are stored as their double value.
  * - Java Booleans are stored as `1.0` for `true` and `0.0` for `false`.
- * - Java Strings are parsed as doubles and stored if parsing succeeds; unparsable strings are ignored.
+ * - Java Strings are trimmed; boolean-like strings ("true"/"yes"/"on" and "false"/"no"/"off")
+ *   are converted to 1.0/0.0. Other strings are parsed as doubles when possible while
+ *   preserving the original trimmed value in the string map.
  *
  * @param env JNI environment pointer.
  * @param map Java `java.util.Map<String, Object>` instance to convert. If `nullptr`, an empty NodeOptions is returned.
- * @return NodeOptions A map from normalized (lowercase) keys to double values representing the converted entries.
+ * @return NodeOptions Populated with normalized keys stored via `setNumeric`/`setString`.
  */
 NodeOptions ConvertOptions(JNIEnv* env, jobject map) {
   NodeOptions options;
@@ -124,16 +146,30 @@ NodeOptions ConvertOptions(JNIEnv* env, jobject map) {
     if (valueObject != nullptr) {
       if (env->IsInstanceOf(valueObject, numberClass) == JNI_TRUE) {
         const double numeric = env->CallDoubleMethod(valueObject, doubleValueMethod);
-        options[key] = numeric;
+        options.setNumeric(key, numeric);
       } else if (env->IsInstanceOf(valueObject, booleanClass) == JNI_TRUE) {
         const jboolean flag = env->CallBooleanMethod(valueObject, booleanValueMethod);
-        options[key] = flag ? 1.0 : 0.0;
+        options.setNumeric(key, flag ? 1.0 : 0.0);
       } else if (env->IsInstanceOf(valueObject, stringClass) == JNI_TRUE) {
-        auto str = ToStdString(env, static_cast<jstring>(valueObject));
-        try {
-          options[key] = std::stod(str);
-        } catch (const std::exception&) {
-          // ignore strings that cannot be parsed into numbers
+        std::string raw = ToStdString(env, static_cast<jstring>(valueObject));
+        std::string trimmed = TrimCopy(std::move(raw));
+        if (trimmed.empty()) {
+          // Ignore empty strings.
+        } else {
+          options.setString(key, trimmed);
+          const std::string lowered = ToLowerCopy(trimmed);
+          if (lowered == "true" || lowered == "yes" || lowered == "on") {
+            options.setNumeric(key, 1.0);
+          } else if (lowered == "false" || lowered == "no" || lowered == "off") {
+            options.setNumeric(key, 0.0);
+          } else {
+            try {
+              const double parsed = std::stod(trimmed);
+              options.setNumeric(key, parsed);
+            } catch (const std::exception&) {
+              // keep as string only
+            }
+          }
         }
       }
     }
