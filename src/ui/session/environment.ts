@@ -227,6 +227,19 @@ type PluginNodeMetadata = {
   format?: PluginFormat;
 };
 
+type NormalizedMetadata = {
+  identifiers: string[];
+  names: string[];
+  manufacturer?: string;
+  format?: PluginFormat;
+};
+
+type NormalizedDescriptorFields = {
+  identifier?: string;
+  manufacturer?: string;
+  name?: string;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
 
@@ -270,6 +283,38 @@ const extractMetadata = (node: PluginRoutingNode): PluginNodeMetadata => {
 const normalize = (value: string | undefined): string | undefined =>
   value ? value.trim().toLowerCase() : undefined;
 
+const descriptorNormalizationCache = new WeakMap<
+  PluginDescriptor,
+  NormalizedDescriptorFields
+>();
+
+const getNormalizedDescriptorFields = (
+  descriptor: PluginDescriptor,
+): NormalizedDescriptorFields => {
+  const cached = descriptorNormalizationCache.get(descriptor);
+  if (cached) {
+    return cached;
+  }
+  const normalized: NormalizedDescriptorFields = {
+    identifier: normalize(descriptor.identifier),
+    manufacturer: normalize(descriptor.manufacturer),
+    name: normalize(descriptor.name),
+  };
+  descriptorNormalizationCache.set(descriptor, normalized);
+  return normalized;
+};
+
+const normalizeMetadataFields = (metadata: PluginNodeMetadata): NormalizedMetadata => ({
+  identifiers: [metadata.descriptorId, metadata.pluginIdentifier, metadata.identifier]
+    .map((value) => normalize(value))
+    .filter((value): value is string => Boolean(value)),
+  names: [metadata.pluginName, metadata.name]
+    .map((value) => normalize(value))
+    .filter((value): value is string => Boolean(value)),
+  manufacturer: normalize(metadata.manufacturer),
+  format: metadata.format,
+});
+
 function createPluginDescriptorResolver(
   pluginHost: Pick<PluginHost, 'listAvailablePlugins'>,
 ): PluginDescriptorResolver {
@@ -280,6 +325,8 @@ function createPluginDescriptorResolver(
   const instanceSlotById = new Map<string, string>();
   type SlotAssociation = { descriptor: PluginDescriptor; instanceId: string };
   const slotAssociations = new Map<string, SlotAssociation>();
+  type InstanceAssociation = SlotAssociation & { slot: string };
+  const associationByInstanceId = new Map<string, InstanceAssociation>();
   const warnedMissing = new Set<string>();
   let catalogFailureLogged = false;
 
@@ -434,16 +481,18 @@ function createPluginDescriptorResolver(
   ) => {
     instanceKeyById.set(instanceId, cacheKey);
 
-    const previousSlot = instanceSlotById.get(instanceId);
-    if (previousSlot && previousSlot !== slot) {
-      const previousAssociation = slotAssociations.get(previousSlot);
-      if (!previousAssociation || previousAssociation.instanceId === instanceId) {
-        slotAssociations.delete(previousSlot);
+    const previousAssociation = associationByInstanceId.get(instanceId);
+    if (previousAssociation && previousAssociation.slot !== slot) {
+      const current = slotAssociations.get(previousAssociation.slot);
+      if (!current || current.instanceId === instanceId) {
+        slotAssociations.delete(previousAssociation.slot);
       }
     }
 
+    const association: SlotAssociation = { descriptor, instanceId };
     instanceSlotById.set(instanceId, slot);
-    slotAssociations.set(slot, { descriptor, instanceId });
+    slotAssociations.set(slot, association);
+    associationByInstanceId.set(instanceId, { ...association, slot });
   };
 
   const cacheDescriptor = (
@@ -464,69 +513,60 @@ function createPluginDescriptorResolver(
       instanceCache.delete(cacheKey);
       instanceKeyById.delete(instanceId);
     }
-    let slot = instanceSlotById.get(instanceId);
-    if (!slot) {
-      for (const [candidateSlot, association] of slotAssociations.entries()) {
-        if (association.instanceId === instanceId) {
-          slot = candidateSlot;
-          break;
-        }
+    const association = associationByInstanceId.get(instanceId);
+    if (association) {
+      const currentAssociation = slotAssociations.get(association.slot);
+      if (!currentAssociation || currentAssociation.instanceId === instanceId) {
+        slotAssociations.delete(association.slot);
+      }
+      associationByInstanceId.delete(instanceId);
+    }
+
+    const fallbackSlot = instanceSlotById.get(instanceId);
+    if (fallbackSlot && (!association || association.slot !== fallbackSlot)) {
+      const currentAssociation = slotAssociations.get(fallbackSlot);
+      if (!currentAssociation || currentAssociation.instanceId === instanceId) {
+        slotAssociations.delete(fallbackSlot);
       }
     }
-    if (slot) {
-      const association = slotAssociations.get(slot);
-      if (!association || association.instanceId === instanceId) {
-        slotAssociations.delete(slot);
-      }
-      instanceSlotById.delete(instanceId);
-    }
+
+    instanceSlotById.delete(instanceId);
     warnedMissing.delete(instanceId);
   };
 
   const canReuseSlotAssociation = (
     association: SlotAssociation,
-    metadata: PluginNodeMetadata,
+    metadata: NormalizedMetadata,
   ): boolean => {
     if (metadata.format && association.descriptor.format !== metadata.format) {
       return false;
     }
 
-    const normalizedDescriptorId = normalize(association.descriptor.identifier);
-    const metadataIdentifiers = [
-      metadata.descriptorId,
-      metadata.pluginIdentifier,
-      metadata.identifier,
-    ]
-      .map((value) => normalize(value))
-      .filter((value): value is string => Boolean(value));
+    const descriptorFields = getNormalizedDescriptorFields(association.descriptor);
 
     if (
-      metadataIdentifiers.length > 0 &&
-      (!normalizedDescriptorId || !metadataIdentifiers.includes(normalizedDescriptorId))
+      metadata.identifiers.length > 0 &&
+      (!descriptorFields.identifier ||
+        !metadata.identifiers.includes(descriptorFields.identifier))
     ) {
       return false;
     }
 
-    const normalizedManufacturer = normalize(metadata.manufacturer);
-    if (normalizedManufacturer) {
-      const descriptorManufacturer = normalize(association.descriptor.manufacturer);
-      if (descriptorManufacturer !== normalizedManufacturer) {
+    if (metadata.manufacturer && descriptorFields.manufacturer) {
+      if (descriptorFields.manufacturer !== metadata.manufacturer) {
         return false;
       }
+    } else if (metadata.manufacturer && !descriptorFields.manufacturer) {
+      return false;
     }
 
-    const metadataNames = [metadata.pluginName, metadata.name]
-      .map((value) => normalize(value))
-      .filter((value): value is string => Boolean(value));
-    if (metadataNames.length > 0) {
-      const descriptorName = normalize(association.descriptor.name);
-      const descriptorIdentifier = normalizedDescriptorId;
-      const matchesName = metadataNames.some(
+    if (metadata.names.length > 0) {
+      const matchesName = metadata.names.some(
         (name) =>
-          descriptorName === name ||
-          descriptorIdentifier === name ||
-          descriptorName?.includes(name) ||
-          descriptorIdentifier?.includes(name),
+          descriptorFields.name === name ||
+          descriptorFields.identifier === name ||
+          descriptorFields.name?.includes(name) ||
+          descriptorFields.identifier?.includes(name),
       );
       if (!matchesName) {
         return false;
@@ -539,6 +579,7 @@ function createPluginDescriptorResolver(
   const resolver: PluginDescriptorResolver = Object.assign(
     async (instanceId: string, node: PluginRoutingNode) => {
       const metadata = extractMetadata(node);
+      const normalizedMetadata = normalizeMetadataFields(metadata);
       const metadataKey = computeMetadataKey(metadata, node);
       const cacheKey = buildInstanceCacheKey(instanceId, metadataKey);
       const currentKey = instanceKeyById.get(instanceId);
@@ -575,7 +616,7 @@ function createPluginDescriptorResolver(
           metadata.manufacturer,
         ) ||
         matchByInstanceId(descriptorsByFormat, instanceId) ||
-        (slotAssociation && canReuseSlotAssociation(slotAssociation, metadata)
+        (slotAssociation && canReuseSlotAssociation(slotAssociation, normalizedMetadata)
           ? slotAssociation.descriptor
           : undefined);
 
@@ -601,6 +642,7 @@ function createPluginDescriptorResolver(
         instanceCache.clear();
         instanceKeyById.clear();
         instanceSlotById.clear();
+        associationByInstanceId.clear();
         slotAssociations.clear();
         warnedMissing.clear();
       },
