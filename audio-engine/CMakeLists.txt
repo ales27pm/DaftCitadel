@@ -16,6 +16,7 @@ add_library(daft_audio_engine
     src/Clock.cpp
     src/PluginHost.cpp
     src/PluginNode.cpp
+    platform/common/NodeFactory.cpp
 )
 
 target_include_directories(daft_audio_engine
