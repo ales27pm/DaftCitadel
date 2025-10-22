@@ -26,7 +26,11 @@ target_compile_options(daft_audio_engine PRIVATE -Wall -Wextra -Wpedantic)
 
 if(DAFT_AUDIO_ENGINE_BUILD_TESTS)
     enable_testing()
-    add_executable(daft_audio_engine_tests tests/SchedulerTests.cpp)
+    add_executable(daft_audio_engine_tests
+        tests/TestMain.cpp
+        tests/SchedulerTests.cpp
+        tests/ClipPlayerNodeTests.cpp
+    )
     target_link_libraries(daft_audio_engine_tests PRIVATE daft_audio_engine)
-    add_test(NAME SchedulerTests COMMAND daft_audio_engine_tests)
+    add_test(NAME AudioEngineTests COMMAND daft_audio_engine_tests)
 endif()
