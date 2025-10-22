@@ -91,6 +91,10 @@ thread never touches React Native memory. The flow is:
      before crossing the JNI boundary.
 3. The bridge exposes `AudioEngineBridge::clipBufferForKey` so future clip playback nodes can
    resolve the metadata and channel spans without re-copying data across language boundaries.
+4. When a clip is removed from the session graph, `ClipBufferCache` decrements its reference count
+   and calls `AudioEngine.releaseClipBuffer`, which forwards to
+   `NativeAudioEngine.unregisterClipBuffer`. The native bridge tracks per-buffer reference counts
+   and frees the associated heap allocation once the last reference has been released.
 
 The Jest harness (`src/audio/__tests__/AudioEngineNative.test.ts`) now uploads a clip buffer
 before configuring playback nodes to guarantee coverage of the new registration path and the
@@ -136,5 +140,6 @@ tests.
   `AudioEnginePackage`.
 - **Unit tests** – `src/audio/__tests__/AudioEngineNative.test.ts` performs a smoke test that
   initializes the native module, adds a node, connects it to `OUTPUT_BUS`, and confirms the
-  diagnostics contract. The React Native Jest mock (`__mocks__/react-native.ts`) has been
+  diagnostics contract (including the aggregate `clipBufferBytes` field surfaced by
+  `getRenderDiagnostics`). The React Native Jest mock (`__mocks__/react-native.ts`) has been
   extended to track TurboModule state to keep the test suite green.

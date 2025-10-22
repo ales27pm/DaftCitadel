@@ -18,6 +18,7 @@ export interface AudioEngineSpec extends TurboModule {
     frames: number,
     channelData: ArrayBuffer[],
   ): Promise<void>;
+  unregisterClipBuffer(bufferKey: string): Promise<void>;
   removeNode(nodeId: NodeId): Promise<void>;
   connectNodes(source: NodeId, destination: NodeId): Promise<void>;
   disconnectNodes(source: NodeId, destination: NodeId): Promise<void>;
@@ -30,6 +31,7 @@ export interface AudioEngineSpec extends TurboModule {
   getRenderDiagnostics(): Promise<{
     xruns: number;
     lastRenderDurationMicros: number;
+    clipBufferBytes: number;
   }>;
 }
 

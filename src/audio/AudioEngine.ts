@@ -224,6 +224,13 @@ export class AudioEngine {
     );
   }
 
+  public async releaseClipBuffer(bufferKey: string): Promise<void> {
+    if (typeof bufferKey !== 'string' || bufferKey.length === 0) {
+      throw new Error('bufferKey must be a non-empty string');
+    }
+    await NativeAudioEngine.unregisterClipBuffer(bufferKey);
+  }
+
   public async removeNodes(nodeIds: string[]): Promise<void> {
     if (nodeIds.length === 0) {
       return;

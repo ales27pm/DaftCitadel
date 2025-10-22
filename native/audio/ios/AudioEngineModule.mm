@@ -280,6 +280,23 @@ RCT_EXPORT_METHOD(registerClipBuffer:(NSString*)bufferKey
   resolve(nil);
 }
 
+RCT_EXPORT_METHOD(unregisterClipBuffer:(NSString*)bufferKey
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+  NSString* trimmedKey = [bufferKey stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  if (trimmedKey.length == 0) {
+    RejectPromise(reject, @"invalid_arguments", "bufferKey is required");
+    return;
+  }
+  const bool ok = AudioEngineBridge::unregisterClipBuffer([trimmedKey UTF8String]);
+  if (!ok) {
+    os_log_error(ModuleLogger(), "Failed to unregister clip buffer %{public}@", trimmedKey);
+    RejectPromise(reject, @"unregister_clip_failed", "Failed to unregister clip buffer");
+    return;
+  }
+  resolve(nil);
+}
+
 RCT_EXPORT_METHOD(removeNode:(NSString*)nodeId
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
@@ -373,6 +390,7 @@ RCT_EXPORT_METHOD(getRenderDiagnostics:(RCTPromiseResolveBlock)resolve
     resolve(@{
       @"xruns" : @(static_cast<NSInteger>(diagnostics.xruns)),
       @"lastRenderDurationMicros" : @(diagnostics.lastRenderDurationMicros),
+      @"clipBufferBytes" : @(static_cast<NSInteger>(diagnostics.clipBufferBytes)),
     });
   } catch (const std::exception& ex) {
     os_log_error(ModuleLogger(), "getRenderDiagnostics failed: %{public}s", ex.what());
