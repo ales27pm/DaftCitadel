@@ -19,6 +19,7 @@ class AudioEngineBridge {
   struct RenderDiagnostics {
     std::uint64_t xruns;
     double lastRenderDurationMicros;
+    std::size_t clipBufferBytes;
   };
 
   struct ClipBuffer {
@@ -47,15 +48,22 @@ class AudioEngineBridge {
                                           std::uint64_t frame, double value);
   static bool registerClipBuffer(const std::string& key, double sampleRate, std::size_t channelCount,
                                  std::size_t frameCount, std::vector<std::vector<float>> channelData);
+  static bool unregisterClipBuffer(const std::string& key);
   static std::shared_ptr<const ClipBuffer> clipBufferForKey(const std::string& key);
   static RenderDiagnostics getDiagnostics();
 
  private:
+  struct ClipBufferEntry {
+    std::shared_ptr<ClipBuffer> buffer;
+    std::size_t referenceCount = 0;
+    std::size_t byteSize = 0;
+  };
+
   static std::unique_ptr<SceneGraph> graph_;
   static std::mutex mutex_;
   static std::atomic<std::uint64_t> xruns_;
   static std::atomic<double> lastRenderDurationMicros_;
-  static std::unordered_map<std::string, std::shared_ptr<ClipBuffer>> clipBuffers_;
+  static std::unordered_map<std::string, ClipBufferEntry> clipBuffers_;
 };
 
 }  // namespace daft::audio::bridge

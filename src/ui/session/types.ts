@@ -73,6 +73,7 @@ export interface SessionDiagnosticsView {
   xruns: number;
   renderLoad: number;
   lastRenderDurationMicros?: number;
+  clipBufferBytes?: number;
   error?: Error;
   updatedAt?: number;
 }

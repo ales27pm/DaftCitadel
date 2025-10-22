@@ -15,7 +15,11 @@ type AudioEngineMockState = {
     }
   >;
   connections: Set<string>;
-  diagnostics: { xruns: number; lastRenderDurationMicros: number };
+  diagnostics: {
+    xruns: number;
+    lastRenderDurationMicros: number;
+    clipBufferBytes: number;
+  };
   automations: Map<string, Map<string, { frame: number; value: number }[]>>;
   clipBuffers: Map<
     string,
@@ -24,6 +28,7 @@ type AudioEngineMockState = {
       channels: number;
       frames: number;
       channelData: Float32Array[];
+      byteLength: number;
     }
   >;
 };
@@ -77,7 +82,11 @@ describe('NativeAudioEngine TurboModule', () => {
       expect(state.connections.has(`osc->${OUTPUT_BUS}`)).toBe(true);
 
       const diagnostics = await NativeAudioEngine.getRenderDiagnostics();
-      expect(diagnostics).toEqual({ xruns: 0, lastRenderDurationMicros: 0 });
+      expect(diagnostics).toEqual({
+        xruns: 0,
+        lastRenderDurationMicros: 0,
+        clipBufferBytes: 0,
+      });
 
       const gainLane = new AutomationLane('gain');
       gainLane.addPoint({ frame: 0, value: 0.25 });
@@ -339,6 +348,21 @@ describe('NativeAudioEngine TurboModule', () => {
 
       await NativeAudioEngine.removeNode('osc1');
       expect(state.automations.has('osc1')).toBe(false);
+    });
+
+    it('releases clip buffers and reports reduced diagnostics when unregistered', async () => {
+      const frames = 256;
+      const sampleRate = 48000;
+      const channel = new Float32Array(frames).fill(0.5);
+
+      await engine.uploadClipBuffer('ephemeral', sampleRate, 1, frames, [channel.buffer]);
+
+      let diagnostics = await NativeAudioEngine.getRenderDiagnostics();
+      expect(diagnostics.clipBufferBytes).toBe(frames * Float32Array.BYTES_PER_ELEMENT);
+
+      await engine.releaseClipBuffer('ephemeral');
+      diagnostics = await NativeAudioEngine.getRenderDiagnostics();
+      expect(diagnostics.clipBufferBytes).toBe(0);
     });
   });
 
@@ -648,6 +672,7 @@ describe('NativeAudioEngine TurboModule', () => {
       expect(diagnostics).toEqual({
         xruns: 0,
         lastRenderDurationMicros: 0,
+        clipBufferBytes: 0,
       });
     });
 
@@ -658,27 +683,33 @@ describe('NativeAudioEngine TurboModule', () => {
       const diagnostics = await NativeAudioEngine.getRenderDiagnostics();
       expect(diagnostics.xruns).toBe(0);
       expect(diagnostics.lastRenderDurationMicros).toBe(0);
+      expect(diagnostics.clipBufferBytes).toBe(0);
     });
 
     it('can simulate xruns for testing', async () => {
       const state = resolveMockState();
       state.diagnostics.xruns = 5;
       state.diagnostics.lastRenderDurationMicros = 1250.5;
+      state.diagnostics.clipBufferBytes = 4096;
 
       const diagnostics = await NativeAudioEngine.getRenderDiagnostics();
       expect(diagnostics.xruns).toBe(5);
       expect(diagnostics.lastRenderDurationMicros).toBe(1250.5);
+      expect(diagnostics.clipBufferBytes).toBe(4096);
     });
 
     it('resets diagnostics on shutdown', async () => {
       const state = resolveMockState();
       state.diagnostics.xruns = 10;
       state.diagnostics.lastRenderDurationMicros = 2000;
+      state.diagnostics.clipBufferBytes = 8192;
 
       await engine.dispose();
 
-      expect(state.diagnostics.xruns).toBe(0);
-      expect(state.diagnostics.lastRenderDurationMicros).toBe(0);
+      const diagnostics = await NativeAudioEngine.getRenderDiagnostics();
+      expect(diagnostics.xruns).toBe(0);
+      expect(diagnostics.lastRenderDurationMicros).toBe(0);
+      expect(diagnostics.clipBufferBytes).toBe(0);
     });
   });
 

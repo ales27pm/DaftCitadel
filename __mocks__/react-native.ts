@@ -117,7 +117,11 @@ type AudioEngineMockState = {
   framesPerBuffer: number;
   nodes: Map<string, AudioEngineNode>;
   connections: Set<string>;
-  diagnostics: { xruns: number; lastRenderDurationMicros: number };
+  diagnostics: {
+    xruns: number;
+    lastRenderDurationMicros: number;
+    clipBufferBytes: number;
+  };
   automations: Map<string, Map<string, AutomationPoint[]>>;
   clipBuffers: Map<
     string,
@@ -126,6 +130,7 @@ type AudioEngineMockState = {
       channels: number;
       frames: number;
       channelData: Float32Array[];
+      byteLength: number;
     }
   >;
 };
@@ -136,9 +141,17 @@ const audioEngineState: AudioEngineMockState = {
   framesPerBuffer: 0,
   nodes: new Map(),
   connections: new Set(),
-  diagnostics: { xruns: 0, lastRenderDurationMicros: 0 },
+  diagnostics: { xruns: 0, lastRenderDurationMicros: 0, clipBufferBytes: 0 },
   automations: new Map(),
   clipBuffers: new Map(),
+};
+
+const recomputeClipBufferBytes = () => {
+  let total = 0;
+  audioEngineState.clipBuffers.forEach((entry) => {
+    total += entry.byteLength;
+  });
+  audioEngineState.diagnostics.clipBufferBytes = total;
 };
 
 export const connectionKey = (source: string, destination: string) =>
@@ -153,6 +166,7 @@ const audioEngineModule = {
     audioEngineState.framesPerBuffer = framesPerBuffer;
     audioEngineState.diagnostics.xruns = 0;
     audioEngineState.diagnostics.lastRenderDurationMicros = 0;
+    audioEngineState.diagnostics.clipBufferBytes = 0;
   },
   shutdown: async () => {
     audioEngineState.initialized = false;
@@ -161,6 +175,7 @@ const audioEngineModule = {
     audioEngineState.automations.clear();
     audioEngineState.diagnostics.xruns = 0;
     audioEngineState.diagnostics.lastRenderDurationMicros = 0;
+    audioEngineState.diagnostics.clipBufferBytes = 0;
     audioEngineState.clipBuffers.clear();
   },
   addNode: async (
@@ -222,12 +237,26 @@ const audioEngineModule = {
       }
       return new Float32Array(view.slice(0, frames));
     });
+    const byteLength = frames * channels * Float32Array.BYTES_PER_ELEMENT;
     audioEngineState.clipBuffers.set(key, {
       sampleRate,
       channels,
       frames,
       channelData: floatChannels,
+      byteLength,
     });
+    recomputeClipBufferBytes();
+  },
+  unregisterClipBuffer: async (bufferKey: string) => {
+    const key = bufferKey.trim();
+    if (!key) {
+      throw new Error('bufferKey is required');
+    }
+    if (!audioEngineState.clipBuffers.has(key)) {
+      return;
+    }
+    audioEngineState.clipBuffers.delete(key);
+    recomputeClipBufferBytes();
   },
   removeNode: async (nodeId: string) => {
     const trimmedId = nodeId.trim();
@@ -297,6 +326,7 @@ const audioEngineModule = {
   getRenderDiagnostics: async () => ({
     xruns: audioEngineState.diagnostics.xruns,
     lastRenderDurationMicros: audioEngineState.diagnostics.lastRenderDurationMicros,
+    clipBufferBytes: audioEngineState.diagnostics.clipBufferBytes,
   }),
   __state: audioEngineState,
 };

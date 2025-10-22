@@ -321,6 +321,22 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeRegisterClipBuffer(JNIEnv* en
   }
 }
 
+JNIEXPORT void JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeUnregisterClipBuffer(JNIEnv* env, jobject /*thiz*/, jstring bufferKey) {
+  if (bufferKey == nullptr) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException", "bufferKey is required");
+    return;
+  }
+  const std::string key = ToStdString(env, bufferKey);
+  if (key.empty()) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException", "bufferKey is required");
+    return;
+  }
+  if (!AudioEngineBridge::unregisterClipBuffer(key)) {
+    ThrowJavaException(env, "java/lang/IllegalStateException", "Failed to unregister clip buffer '" + key + "'");
+  }
+}
+
 /**
  * @brief Remove a node from the native audio engine by its identifier.
  *
@@ -407,19 +423,23 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeScheduleAutomation(JNIEnv* en
 /**
  * @brief Retrieve runtime diagnostics from the audio engine.
  *
- * @return jdoubleArray A 2-element double array where element 0 is the number of xruns
- * (`diagnostics.xruns`) and element 1 is the last render duration in microseconds
- * (`diagnostics.lastRenderDurationMicros`). Returns `nullptr` if the Java array cannot be allocated.
+ * @return jdoubleArray A 3-element double array where element 0 is the number of xruns,
+ * element 1 is the last render duration in microseconds, and element 2 is the total
+ * number of bytes retained by registered clip buffers. Returns `nullptr` if allocation fails.
  */
 JNIEXPORT jdoubleArray JNICALL
 Java_com_daftcitadel_audio_AudioEngineModule_nativeGetDiagnostics(JNIEnv* env, jobject /*thiz*/) {
-  jdoubleArray result = env->NewDoubleArray(2);
+  jdoubleArray result = env->NewDoubleArray(3);
   if (result == nullptr) {
     return nullptr;
   }
   const auto diagnostics = AudioEngineBridge::getDiagnostics();
-  const jdouble payload[2] = {static_cast<jdouble>(diagnostics.xruns), diagnostics.lastRenderDurationMicros};
-  env->SetDoubleArrayRegion(result, 0, 2, payload);
+  const jdouble payload[3] = {
+      static_cast<jdouble>(diagnostics.xruns),
+      diagnostics.lastRenderDurationMicros,
+      static_cast<jdouble>(diagnostics.clipBufferBytes),
+  };
+  env->SetDoubleArrayRegion(result, 0, 3, payload);
   return result;
 }
 
