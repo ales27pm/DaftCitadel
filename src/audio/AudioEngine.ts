@@ -98,6 +98,17 @@ export type NodeConfiguration = {
   options?: Record<string, number | string | boolean>;
 };
 
+export type TransportState = {
+  frame: number;
+  isPlaying: boolean;
+};
+
+export type RenderDiagnostics = {
+  xruns: number;
+  lastRenderDurationMicros: number;
+  clipBufferBytes: number;
+};
+
 export class AudioEngine {
   private readonly sampleRate: number;
   private readonly framesPerBuffer: number;
@@ -156,6 +167,58 @@ export class AudioEngine {
 
   public async publishAutomation(nodeId: string, lane: AutomationLane): Promise<void> {
     await publishAutomationLane(nodeId, lane);
+  }
+
+  public async startTransport(): Promise<void> {
+    await NativeAudioEngine.startTransport();
+  }
+
+  public async stopTransport(): Promise<void> {
+    await NativeAudioEngine.stopTransport();
+  }
+
+  public async locateTransport(frame: number): Promise<void> {
+    if (!Number.isFinite(frame)) {
+      throw new Error('frame must be finite');
+    }
+    if (frame < 0) {
+      throw new Error('frame must be non-negative');
+    }
+    await NativeAudioEngine.locateTransport(Math.floor(frame));
+  }
+
+  public async getTransportState(): Promise<TransportState> {
+    const state = await NativeAudioEngine.getTransportState();
+    if (
+      typeof state !== 'object' ||
+      state === null ||
+      !Number.isFinite((state as { currentFrame?: unknown }).currentFrame) ||
+      typeof (state as { isPlaying?: unknown }).isPlaying !== 'boolean'
+    ) {
+      throw new Error('AudioEngine returned invalid transport state');
+    }
+    const currentFrame = Math.max(
+      0,
+      Math.floor((state as { currentFrame: number }).currentFrame),
+    );
+    return {
+      frame: currentFrame,
+      isPlaying: Boolean((state as { isPlaying: boolean }).isPlaying),
+    };
+  }
+
+  public async getRenderDiagnostics(): Promise<RenderDiagnostics> {
+    const diagnostics = await NativeAudioEngine.getRenderDiagnostics();
+    if (
+      typeof diagnostics !== 'object' ||
+      diagnostics === null ||
+      !Number.isFinite(diagnostics.xruns) ||
+      !Number.isFinite(diagnostics.lastRenderDurationMicros) ||
+      !Number.isFinite(diagnostics.clipBufferBytes)
+    ) {
+      throw new Error('AudioEngine returned invalid diagnostics payload');
+    }
+    return diagnostics;
   }
 
   public async uploadClipBuffer(

@@ -31,6 +31,12 @@ type AudioEngineMockState = {
       byteLength: number;
     }
   >;
+  transport: {
+    frame: number;
+    startFrame: number;
+    isPlaying: boolean;
+    lastUpdatedMs: number;
+  };
 };
 
 const resolveMockState = (): AudioEngineMockState => {
@@ -49,6 +55,10 @@ describe('NativeAudioEngine TurboModule', () => {
     state.diagnostics.lastRenderDurationMicros = 0;
     state.automations.clear();
     state.clipBuffers.clear();
+    state.transport.frame = 0;
+    state.transport.startFrame = 0;
+    state.transport.isPlaying = false;
+    state.transport.lastUpdatedMs = Date.now();
   });
 
   describe('Initialization and Lifecycle', () => {
@@ -1004,6 +1014,69 @@ describe('NativeAudioEngine TurboModule', () => {
       }
 
       await engine.dispose();
+    });
+  });
+
+  describe('Transport controls and diagnostics', () => {
+    let engine: AudioEngine;
+
+    beforeEach(async () => {
+      engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      await engine.init();
+    });
+
+    afterEach(async () => {
+      jest.restoreAllMocks();
+      await engine.dispose();
+    });
+
+    it('invokes native transport operations', async () => {
+      const startSpy = jest
+        .spyOn(NativeAudioEngine, 'startTransport')
+        .mockResolvedValue(undefined);
+      const stopSpy = jest
+        .spyOn(NativeAudioEngine, 'stopTransport')
+        .mockResolvedValue(undefined);
+      const locateSpy = jest
+        .spyOn(NativeAudioEngine, 'locateTransport')
+        .mockResolvedValue(undefined);
+
+      await engine.startTransport();
+      expect(startSpy).toHaveBeenCalledTimes(1);
+
+      await engine.stopTransport();
+      expect(stopSpy).toHaveBeenCalledTimes(1);
+
+      await engine.locateTransport(2048);
+      expect(locateSpy).toHaveBeenCalledWith(2048);
+    });
+
+    it('normalizes transport frames and reports playing state', async () => {
+      jest
+        .spyOn(NativeAudioEngine, 'getTransportState')
+        .mockResolvedValueOnce({ currentFrame: 512.6, isPlaying: true });
+      const state = await engine.getTransportState();
+      expect(state).toEqual({ frame: 512, isPlaying: true });
+    });
+
+    it('rejects invalid transport seek positions', async () => {
+      await expect(engine.locateTransport(-1)).rejects.toThrow(
+        'frame must be non-negative',
+      );
+    });
+
+    it('exposes render diagnostics via convenience wrapper', async () => {
+      jest.spyOn(NativeAudioEngine, 'getRenderDiagnostics').mockResolvedValueOnce({
+        xruns: 2,
+        lastRenderDurationMicros: 4200,
+        clipBufferBytes: 8192,
+      });
+      const diagnostics = await engine.getRenderDiagnostics();
+      expect(diagnostics).toEqual({
+        xruns: 2,
+        lastRenderDurationMicros: 4200,
+        clipBufferBytes: 8192,
+      });
     });
   });
 });

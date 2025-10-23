@@ -1,0 +1,1885 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`ArrangementScreen diagnostics renders diagnostics error state 1`] = `
+<SafeAreaView
+  style={
+    {
+      "flex": 1,
+    }
+  }
+>
+  <ScrollView
+    contentInsetAdjustmentBehavior="automatic"
+  >
+    <View
+      accessibilityRole="header"
+      style={
+        [
+          {
+            "alignItems": "center",
+            "flexDirection": "row",
+            "justifyContent": "space-between",
+            "padding": 12,
+          },
+          undefined,
+        ]
+      }
+    >
+      <Text
+        accessibilityRole="text"
+        style={
+          [
+            {
+              "color": "#FFFFFF",
+              "fontFamily": "Inter",
+              "fontSize": 24,
+              "fontWeight": "700",
+              "letterSpacing": 0,
+              "lineHeight": 31.200000000000003,
+            },
+            undefined,
+          ]
+        }
+      >
+        Arrangement
+      </Text>
+      <View
+        style={
+          {
+            "flexDirection": "row",
+          }
+        }
+      >
+        <View
+          style={
+            {
+              "marginLeft": 0,
+            }
+          }
+        >
+          <Pressable
+            accessibilityLabel="Play"
+            accessibilityRole="button"
+            accessibilityState={
+              {
+                "disabled": false,
+              }
+            }
+            disabled={false}
+            onPress={[Function]}
+          >
+            <View
+              style={
+                [
+                  [
+                    {
+                      "alignItems": "center",
+                      "backgroundColor": "#5CFFCA",
+                      "borderRadius": 12,
+                      "justifyContent": "center",
+                      "opacity": 1,
+                      "paddingHorizontal": 20,
+                      "paddingVertical": 8,
+                    },
+                    undefined,
+                  ],
+                  {
+                    "shadowColor": "#5CFFCA",
+                    "shadowOpacity": 1,
+                    "shadowRadius": 16,
+                    "transform": [
+                      {
+                        "scale": 1,
+                      },
+                    ],
+                  },
+                ]
+              }
+            >
+              <Text
+                accessibilityRole="text"
+                style={
+                  [
+                    {
+                      "color": "#FFFFFF",
+                      "fontFamily": "Inter",
+                      "fontSize": 18,
+                      "fontWeight": "600",
+                      "letterSpacing": 0,
+                      "lineHeight": 23.400000000000002,
+                    },
+                    {
+                      "color": "#060A14",
+                    },
+                  ]
+                }
+              >
+                Play
+              </Text>
+            </View>
+          </Pressable>
+        </View>
+        <View
+          style={
+            {
+              "marginLeft": 8,
+            }
+          }
+        >
+          <Pressable
+            accessibilityLabel="Stop"
+            accessibilityRole="button"
+            accessibilityState={
+              {
+                "disabled": true,
+              }
+            }
+            disabled={true}
+            onPress={[Function]}
+          >
+            <View
+              style={
+                [
+                  [
+                    {
+                      "alignItems": "center",
+                      "backgroundColor": "#FF63FF",
+                      "borderRadius": 12,
+                      "justifyContent": "center",
+                      "opacity": 0.38,
+                      "paddingHorizontal": 20,
+                      "paddingVertical": 8,
+                    },
+                    undefined,
+                  ],
+                  {
+                    "shadowColor": "#FF63FF",
+                    "shadowOpacity": 0.38,
+                    "shadowRadius": 16,
+                    "transform": [
+                      {
+                        "scale": 0.98,
+                      },
+                    ],
+                  },
+                ]
+              }
+            >
+              <Text
+                accessibilityRole="text"
+                style={
+                  [
+                    {
+                      "color": "#FFFFFF",
+                      "fontFamily": "Inter",
+                      "fontSize": 18,
+                      "fontWeight": "600",
+                      "letterSpacing": 0,
+                      "lineHeight": 23.400000000000002,
+                    },
+                    {
+                      "color": "#060A14",
+                    },
+                  ]
+                }
+              >
+                Stop
+              </Text>
+            </View>
+          </Pressable>
+        </View>
+        <View
+          style={
+            {
+              "marginLeft": 8,
+            }
+          }
+        >
+          <Pressable
+            accessibilityLabel="Rewind"
+            accessibilityRole="button"
+            accessibilityState={
+              {
+                "disabled": false,
+              }
+            }
+            disabled={false}
+            onPress={[Function]}
+          >
+            <View
+              style={
+                [
+                  [
+                    {
+                      "alignItems": "center",
+                      "backgroundColor": "#FF63FF",
+                      "borderRadius": 12,
+                      "justifyContent": "center",
+                      "opacity": 1,
+                      "paddingHorizontal": 20,
+                      "paddingVertical": 8,
+                    },
+                    undefined,
+                  ],
+                  {
+                    "shadowColor": "#FF63FF",
+                    "shadowOpacity": 1,
+                    "shadowRadius": 16,
+                    "transform": [
+                      {
+                        "scale": 1,
+                      },
+                    ],
+                  },
+                ]
+              }
+            >
+              <Text
+                accessibilityRole="text"
+                style={
+                  [
+                    {
+                      "color": "#FFFFFF",
+                      "fontFamily": "Inter",
+                      "fontSize": 18,
+                      "fontWeight": "600",
+                      "letterSpacing": 0,
+                      "lineHeight": 23.400000000000002,
+                    },
+                    {
+                      "color": "#060A14",
+                    },
+                  ]
+                }
+              >
+                Rewind
+              </Text>
+            </View>
+          </Pressable>
+        </View>
+        <View
+          style={
+            {
+              "marginLeft": 8,
+            }
+          }
+        >
+          <Pressable
+            accessibilityLabel="Refresh"
+            accessibilityRole="button"
+            accessibilityState={
+              {
+                "disabled": false,
+              }
+            }
+            disabled={false}
+            onPress={[Function]}
+          >
+            <View
+              style={
+                [
+                  [
+                    {
+                      "alignItems": "center",
+                      "backgroundColor": "#FF63FF",
+                      "borderRadius": 12,
+                      "justifyContent": "center",
+                      "opacity": 1,
+                      "paddingHorizontal": 20,
+                      "paddingVertical": 8,
+                    },
+                    undefined,
+                  ],
+                  {
+                    "shadowColor": "#FF63FF",
+                    "shadowOpacity": 1,
+                    "shadowRadius": 16,
+                    "transform": [
+                      {
+                        "scale": 1,
+                      },
+                    ],
+                  },
+                ]
+              }
+            >
+              <Text
+                accessibilityRole="text"
+                style={
+                  [
+                    {
+                      "color": "#FFFFFF",
+                      "fontFamily": "Inter",
+                      "fontSize": 18,
+                      "fontWeight": "600",
+                      "letterSpacing": 0,
+                      "lineHeight": 23.400000000000002,
+                    },
+                    {
+                      "color": "#060A14",
+                    },
+                  ]
+                }
+              >
+                Refresh
+              </Text>
+            </View>
+          </Pressable>
+        </View>
+      </View>
+    </View>
+    <View
+      accessibilityRole="summary"
+    >
+      <View
+        style={
+          {
+            "paddingBottom": 48,
+            "paddingHorizontal": 32,
+          }
+        }
+      >
+        <View
+          accessibilityRole="summary"
+          accessible={true}
+          style={
+            [
+              [
+                {
+                  "backgroundColor": "#060A14",
+                  "borderRadius": 20,
+                  "padding": 12,
+                },
+                {
+                  "marginBottom": 24,
+                },
+              ],
+              {
+                "borderColor": "#5CFFCA",
+                "borderWidth": 1,
+                "shadowColor": "#5CFFCA",
+                "shadowOffset": {
+                  "height": 0,
+                  "width": 0,
+                },
+                "shadowOpacity": 0.7,
+                "shadowRadius": 12.8,
+              },
+            ]
+          }
+        >
+          <Text
+            accessibilityRole="text"
+            style={
+              [
+                {
+                  "color": "#FFFFFF",
+                  "fontFamily": "Inter",
+                  "fontSize": 32,
+                  "fontWeight": "700",
+                  "letterSpacing": 0,
+                  "lineHeight": 41.6,
+                },
+                undefined,
+              ]
+            }
+          >
+            Waveform Overview
+          </Text>
+          <Text
+            accessibilityRole="text"
+            style={
+              [
+                {
+                  "color": "#FF63FF",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "fontWeight": "400",
+                  "letterSpacing": 0.5,
+                  "lineHeight": 20.8,
+                },
+                {
+                  "marginTop": 12,
+                },
+              ]
+            }
+          >
+            Fixture Track • 0 clips • 120 BPM 4/4
+          </Text>
+          <Canvas
+            onLayout={[Function]}
+            style={
+              [
+                {
+                  "height": 160,
+                  "width": 640,
+                },
+                undefined,
+              ]
+            }
+          >
+            <Path
+              color="#4DD6FF"
+              path={
+                {
+                  "close": [Function],
+                  "lineTo": [Function],
+                  "moveTo": [Function],
+                  "toCmds": [Function],
+                  "toSVGString": [Function],
+                }
+              }
+              strokeWidth={1.5}
+              style="stroke"
+            />
+            <Path
+              color="#FF63FF"
+              path={
+                {
+                  "close": [Function],
+                  "lineTo": [Function],
+                  "moveTo": [Function],
+                  "toCmds": [Function],
+                  "toSVGString": [Function],
+                }
+              }
+              strokeWidth={2}
+              style="stroke"
+            />
+          </Canvas>
+          <Text
+            accessibilityRole="text"
+            style={
+              [
+                {
+                  "color": "#FFFFFF",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "fontWeight": "400",
+                  "letterSpacing": 0,
+                  "lineHeight": 20.8,
+                },
+                {
+                  "marginTop": 8,
+                },
+              ]
+            }
+          >
+            Automation: 
+            Automation curves are not configured for this track.
+          </Text>
+          <Text
+            accessibilityRole="text"
+            style={
+              [
+                {
+                  "color": "#FF7E7E",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "fontWeight": "400",
+                  "letterSpacing": 0.5,
+                  "lineHeight": 20.8,
+                },
+                {
+                  "marginTop": 12,
+                },
+              ]
+            }
+          >
+            Diagnostics error: Diagnostics failed
+          </Text>
+        </View>
+        <View
+          accessibilityRole="summary"
+          accessible={true}
+          style={
+            [
+              [
+                {
+                  "backgroundColor": "#060A14",
+                  "borderRadius": 20,
+                  "padding": 12,
+                },
+                undefined,
+              ],
+              {
+                "borderColor": "#5CFFCA",
+                "borderWidth": 1,
+                "shadowColor": "#5CFFCA",
+                "shadowOffset": {
+                  "height": 0,
+                  "width": 0,
+                },
+                "shadowOpacity": 0.7,
+                "shadowRadius": 12.8,
+              },
+            ]
+          }
+        >
+          <Text
+            accessibilityRole="text"
+            style={
+              [
+                {
+                  "color": "#FFFFFF",
+                  "fontFamily": "Inter",
+                  "fontSize": 24,
+                  "fontWeight": "600",
+                  "letterSpacing": 0,
+                  "lineHeight": 31.200000000000003,
+                },
+                undefined,
+              ]
+            }
+          >
+            MIDI Piano Roll
+          </Text>
+          <ScrollView
+            contentContainerStyle={
+              {
+                "width": 2048,
+              }
+            }
+            horizontal={true}
+            nestedScrollEnabled={true}
+            onScroll={[Function]}
+            scrollEventThrottle={16}
+            showsHorizontalScrollIndicator={false}
+          >
+            <ScrollView
+              contentContainerStyle={
+                {
+                  "height": 1584,
+                }
+              }
+              nestedScrollEnabled={true}
+              scrollEnabled={true}
+              showsVerticalScrollIndicator={false}
+            >
+              <View
+                style={
+                  {
+                    "backgroundColor": "#0A1021",
+                    "flex": 1,
+                  }
+                }
+              >
+                <View
+                  pointerEvents="none"
+                  style={
+                    {
+                      "backgroundColor": "#FF63FF",
+                      "height": "100%",
+                      "left": 0,
+                      "opacity": 0.45,
+                      "position": "absolute",
+                      "top": 0,
+                      "width": 1,
+                    }
+                  }
+                />
+                <View
+                  pointerEvents="none"
+                  style={
+                    {
+                      "backgroundColor": "#060A14",
+                      "height": "100%",
+                      "left": 64,
+                      "opacity": 0.25,
+                      "position": "absolute",
+                      "top": 0,
+                      "width": 1,
+                    }
+                  }
+                />
+              </View>
+            </ScrollView>
+          </ScrollView>
+        </View>
+      </View>
+    </View>
+  </ScrollView>
+</SafeAreaView>
+`;
+
+exports[`ArrangementScreen diagnostics renders diagnostics summary when ready 1`] = `
+<SafeAreaView
+  style={
+    {
+      "flex": 1,
+    }
+  }
+>
+  <ScrollView
+    contentInsetAdjustmentBehavior="automatic"
+  >
+    <View
+      accessibilityRole="header"
+      style={
+        [
+          {
+            "alignItems": "center",
+            "flexDirection": "row",
+            "justifyContent": "space-between",
+            "padding": 12,
+          },
+          undefined,
+        ]
+      }
+    >
+      <Text
+        accessibilityRole="text"
+        style={
+          [
+            {
+              "color": "#FFFFFF",
+              "fontFamily": "Inter",
+              "fontSize": 24,
+              "fontWeight": "700",
+              "letterSpacing": 0,
+              "lineHeight": 31.200000000000003,
+            },
+            undefined,
+          ]
+        }
+      >
+        Arrangement
+      </Text>
+      <View
+        style={
+          {
+            "flexDirection": "row",
+          }
+        }
+      >
+        <View
+          style={
+            {
+              "marginLeft": 0,
+            }
+          }
+        >
+          <Pressable
+            accessibilityLabel="Play"
+            accessibilityRole="button"
+            accessibilityState={
+              {
+                "disabled": true,
+              }
+            }
+            disabled={true}
+            onPress={[Function]}
+          >
+            <View
+              style={
+                [
+                  [
+                    {
+                      "alignItems": "center",
+                      "backgroundColor": "#5CFFCA",
+                      "borderRadius": 12,
+                      "justifyContent": "center",
+                      "opacity": 0.38,
+                      "paddingHorizontal": 20,
+                      "paddingVertical": 8,
+                    },
+                    undefined,
+                  ],
+                  {
+                    "shadowColor": "#5CFFCA",
+                    "shadowOpacity": 0.38,
+                    "shadowRadius": 16,
+                    "transform": [
+                      {
+                        "scale": 0.98,
+                      },
+                    ],
+                  },
+                ]
+              }
+            >
+              <Text
+                accessibilityRole="text"
+                style={
+                  [
+                    {
+                      "color": "#FFFFFF",
+                      "fontFamily": "Inter",
+                      "fontSize": 18,
+                      "fontWeight": "600",
+                      "letterSpacing": 0,
+                      "lineHeight": 23.400000000000002,
+                    },
+                    {
+                      "color": "#060A14",
+                    },
+                  ]
+                }
+              >
+                Play
+              </Text>
+            </View>
+          </Pressable>
+        </View>
+        <View
+          style={
+            {
+              "marginLeft": 8,
+            }
+          }
+        >
+          <Pressable
+            accessibilityLabel="Stop"
+            accessibilityRole="button"
+            accessibilityState={
+              {
+                "disabled": false,
+              }
+            }
+            disabled={false}
+            onPress={[Function]}
+          >
+            <View
+              style={
+                [
+                  [
+                    {
+                      "alignItems": "center",
+                      "backgroundColor": "#FF63FF",
+                      "borderRadius": 12,
+                      "justifyContent": "center",
+                      "opacity": 1,
+                      "paddingHorizontal": 20,
+                      "paddingVertical": 8,
+                    },
+                    undefined,
+                  ],
+                  {
+                    "shadowColor": "#FF63FF",
+                    "shadowOpacity": 1,
+                    "shadowRadius": 16,
+                    "transform": [
+                      {
+                        "scale": 1,
+                      },
+                    ],
+                  },
+                ]
+              }
+            >
+              <Text
+                accessibilityRole="text"
+                style={
+                  [
+                    {
+                      "color": "#FFFFFF",
+                      "fontFamily": "Inter",
+                      "fontSize": 18,
+                      "fontWeight": "600",
+                      "letterSpacing": 0,
+                      "lineHeight": 23.400000000000002,
+                    },
+                    {
+                      "color": "#060A14",
+                    },
+                  ]
+                }
+              >
+                Stop
+              </Text>
+            </View>
+          </Pressable>
+        </View>
+        <View
+          style={
+            {
+              "marginLeft": 8,
+            }
+          }
+        >
+          <Pressable
+            accessibilityLabel="Rewind"
+            accessibilityRole="button"
+            accessibilityState={
+              {
+                "disabled": false,
+              }
+            }
+            disabled={false}
+            onPress={[Function]}
+          >
+            <View
+              style={
+                [
+                  [
+                    {
+                      "alignItems": "center",
+                      "backgroundColor": "#FF63FF",
+                      "borderRadius": 12,
+                      "justifyContent": "center",
+                      "opacity": 1,
+                      "paddingHorizontal": 20,
+                      "paddingVertical": 8,
+                    },
+                    undefined,
+                  ],
+                  {
+                    "shadowColor": "#FF63FF",
+                    "shadowOpacity": 1,
+                    "shadowRadius": 16,
+                    "transform": [
+                      {
+                        "scale": 1,
+                      },
+                    ],
+                  },
+                ]
+              }
+            >
+              <Text
+                accessibilityRole="text"
+                style={
+                  [
+                    {
+                      "color": "#FFFFFF",
+                      "fontFamily": "Inter",
+                      "fontSize": 18,
+                      "fontWeight": "600",
+                      "letterSpacing": 0,
+                      "lineHeight": 23.400000000000002,
+                    },
+                    {
+                      "color": "#060A14",
+                    },
+                  ]
+                }
+              >
+                Rewind
+              </Text>
+            </View>
+          </Pressable>
+        </View>
+        <View
+          style={
+            {
+              "marginLeft": 8,
+            }
+          }
+        >
+          <Pressable
+            accessibilityLabel="Refresh"
+            accessibilityRole="button"
+            accessibilityState={
+              {
+                "disabled": false,
+              }
+            }
+            disabled={false}
+            onPress={[Function]}
+          >
+            <View
+              style={
+                [
+                  [
+                    {
+                      "alignItems": "center",
+                      "backgroundColor": "#FF63FF",
+                      "borderRadius": 12,
+                      "justifyContent": "center",
+                      "opacity": 1,
+                      "paddingHorizontal": 20,
+                      "paddingVertical": 8,
+                    },
+                    undefined,
+                  ],
+                  {
+                    "shadowColor": "#FF63FF",
+                    "shadowOpacity": 1,
+                    "shadowRadius": 16,
+                    "transform": [
+                      {
+                        "scale": 1,
+                      },
+                    ],
+                  },
+                ]
+              }
+            >
+              <Text
+                accessibilityRole="text"
+                style={
+                  [
+                    {
+                      "color": "#FFFFFF",
+                      "fontFamily": "Inter",
+                      "fontSize": 18,
+                      "fontWeight": "600",
+                      "letterSpacing": 0,
+                      "lineHeight": 23.400000000000002,
+                    },
+                    {
+                      "color": "#060A14",
+                    },
+                  ]
+                }
+              >
+                Refresh
+              </Text>
+            </View>
+          </Pressable>
+        </View>
+      </View>
+    </View>
+    <View
+      style={
+        {
+          "marginBottom": 12,
+          "paddingHorizontal": 32,
+        }
+      }
+    >
+      <View
+        accessibilityRole="summary"
+        accessible={true}
+        style={
+          [
+            [
+              {
+                "backgroundColor": "#060A14",
+                "borderRadius": 20,
+                "padding": 12,
+              },
+              {
+                "marginBottom": 12,
+              },
+            ],
+            {
+              "borderColor": "#FF7E7E",
+              "borderWidth": 1,
+              "shadowColor": "#FF7E7E",
+              "shadowOffset": {
+                "height": 0,
+                "width": 0,
+              },
+              "shadowOpacity": 0.7,
+              "shadowRadius": 12.8,
+            },
+          ]
+        }
+      >
+        <Text
+          accessibilityRole="text"
+          style={
+            [
+              {
+                "color": "#FF7E7E",
+                "fontFamily": "Inter",
+                "fontSize": 16,
+                "fontWeight": "600",
+                "letterSpacing": 0.5,
+                "lineHeight": 20.8,
+              },
+              undefined,
+            ]
+          }
+        >
+          Plugin crash: 
+          Fixture Plugin
+        </Text>
+        <Text
+          accessibilityRole="text"
+          style={
+            [
+              {
+                "color": "#FF63FF",
+                "fontFamily": "Inter",
+                "fontSize": 12,
+                "fontWeight": "400",
+                "letterSpacing": 0.5,
+                "lineHeight": 15.600000000000001,
+              },
+              undefined,
+            ]
+          }
+        >
+          1/1/2024, 12:00:00 AM
+           • 
+          Test crash
+        </Text>
+      </View>
+    </View>
+    <View
+      accessibilityRole="summary"
+    >
+      <View
+        style={
+          {
+            "paddingBottom": 48,
+            "paddingHorizontal": 32,
+          }
+        }
+      >
+        <View
+          accessibilityRole="summary"
+          accessible={true}
+          style={
+            [
+              [
+                {
+                  "backgroundColor": "#060A14",
+                  "borderRadius": 20,
+                  "padding": 12,
+                },
+                {
+                  "marginBottom": 24,
+                },
+              ],
+              {
+                "borderColor": "#5CFFCA",
+                "borderWidth": 1,
+                "shadowColor": "#5CFFCA",
+                "shadowOffset": {
+                  "height": 0,
+                  "width": 0,
+                },
+                "shadowOpacity": 0.7,
+                "shadowRadius": 12.8,
+              },
+            ]
+          }
+        >
+          <Text
+            accessibilityRole="text"
+            style={
+              [
+                {
+                  "color": "#FFFFFF",
+                  "fontFamily": "Inter",
+                  "fontSize": 32,
+                  "fontWeight": "700",
+                  "letterSpacing": 0,
+                  "lineHeight": 41.6,
+                },
+                undefined,
+              ]
+            }
+          >
+            Waveform Overview
+          </Text>
+          <Text
+            accessibilityRole="text"
+            style={
+              [
+                {
+                  "color": "#FF63FF",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "fontWeight": "400",
+                  "letterSpacing": 0.5,
+                  "lineHeight": 20.8,
+                },
+                {
+                  "marginTop": 12,
+                },
+              ]
+            }
+          >
+            Fixture Track • 0 clips • 120 BPM 4/4
+          </Text>
+          <Canvas
+            onLayout={[Function]}
+            style={
+              [
+                {
+                  "height": 160,
+                  "width": 640,
+                },
+                undefined,
+              ]
+            }
+          >
+            <Path
+              color="#4DD6FF"
+              path={
+                {
+                  "close": [Function],
+                  "lineTo": [Function],
+                  "moveTo": [Function],
+                  "toCmds": [Function],
+                  "toSVGString": [Function],
+                }
+              }
+              strokeWidth={1.5}
+              style="stroke"
+            />
+            <Path
+              color="#FF63FF"
+              path={
+                {
+                  "close": [Function],
+                  "lineTo": [Function],
+                  "moveTo": [Function],
+                  "toCmds": [Function],
+                  "toSVGString": [Function],
+                }
+              }
+              strokeWidth={2}
+              style="stroke"
+            />
+          </Canvas>
+          <Text
+            accessibilityRole="text"
+            style={
+              [
+                {
+                  "color": "#FFFFFF",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "fontWeight": "400",
+                  "letterSpacing": 0,
+                  "lineHeight": 20.8,
+                },
+                {
+                  "marginTop": 8,
+                },
+              ]
+            }
+          >
+            Automation: 
+            Automation curves are not configured for this track.
+          </Text>
+          <Text
+            accessibilityRole="text"
+            style={
+              [
+                {
+                  "color": "#FF63FF",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "fontWeight": "400",
+                  "letterSpacing": 0.5,
+                  "lineHeight": 20.8,
+                },
+                {
+                  "marginTop": 12,
+                },
+              ]
+            }
+          >
+            XRuns: 0 • Render load: 25%
+          </Text>
+        </View>
+        <View
+          accessibilityRole="summary"
+          accessible={true}
+          style={
+            [
+              [
+                {
+                  "backgroundColor": "#060A14",
+                  "borderRadius": 20,
+                  "padding": 12,
+                },
+                undefined,
+              ],
+              {
+                "borderColor": "#5CFFCA",
+                "borderWidth": 1,
+                "shadowColor": "#5CFFCA",
+                "shadowOffset": {
+                  "height": 0,
+                  "width": 0,
+                },
+                "shadowOpacity": 0.7,
+                "shadowRadius": 12.8,
+              },
+            ]
+          }
+        >
+          <Text
+            accessibilityRole="text"
+            style={
+              [
+                {
+                  "color": "#FFFFFF",
+                  "fontFamily": "Inter",
+                  "fontSize": 24,
+                  "fontWeight": "600",
+                  "letterSpacing": 0,
+                  "lineHeight": 31.200000000000003,
+                },
+                undefined,
+              ]
+            }
+          >
+            MIDI Piano Roll
+          </Text>
+          <ScrollView
+            contentContainerStyle={
+              {
+                "width": 2048,
+              }
+            }
+            horizontal={true}
+            nestedScrollEnabled={true}
+            onScroll={[Function]}
+            scrollEventThrottle={16}
+            showsHorizontalScrollIndicator={false}
+          >
+            <ScrollView
+              contentContainerStyle={
+                {
+                  "height": 1584,
+                }
+              }
+              nestedScrollEnabled={true}
+              scrollEnabled={true}
+              showsVerticalScrollIndicator={false}
+            >
+              <View
+                style={
+                  {
+                    "backgroundColor": "#0A1021",
+                    "flex": 1,
+                  }
+                }
+              >
+                <View
+                  pointerEvents="none"
+                  style={
+                    {
+                      "backgroundColor": "#FF63FF",
+                      "height": "100%",
+                      "left": 0,
+                      "opacity": 0.45,
+                      "position": "absolute",
+                      "top": 0,
+                      "width": 1,
+                    }
+                  }
+                />
+                <View
+                  pointerEvents="none"
+                  style={
+                    {
+                      "backgroundColor": "#060A14",
+                      "height": "100%",
+                      "left": 64,
+                      "opacity": 0.25,
+                      "position": "absolute",
+                      "top": 0,
+                      "width": 1,
+                    }
+                  }
+                />
+              </View>
+            </ScrollView>
+          </ScrollView>
+        </View>
+      </View>
+    </View>
+  </ScrollView>
+</SafeAreaView>
+`;
+
+exports[`ArrangementScreen diagnostics renders diagnostics unavailable state 1`] = `
+<SafeAreaView
+  style={
+    {
+      "flex": 1,
+    }
+  }
+>
+  <ScrollView
+    contentInsetAdjustmentBehavior="automatic"
+  >
+    <View
+      accessibilityRole="header"
+      style={
+        [
+          {
+            "alignItems": "center",
+            "flexDirection": "row",
+            "justifyContent": "space-between",
+            "padding": 12,
+          },
+          undefined,
+        ]
+      }
+    >
+      <Text
+        accessibilityRole="text"
+        style={
+          [
+            {
+              "color": "#FFFFFF",
+              "fontFamily": "Inter",
+              "fontSize": 24,
+              "fontWeight": "700",
+              "letterSpacing": 0,
+              "lineHeight": 31.200000000000003,
+            },
+            undefined,
+          ]
+        }
+      >
+        Arrangement
+      </Text>
+      <View
+        style={
+          {
+            "flexDirection": "row",
+          }
+        }
+      >
+        <View
+          style={
+            {
+              "marginLeft": 0,
+            }
+          }
+        >
+          <Pressable
+            accessibilityLabel="Play"
+            accessibilityRole="button"
+            accessibilityState={
+              {
+                "disabled": false,
+              }
+            }
+            disabled={false}
+            onPress={[Function]}
+          >
+            <View
+              style={
+                [
+                  [
+                    {
+                      "alignItems": "center",
+                      "backgroundColor": "#5CFFCA",
+                      "borderRadius": 12,
+                      "justifyContent": "center",
+                      "opacity": 1,
+                      "paddingHorizontal": 20,
+                      "paddingVertical": 8,
+                    },
+                    undefined,
+                  ],
+                  {
+                    "shadowColor": "#5CFFCA",
+                    "shadowOpacity": 1,
+                    "shadowRadius": 16,
+                    "transform": [
+                      {
+                        "scale": 1,
+                      },
+                    ],
+                  },
+                ]
+              }
+            >
+              <Text
+                accessibilityRole="text"
+                style={
+                  [
+                    {
+                      "color": "#FFFFFF",
+                      "fontFamily": "Inter",
+                      "fontSize": 18,
+                      "fontWeight": "600",
+                      "letterSpacing": 0,
+                      "lineHeight": 23.400000000000002,
+                    },
+                    {
+                      "color": "#060A14",
+                    },
+                  ]
+                }
+              >
+                Play
+              </Text>
+            </View>
+          </Pressable>
+        </View>
+        <View
+          style={
+            {
+              "marginLeft": 8,
+            }
+          }
+        >
+          <Pressable
+            accessibilityLabel="Stop"
+            accessibilityRole="button"
+            accessibilityState={
+              {
+                "disabled": true,
+              }
+            }
+            disabled={true}
+            onPress={[Function]}
+          >
+            <View
+              style={
+                [
+                  [
+                    {
+                      "alignItems": "center",
+                      "backgroundColor": "#FF63FF",
+                      "borderRadius": 12,
+                      "justifyContent": "center",
+                      "opacity": 0.38,
+                      "paddingHorizontal": 20,
+                      "paddingVertical": 8,
+                    },
+                    undefined,
+                  ],
+                  {
+                    "shadowColor": "#FF63FF",
+                    "shadowOpacity": 0.38,
+                    "shadowRadius": 16,
+                    "transform": [
+                      {
+                        "scale": 0.98,
+                      },
+                    ],
+                  },
+                ]
+              }
+            >
+              <Text
+                accessibilityRole="text"
+                style={
+                  [
+                    {
+                      "color": "#FFFFFF",
+                      "fontFamily": "Inter",
+                      "fontSize": 18,
+                      "fontWeight": "600",
+                      "letterSpacing": 0,
+                      "lineHeight": 23.400000000000002,
+                    },
+                    {
+                      "color": "#060A14",
+                    },
+                  ]
+                }
+              >
+                Stop
+              </Text>
+            </View>
+          </Pressable>
+        </View>
+        <View
+          style={
+            {
+              "marginLeft": 8,
+            }
+          }
+        >
+          <Pressable
+            accessibilityLabel="Rewind"
+            accessibilityRole="button"
+            accessibilityState={
+              {
+                "disabled": false,
+              }
+            }
+            disabled={false}
+            onPress={[Function]}
+          >
+            <View
+              style={
+                [
+                  [
+                    {
+                      "alignItems": "center",
+                      "backgroundColor": "#FF63FF",
+                      "borderRadius": 12,
+                      "justifyContent": "center",
+                      "opacity": 1,
+                      "paddingHorizontal": 20,
+                      "paddingVertical": 8,
+                    },
+                    undefined,
+                  ],
+                  {
+                    "shadowColor": "#FF63FF",
+                    "shadowOpacity": 1,
+                    "shadowRadius": 16,
+                    "transform": [
+                      {
+                        "scale": 1,
+                      },
+                    ],
+                  },
+                ]
+              }
+            >
+              <Text
+                accessibilityRole="text"
+                style={
+                  [
+                    {
+                      "color": "#FFFFFF",
+                      "fontFamily": "Inter",
+                      "fontSize": 18,
+                      "fontWeight": "600",
+                      "letterSpacing": 0,
+                      "lineHeight": 23.400000000000002,
+                    },
+                    {
+                      "color": "#060A14",
+                    },
+                  ]
+                }
+              >
+                Rewind
+              </Text>
+            </View>
+          </Pressable>
+        </View>
+        <View
+          style={
+            {
+              "marginLeft": 8,
+            }
+          }
+        >
+          <Pressable
+            accessibilityLabel="Refresh"
+            accessibilityRole="button"
+            accessibilityState={
+              {
+                "disabled": false,
+              }
+            }
+            disabled={false}
+            onPress={[Function]}
+          >
+            <View
+              style={
+                [
+                  [
+                    {
+                      "alignItems": "center",
+                      "backgroundColor": "#FF63FF",
+                      "borderRadius": 12,
+                      "justifyContent": "center",
+                      "opacity": 1,
+                      "paddingHorizontal": 20,
+                      "paddingVertical": 8,
+                    },
+                    undefined,
+                  ],
+                  {
+                    "shadowColor": "#FF63FF",
+                    "shadowOpacity": 1,
+                    "shadowRadius": 16,
+                    "transform": [
+                      {
+                        "scale": 1,
+                      },
+                    ],
+                  },
+                ]
+              }
+            >
+              <Text
+                accessibilityRole="text"
+                style={
+                  [
+                    {
+                      "color": "#FFFFFF",
+                      "fontFamily": "Inter",
+                      "fontSize": 18,
+                      "fontWeight": "600",
+                      "letterSpacing": 0,
+                      "lineHeight": 23.400000000000002,
+                    },
+                    {
+                      "color": "#060A14",
+                    },
+                  ]
+                }
+              >
+                Refresh
+              </Text>
+            </View>
+          </Pressable>
+        </View>
+      </View>
+    </View>
+    <View
+      accessibilityRole="summary"
+    >
+      <View
+        style={
+          {
+            "paddingBottom": 48,
+            "paddingHorizontal": 32,
+          }
+        }
+      >
+        <View
+          accessibilityRole="summary"
+          accessible={true}
+          style={
+            [
+              [
+                {
+                  "backgroundColor": "#060A14",
+                  "borderRadius": 20,
+                  "padding": 12,
+                },
+                {
+                  "marginBottom": 24,
+                },
+              ],
+              {
+                "borderColor": "#5CFFCA",
+                "borderWidth": 1,
+                "shadowColor": "#5CFFCA",
+                "shadowOffset": {
+                  "height": 0,
+                  "width": 0,
+                },
+                "shadowOpacity": 0.7,
+                "shadowRadius": 12.8,
+              },
+            ]
+          }
+        >
+          <Text
+            accessibilityRole="text"
+            style={
+              [
+                {
+                  "color": "#FFFFFF",
+                  "fontFamily": "Inter",
+                  "fontSize": 32,
+                  "fontWeight": "700",
+                  "letterSpacing": 0,
+                  "lineHeight": 41.6,
+                },
+                undefined,
+              ]
+            }
+          >
+            Waveform Overview
+          </Text>
+          <Text
+            accessibilityRole="text"
+            style={
+              [
+                {
+                  "color": "#FF63FF",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "fontWeight": "400",
+                  "letterSpacing": 0.5,
+                  "lineHeight": 20.8,
+                },
+                {
+                  "marginTop": 12,
+                },
+              ]
+            }
+          >
+            Fixture Track • 0 clips • 120 BPM 4/4
+          </Text>
+          <Canvas
+            onLayout={[Function]}
+            style={
+              [
+                {
+                  "height": 160,
+                  "width": 640,
+                },
+                undefined,
+              ]
+            }
+          >
+            <Path
+              color="#4DD6FF"
+              path={
+                {
+                  "close": [Function],
+                  "lineTo": [Function],
+                  "moveTo": [Function],
+                  "toCmds": [Function],
+                  "toSVGString": [Function],
+                }
+              }
+              strokeWidth={1.5}
+              style="stroke"
+            />
+            <Path
+              color="#FF63FF"
+              path={
+                {
+                  "close": [Function],
+                  "lineTo": [Function],
+                  "moveTo": [Function],
+                  "toCmds": [Function],
+                  "toSVGString": [Function],
+                }
+              }
+              strokeWidth={2}
+              style="stroke"
+            />
+          </Canvas>
+          <Text
+            accessibilityRole="text"
+            style={
+              [
+                {
+                  "color": "#FFFFFF",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "fontWeight": "400",
+                  "letterSpacing": 0,
+                  "lineHeight": 20.8,
+                },
+                {
+                  "marginTop": 8,
+                },
+              ]
+            }
+          >
+            Automation: 
+            Automation curves are not configured for this track.
+          </Text>
+          <Text
+            accessibilityRole="text"
+            style={
+              [
+                {
+                  "color": "#FF63FF",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "fontWeight": "400",
+                  "letterSpacing": 0.5,
+                  "lineHeight": 20.8,
+                },
+                {
+                  "marginTop": 12,
+                },
+              ]
+            }
+          >
+            Audio diagnostics unavailable.
+          </Text>
+        </View>
+        <View
+          accessibilityRole="summary"
+          accessible={true}
+          style={
+            [
+              [
+                {
+                  "backgroundColor": "#060A14",
+                  "borderRadius": 20,
+                  "padding": 12,
+                },
+                undefined,
+              ],
+              {
+                "borderColor": "#5CFFCA",
+                "borderWidth": 1,
+                "shadowColor": "#5CFFCA",
+                "shadowOffset": {
+                  "height": 0,
+                  "width": 0,
+                },
+                "shadowOpacity": 0.7,
+                "shadowRadius": 12.8,
+              },
+            ]
+          }
+        >
+          <Text
+            accessibilityRole="text"
+            style={
+              [
+                {
+                  "color": "#FFFFFF",
+                  "fontFamily": "Inter",
+                  "fontSize": 24,
+                  "fontWeight": "600",
+                  "letterSpacing": 0,
+                  "lineHeight": 31.200000000000003,
+                },
+                undefined,
+              ]
+            }
+          >
+            MIDI Piano Roll
+          </Text>
+          <ScrollView
+            contentContainerStyle={
+              {
+                "width": 2048,
+              }
+            }
+            horizontal={true}
+            nestedScrollEnabled={true}
+            onScroll={[Function]}
+            scrollEventThrottle={16}
+            showsHorizontalScrollIndicator={false}
+          >
+            <ScrollView
+              contentContainerStyle={
+                {
+                  "height": 1584,
+                }
+              }
+              nestedScrollEnabled={true}
+              scrollEnabled={true}
+              showsVerticalScrollIndicator={false}
+            >
+              <View
+                style={
+                  {
+                    "backgroundColor": "#0A1021",
+                    "flex": 1,
+                  }
+                }
+              >
+                <View
+                  pointerEvents="none"
+                  style={
+                    {
+                      "backgroundColor": "#FF63FF",
+                      "height": "100%",
+                      "left": 0,
+                      "opacity": 0.45,
+                      "position": "absolute",
+                      "top": 0,
+                      "width": 1,
+                    }
+                  }
+                />
+                <View
+                  pointerEvents="none"
+                  style={
+                    {
+                      "backgroundColor": "#060A14",
+                      "height": "100%",
+                      "left": 64,
+                      "opacity": 0.25,
+                      "position": "absolute",
+                      "top": 0,
+                      "width": 1,
+                    }
+                  }
+                />
+              </View>
+            </ScrollView>
+          </ScrollView>
+        </View>
+      </View>
+    </View>
+  </ScrollView>
+</SafeAreaView>
+`;

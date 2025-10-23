@@ -72,6 +72,11 @@ const createMockEngine = (
   removeNodes: jest.Mock;
   uploadClipBuffer: jest.Mock;
   releaseClipBuffer: jest.Mock;
+  startTransport: jest.Mock;
+  stopTransport: jest.Mock;
+  locateTransport: jest.Mock;
+  getTransportState: jest.Mock;
+  getRenderDiagnostics: jest.Mock;
 } => {
   const configureNodes = jest.fn(async () => undefined);
   const connect = jest.fn(async () => undefined);
@@ -80,6 +85,15 @@ const createMockEngine = (
   const removeNodes = jest.fn(async () => undefined);
   const uploadClipBuffer = jest.fn(async () => undefined);
   const releaseClipBuffer = jest.fn(async () => undefined);
+  const startTransport = jest.fn(async () => undefined);
+  const stopTransport = jest.fn(async () => undefined);
+  const locateTransport = jest.fn(async () => undefined);
+  const getTransportState = jest.fn(async () => ({ frame: 0, isPlaying: false }));
+  const getRenderDiagnostics = jest.fn(async () => ({
+    xruns: 0,
+    lastRenderDurationMicros: 0,
+    clipBufferBytes: 0,
+  }));
   const engine: Partial<AudioEngine> = {
     getClock: () => clock,
     configureNodes,
@@ -89,6 +103,11 @@ const createMockEngine = (
     removeNodes,
     uploadClipBuffer,
     releaseClipBuffer,
+    startTransport,
+    stopTransport,
+    locateTransport,
+    getTransportState,
+    getRenderDiagnostics,
   };
   return {
     engine: engine as AudioEngine,
@@ -99,6 +118,11 @@ const createMockEngine = (
     removeNodes,
     uploadClipBuffer,
     releaseClipBuffer,
+    startTransport,
+    stopTransport,
+    locateTransport,
+    getTransportState,
+    getRenderDiagnostics,
   };
 };
 
@@ -791,5 +815,166 @@ describe('SessionAudioBridge', () => {
     expect(nextKey).not.toBe(initialKey);
     expect(releaseClipBuffer).toHaveBeenCalledTimes(1);
     expect(releaseClipBuffer).toHaveBeenCalledWith(initialKey);
+  });
+
+  describe('transport and diagnostics observers', () => {
+    const observerSampleRate = 48000;
+    const observerFramesPerBuffer = 256;
+
+    const flushAsync = async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    };
+
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('polls transport state and notifies listeners', async () => {
+      const { loader } = createLoader(observerSampleRate, observerSampleRate);
+      const clock = new ClockSyncService(
+        observerSampleRate,
+        observerFramesPerBuffer,
+        120,
+      );
+      const { engine, getTransportState, startTransport } = createMockEngine(clock);
+      getTransportState.mockResolvedValue({ frame: 0, isPlaying: false });
+
+      const bridge = new SessionAudioBridge(engine, {
+        fileLoader: loader,
+        transportPollIntervalMs: 10,
+        diagnosticsPollIntervalMs: 0,
+      });
+      const listener = jest.fn();
+      bridge.subscribeTransport(listener);
+
+      await flushAsync();
+
+      getTransportState.mockResolvedValue({ frame: observerSampleRate, isPlaying: true });
+      jest.advanceTimersByTime(20);
+      await flushAsync();
+
+      expect(startTransport).not.toHaveBeenCalled();
+      expect(listener).toHaveBeenLastCalledWith(
+        expect.objectContaining({ frame: observerSampleRate, isPlaying: true }),
+      );
+
+      await bridge.dispose();
+    });
+
+    it('polls diagnostics state and emits snapshots', async () => {
+      const { loader } = createLoader(observerSampleRate, observerSampleRate);
+      const clock = new ClockSyncService(
+        observerSampleRate,
+        observerFramesPerBuffer,
+        120,
+      );
+      const { engine, getRenderDiagnostics } = createMockEngine(clock);
+      getRenderDiagnostics.mockResolvedValue({
+        xruns: 1,
+        lastRenderDurationMicros: 2500,
+        clipBufferBytes: 4096,
+      });
+
+      const bridge = new SessionAudioBridge(engine, {
+        fileLoader: loader,
+        transportPollIntervalMs: 0,
+        diagnosticsPollIntervalMs: 10,
+      });
+      const listener = jest.fn();
+      bridge.subscribeDiagnostics(listener);
+
+      await flushAsync();
+      jest.advanceTimersByTime(300);
+      await flushAsync();
+
+      expect(listener).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'ready',
+          xruns: 1,
+          clipBufferBytes: 4096,
+        }),
+      );
+
+      await bridge.dispose();
+    });
+
+    it('stops polling when disposed', async () => {
+      const { loader } = createLoader(observerSampleRate, observerSampleRate);
+      const clock = new ClockSyncService(
+        observerSampleRate,
+        observerFramesPerBuffer,
+        120,
+      );
+      const { engine, getTransportState, getRenderDiagnostics } = createMockEngine(clock);
+
+      const bridge = new SessionAudioBridge(engine, {
+        fileLoader: loader,
+        transportPollIntervalMs: 10,
+        diagnosticsPollIntervalMs: 10,
+      });
+
+      await flushAsync();
+
+      expect(getTransportState).toHaveBeenCalledTimes(1);
+      expect(getRenderDiagnostics).toHaveBeenCalledTimes(1);
+
+      jest.advanceTimersByTime(800);
+      await flushAsync();
+
+      expect(getTransportState.mock.calls.length).toBeGreaterThan(1);
+      expect(getRenderDiagnostics.mock.calls.length).toBeGreaterThan(1);
+
+      const transportCalls = getTransportState.mock.calls.length;
+      const diagnosticsCalls = getRenderDiagnostics.mock.calls.length;
+
+      await bridge.dispose();
+
+      jest.advanceTimersByTime(800);
+      await flushAsync();
+
+      expect(getTransportState).toHaveBeenCalledTimes(transportCalls);
+      expect(getRenderDiagnostics).toHaveBeenCalledTimes(diagnosticsCalls);
+    });
+
+    it('emits diagnostics error snapshots when polling fails', async () => {
+      const { loader } = createLoader(observerSampleRate, observerSampleRate);
+      const clock = new ClockSyncService(
+        observerSampleRate,
+        observerFramesPerBuffer,
+        120,
+      );
+      const { engine, getRenderDiagnostics } = createMockEngine(clock);
+      const pollingError = new Error('diagnostics failed');
+
+      getRenderDiagnostics.mockRejectedValue(pollingError);
+
+      const bridge = new SessionAudioBridge(engine, {
+        fileLoader: loader,
+        transportPollIntervalMs: 0,
+        diagnosticsPollIntervalMs: 10,
+      });
+
+      const listener = jest.fn();
+      bridge.subscribeDiagnostics(listener);
+
+      await flushAsync();
+
+      jest.advanceTimersByTime(300);
+      await flushAsync();
+
+      expect(listener).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          status: 'error',
+          error: pollingError,
+        }),
+      );
+
+      await bridge.dispose();
+    });
   });
 });

@@ -59,6 +59,7 @@ export const SessionStoryProvider: React.FC<PropsWithChildren> = ({ children }) 
       sessionId={environment.sessionId}
       bootstrapSession={() => demoSession}
       diagnosticsPollIntervalMs={0}
+      audioBridge={environment.audioBridge}
     >
       {children}
     </SessionViewModelProvider>
@@ -122,6 +123,7 @@ export const SessionAppProvider: React.FC<PropsWithChildren> = ({ children }) =>
       bootstrapSession={() => demoSession}
       diagnosticsPollIntervalMs={1200}
       pluginHost={environment.pluginHost}
+      audioBridge={environment.audioBridge}
     >
       {children}
     </SessionViewModelProvider>
