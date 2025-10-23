@@ -31,7 +31,7 @@ interface NativeDiagnosticsModule {
   setPollingInterval?: (intervalMs: number) => void;
 }
 
-const COLLAPSED_INTERFACE_KEYS = ['interface'];
+const COLLAPSED_INTERFACE_KEYS = ['interfaceName', 'interface'];
 const EVENT_NAME = 'CollabNetworkDiagnosticsEvent';
 
 function normalizeNumber(value: NullableNumber): number | undefined {
@@ -112,6 +112,7 @@ class DefaultNetworkDiagnostics implements NetworkDiagnostics {
   private readonly module?: NativeDiagnosticsModule;
   private readonly emitter: NativeEventEmitter | EventEmitter;
   private cachedFallbackMetrics: LinkMetrics | null = null;
+  private subscriberCount = 0;
 
   constructor(module?: NativeDiagnosticsModule) {
     this.module = module;
@@ -144,7 +145,7 @@ class DefaultNetworkDiagnostics implements NetworkDiagnostics {
       return () => {};
     }
 
-    if (this.emitter.listenerCount(EVENT_NAME) === 0) {
+    if (this.subscriberCount === 0) {
       this.startNativeObservation();
     }
 
@@ -157,9 +158,12 @@ class DefaultNetworkDiagnostics implements NetworkDiagnostics {
       handler,
     );
 
+    this.subscriberCount += 1;
+
     return () => {
       subscription.remove();
-      if (this.emitter.listenerCount(EVENT_NAME) === 0) {
+      this.subscriberCount = Math.max(0, this.subscriberCount - 1);
+      if (this.subscriberCount === 0) {
         this.stopNativeObservation();
       }
     };
