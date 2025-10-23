@@ -42,6 +42,12 @@ describe('DiagnosticsManager', () => {
 
     expect(subscribeMock).toHaveBeenCalledTimes(1);
 
+    await flushMicrotasks();
+
+    const initialLatest = manager.getLatestMetrics();
+    expect(initialLatest).toBeDefined();
+    expect(initialLatest).toMatchObject(baseMetrics);
+
     capturedListener?.({ ...baseMetrics, rssi: -60 });
 
     await flushMicrotasks();
@@ -49,6 +55,19 @@ describe('DiagnosticsManager', () => {
     expect(onMetrics).toHaveBeenCalledTimes(2);
     expect(onMetrics).toHaveBeenCalledWith({ ...baseMetrics, rssi: -60 });
     expect(onMetrics).toHaveBeenCalledWith(baseMetrics);
+
+    const latestMetrics = manager.getLatestMetrics();
+    expect(latestMetrics).toBeDefined();
+
+    const definedInitial = initialLatest as LinkMetrics;
+    const definedLatest = latestMetrics as LinkMetrics;
+
+    expect(definedLatest).not.toBe(definedInitial);
+    expect(definedLatest).toMatchObject({ ...baseMetrics, rssi: -60 });
+    expect(manager.getLatestSanitizedMetrics()).toMatchObject({
+      rssi: -60,
+      linkSpeedMbps: 480,
+    });
 
     const initialCall = logger.mock.calls.find(
       ([key]) => key === 'collab.networkMetrics.initial',
@@ -115,5 +134,6 @@ describe('DiagnosticsManager', () => {
 
     capturedListener?.({ ...baseMetrics, rssi: -90 });
     expect(onMetrics).toHaveBeenCalledWith({ ...baseMetrics, rssi: -90 });
+    expect(manager.getLatestSanitizedMetrics()).toMatchObject({ rssi: -90 });
   });
 });

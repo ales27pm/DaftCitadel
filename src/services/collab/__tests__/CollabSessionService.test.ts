@@ -454,6 +454,75 @@ describe('CollabSessionService', () => {
     responderService.stop();
   });
 
+  it('invokes onRemoteUpdateApplied and emits latency-aware diagnostics logs', async () => {
+    const [initiatorSignaling, responderSignaling] = pairSignalingClients();
+    const initiatorConnection = new MockPeerConnection();
+    const responderConnection = new MockPeerConnection();
+    initiatorConnection.linkPeer(responderConnection);
+
+    const diagnostics = new TestNetworkDiagnostics({
+      linkSpeedMbps: 42,
+      rssi: -65,
+    });
+
+    const onRemoteUpdateApplied = jest.fn().mockResolvedValue(undefined);
+    const logger = jest.fn();
+
+    const responderService = new CollabSessionService<{ text: string }>({
+      signalingClient: responderSignaling,
+      connectionFactory: () => responderConnection as unknown as RTCPeerConnection,
+      onRemoteUpdateApplied,
+      logger,
+      networkDiagnostics: diagnostics,
+    });
+
+    const initiatorService = new CollabSessionService<{ text: string }>({
+      signalingClient: initiatorSignaling,
+      connectionFactory: () => initiatorConnection as unknown as RTCPeerConnection,
+      logger,
+    });
+
+    await responderService.start('responder');
+    await initiatorService.start('initiator');
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    diagnostics.emit({
+      timestamp: Date.now(),
+      category: 'excellent',
+      linkSpeedMbps: 84,
+      rssi: -60,
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    await initiatorService.broadcastUpdate({ text: 'diagnostics' });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onRemoteUpdateApplied).toHaveBeenCalledTimes(1);
+    const payload = onRemoteUpdateApplied.mock.calls[0][0];
+    expect(payload.body).toEqual({ text: 'diagnostics' });
+
+    const receivedLog = logger.mock.calls.find(
+      ([event]) => event === 'collab.remoteUpdate.received',
+    );
+    expect(receivedLog).toBeDefined();
+    expect(receivedLog?.[1]).toMatchObject({
+      schemaVersion: 1,
+    });
+    expect(receivedLog?.[1]?.diagnostics).toMatchObject({ linkSpeedMbps: 84, rssi: -60 });
+
+    const appliedLog = logger.mock.calls.find(
+      ([event]) => event === 'collab.remoteUpdate.applied',
+    );
+    expect(appliedLog?.[1]).toHaveProperty('applyDurationMs');
+
+    initiatorService.stop();
+    responderService.stop();
+  });
+
   it('logs diagnostics retrieval failures', async () => {
     const diagnostics = new TestNetworkDiagnostics();
     diagnostics.setFailure(true);
