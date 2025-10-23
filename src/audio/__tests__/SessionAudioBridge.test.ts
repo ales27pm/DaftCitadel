@@ -240,15 +240,17 @@ const createPluginHostMock = () => {
   };
   let crashListener: ((report: PluginCrashReport) => void) | undefined;
 
-  const loadPlugin = jest.fn(async (_descriptor: PluginDescriptor, options?: { sandboxIdentifier?: string }) => {
-    if (options?.sandboxIdentifier) {
-      currentHandle = {
-        ...currentHandle,
-        instanceId: options.sandboxIdentifier,
-      };
-    }
-    return { ...currentHandle };
-  });
+  const loadPlugin = jest.fn(
+    async (_descriptor: PluginDescriptor, options?: { sandboxIdentifier?: string }) => {
+      if (options?.sandboxIdentifier) {
+        currentHandle = {
+          ...currentHandle,
+          instanceId: options.sandboxIdentifier,
+        };
+      }
+      return { ...currentHandle };
+    },
+  );
   const releasePlugin = jest.fn(async () => undefined);
   const scheduleAutomation = jest.fn(async () => undefined);
   const getInstanceRuntime = jest.fn((instanceId: string) => {
@@ -991,7 +993,11 @@ describe('SessionAudioBridge', () => {
         createTrack({
           id: 'track-crash',
           routing: {
-            graph: createPluginRoutingGraph('track-crash', 'session-plugin-crash', 'curve-mix'),
+            graph: createPluginRoutingGraph(
+              'track-crash',
+              'session-plugin-crash',
+              'curve-mix',
+            ),
           },
           automationCurves: [
             {
@@ -1060,7 +1066,11 @@ describe('SessionAudioBridge', () => {
         createTrack({
           id: 'track-crash',
           routing: {
-            graph: createPluginRoutingGraph('track-crash', 'session-plugin-crash', 'curve-mix'),
+            graph: createPluginRoutingGraph(
+              'track-crash',
+              'session-plugin-crash',
+              'curve-mix',
+            ),
           },
           automationCurves: [
             {

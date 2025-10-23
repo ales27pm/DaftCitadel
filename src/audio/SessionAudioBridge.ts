@@ -124,7 +124,10 @@ class PluginRecoveryManager {
       }
       return refreshed;
     } catch (error) {
-      this.deps.logger.error('Failed to refresh plugin binding after manual retry', error);
+      this.deps.logger.error(
+        'Failed to refresh plugin binding after manual retry',
+        error,
+      );
       return false;
     }
   }
@@ -184,9 +187,7 @@ class PluginRecoveryManager {
 
     const node = this.snapshot.pluginNodes.get(sessionInstanceId);
     if (node) {
-      await this.deps.graph.forceConfigureNode(
-        this.deps.createNodeConfiguration(node),
-      );
+      await this.deps.graph.forceConfigureNode(this.deps.createNodeConfiguration(node));
     }
 
     this.clearAutomationState(sessionInstanceId);
@@ -213,9 +214,7 @@ class PluginRecoveryManager {
       await this.deps.applyPluginAutomations(updatedAutomations);
     }
     if (this.snapshot.automationRequests.size > 0) {
-      await this.deps.automationPublisher.applyChanges(
-        this.snapshot.automationRequests,
-      );
+      await this.deps.automationPublisher.applyChanges(this.snapshot.automationRequests);
     }
     this.crashedSessions.delete(sessionInstanceId);
     return true;
