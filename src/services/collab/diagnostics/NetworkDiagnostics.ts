@@ -24,11 +24,14 @@ export interface NetworkDiagnostics {
 
 interface NativeDiagnosticsModule {
   getCurrentLinkMetrics: () => Promise<Record<string, unknown>>;
-  startObserving: () => void;
-  stopObserving: () => void;
+  startObserving?: () => void;
+  stopObserving?: () => void;
+  beginObserving?: () => void;
+  endObserving?: () => void;
+  setPollingInterval?: (intervalMs: number) => void;
 }
 
-const COLLAPSED_INTERFACE_KEYS = ['interface', 'ssid', 'bssid'];
+const COLLAPSED_INTERFACE_KEYS = ['interfaceName', 'interface'];
 const EVENT_NAME = 'CollabNetworkDiagnosticsEvent';
 
 function normalizeNumber(value: NullableNumber): number | undefined {
@@ -92,6 +95,7 @@ function normalizeMetrics(raw: Record<string, unknown>): LinkMetrics {
     0,
     10_000,
   );
+  const timestamp = normalizeNumber(raw.timestamp as NullableNumber) ?? Date.now();
 
   return {
     interfaceName: coerceInterfaceName(raw),
@@ -99,7 +103,7 @@ function normalizeMetrics(raw: Record<string, unknown>): LinkMetrics {
     noise,
     linkSpeedMbps,
     transmitRateMbps,
-    timestamp: Date.now(),
+    timestamp,
     category: evaluateQuality({ rssi, noise, linkSpeedMbps }),
   };
 }
@@ -108,9 +112,11 @@ class DefaultNetworkDiagnostics implements NetworkDiagnostics {
   private readonly module?: NativeDiagnosticsModule;
   private readonly emitter: NativeEventEmitter | EventEmitter;
   private cachedFallbackMetrics: LinkMetrics | null = null;
+  private subscriberCount = 0;
 
   constructor(module?: NativeDiagnosticsModule) {
     this.module = module;
+
     if (module) {
       this.emitter = new NativeEventEmitter(
         module as unknown as {
@@ -127,6 +133,7 @@ class DefaultNetworkDiagnostics implements NetworkDiagnostics {
     if (!this.module) {
       return this.getFallbackMetrics();
     }
+
     const metrics = await this.module.getCurrentLinkMetrics();
     return normalizeMetrics(metrics);
   }
@@ -138,8 +145,8 @@ class DefaultNetworkDiagnostics implements NetworkDiagnostics {
       return () => {};
     }
 
-    if (this.emitter.listenerCount(EVENT_NAME) === 0) {
-      this.module.startObserving();
+    if (this.subscriberCount === 0) {
+      this.startNativeObservation();
     }
 
     const handler = (payload: Record<string, unknown>) => {
@@ -151,10 +158,13 @@ class DefaultNetworkDiagnostics implements NetworkDiagnostics {
       handler,
     );
 
+    this.subscriberCount += 1;
+
     return () => {
       subscription.remove();
-      if (this.emitter.listenerCount(EVENT_NAME) === 0) {
-        this.module?.stopObserving();
+      this.subscriberCount = Math.max(0, this.subscriberCount - 1);
+      if (this.subscriberCount === 0) {
+        this.stopNativeObservation();
       }
     };
   }
@@ -167,6 +177,28 @@ class DefaultNetworkDiagnostics implements NetworkDiagnostics {
       };
     }
     return this.cachedFallbackMetrics;
+  }
+
+  private startNativeObservation(): void {
+    if (!this.module) {
+      return;
+    }
+    if (typeof this.module.beginObserving === 'function') {
+      this.module.beginObserving();
+    } else if (typeof this.module.startObserving === 'function') {
+      this.module.startObserving();
+    }
+  }
+
+  private stopNativeObservation(): void {
+    if (!this.module) {
+      return;
+    }
+    if (typeof this.module.endObserving === 'function') {
+      this.module.endObserving();
+    } else if (typeof this.module.stopObserving === 'function') {
+      this.module.stopObserving();
+    }
   }
 }
 

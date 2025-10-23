@@ -427,16 +427,28 @@ const pluginHostModule = {
 };
 
 const collabDiagnosticsEmitter = new MockNativeEventEmitter();
+const startObservingMock = jest.fn();
+const stopObservingMock = jest.fn();
+const beginObservingMock = jest.fn(() => startObservingMock());
+const endObservingMock = jest.fn(() => stopObservingMock());
+const setPollingIntervalMock = jest.fn();
 
 const collabNetworkDiagnosticsModule = {
   getCurrentLinkMetrics: async () => ({
     interface: 'en0',
+    ssid: 'DaftLab',
+    bssid: '00:11:22:33:44:55',
     rssi: -58,
     noise: -95,
     linkSpeedMbps: 420,
+    transmitRateMbps: 480,
+    timestamp: Date.now(),
   }),
-  startObserving: () => {},
-  stopObserving: () => {},
+  startObserving: startObservingMock,
+  stopObserving: stopObservingMock,
+  beginObserving: beginObservingMock,
+  endObserving: endObservingMock,
+  setPollingInterval: setPollingIntervalMock,
   __emitter: collabDiagnosticsEmitter,
 };
 
@@ -538,4 +550,9 @@ export type TurboModule = unknown;
 
 export const __mockPluginHostEmitter = pluginHostEmitter;
 export const __mockCollabDiagnosticsEmitter = collabDiagnosticsEmitter;
+export const __mockStartObserving = startObservingMock;
+export const __mockStopObserving = stopObservingMock;
+export const __mockBeginObserving = beginObservingMock;
+export const __mockEndObserving = endObservingMock;
+export const __mockSetPollingInterval = setPollingIntervalMock;
 export const __mockAudioEngineState = audioEngineState;
