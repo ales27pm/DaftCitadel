@@ -4,19 +4,22 @@ import React
 #if canImport(CoreWLAN)
 import CoreWLAN
 #endif
+#if canImport(SystemConfiguration)
+import SystemConfiguration.CaptiveNetwork
+#endif
 
 @objc(CollabNetworkDiagnostics)
 class CollabNetworkDiagnostics: RCTEventEmitter {
   private enum DiagnosticsError: LocalizedError {
-    case coreWLANUnavailable
     case interfaceUnavailable
+    case wifiInformationUnavailable
 
     var errorDescription: String? {
       switch self {
-      case .coreWLANUnavailable:
-        return "CoreWLAN is not available on this platform."
       case .interfaceUnavailable:
         return "No active Wi-Fi interface could be found."
+      case .wifiInformationUnavailable:
+        return "Wi-Fi metrics are unavailable on this device."
       }
     }
   }
@@ -25,6 +28,7 @@ class CollabNetworkDiagnostics: RCTEventEmitter {
   private let eventName = "CollabNetworkDiagnosticsEvent"
   private let metricsQueue = DispatchQueue(label: "com.daftcitadel.collab.diagnostics")
   private var pollTimer: DispatchSourceTimer?
+  private var pollInterval: TimeInterval = 5.0
 
   override static func requiresMainQueueSetup() -> Bool {
     return false
@@ -42,14 +46,31 @@ class CollabNetworkDiagnostics: RCTEventEmitter {
     stopMonitoring()
   }
 
-  @objc(startObserving)
-  func startObservingCommand() {
+  @objc(beginObserving)
+  func beginObserving() {
     startMonitoring()
   }
 
-  @objc(stopObserving)
-  func stopObservingCommand() {
+  @objc(endObserving)
+  func endObserving() {
     stopMonitoring()
+  }
+
+  @objc(setPollingInterval:)
+  func setPollingInterval(intervalMs: NSNumber) {
+    let interval = intervalMs.doubleValue
+    guard interval.isFinite, interval > 0 else {
+      return
+    }
+    metricsQueue.async {
+      self.pollInterval = interval / 1000.0
+      let wasActive = self.pollTimer != nil
+      self.pollTimer?.cancel()
+      self.pollTimer = nil
+      if wasActive {
+        self.scheduleTimerLocked()
+      }
+    }
   }
 
   @objc(getCurrentLinkMetrics:rejecter:)
@@ -74,13 +95,7 @@ class CollabNetworkDiagnostics: RCTEventEmitter {
         return
       }
 
-      let timer = DispatchSource.makeTimerSource(queue: self.metricsQueue)
-      timer.schedule(deadline: .now(), repeating: .seconds(5), leeway: .seconds(1))
-      timer.setEventHandler { [weak self] in
-        self?.emitLatestMetrics()
-      }
-      self.pollTimer = timer
-      timer.resume()
+      self.scheduleTimerLocked()
     }
   }
 
@@ -89,6 +104,23 @@ class CollabNetworkDiagnostics: RCTEventEmitter {
       self.pollTimer?.cancel()
       self.pollTimer = nil
     }
+  }
+
+  private func scheduleTimerLocked() {
+    guard pollTimer == nil else {
+      return
+    }
+    let timer = DispatchSource.makeTimerSource(queue: metricsQueue)
+    timer.schedule(
+      deadline: .now(),
+      repeating: .milliseconds(Int(pollInterval * 1_000.0)),
+      leeway: .milliseconds(250)
+    )
+    timer.setEventHandler { [weak self] in
+      self?.emitLatestMetrics()
+    }
+    pollTimer = timer
+    timer.resume()
   }
 
   private func emitLatestMetrics() {
@@ -114,9 +146,17 @@ class CollabNetworkDiagnostics: RCTEventEmitter {
   }
 
   private func fetchMetrics() throws -> [String: Any] {
+#if canImport(CoreWLAN) && targetEnvironment(macCatalyst)
+    return try fetchMetricsUsingCoreWLAN()
+#else
+    return try fetchMetricsUsingCaptiveNetwork()
+#endif
+  }
+
 #if canImport(CoreWLAN)
+  private func fetchMetricsUsingCoreWLAN() throws -> [String: Any] {
     guard let client = CWWiFiClient.shared() else {
-      throw DiagnosticsError.coreWLANUnavailable
+      throw DiagnosticsError.wifiInformationUnavailable
     }
 
     guard let interface = client.interface() else {
@@ -130,10 +170,10 @@ class CollabNetworkDiagnostics: RCTEventEmitter {
     if let name = interface.interfaceName {
       payload["interface"] = name
     }
-    if let ssid = interface.ssid(), ssid != "" {
+    if let ssid = interface.ssid(), !ssid.isEmpty {
       payload["ssid"] = ssid
     }
-    if let bssid = interface.bssid(), bssid != "" {
+    if let bssid = interface.bssid(), !bssid.isEmpty {
       payload["bssid"] = bssid
     }
 
@@ -160,8 +200,45 @@ class CollabNetworkDiagnostics: RCTEventEmitter {
     }
 
     return payload
+  }
+#endif
+
+  private func fetchMetricsUsingCaptiveNetwork() throws -> [String: Any] {
+#if canImport(SystemConfiguration)
+    guard
+      let supportedInterfaces = CNCopySupportedInterfaces() as? [String],
+      let interfaceName = supportedInterfaces.first
+    else {
+      throw DiagnosticsError.interfaceUnavailable
+    }
+
+    guard
+      let information = CNCopyCurrentNetworkInfo(interfaceName as CFString)
+        as? [String: Any]
+    else {
+      throw DiagnosticsError.wifiInformationUnavailable
+    }
+
+    var payload: [String: Any] = [
+      "timestamp": Date().timeIntervalSince1970 * 1000.0,
+      "interface": interfaceName,
+    ]
+
+    if let ssid = information[kCNNetworkInfoKeySSID as String] as? String,
+       !ssid.isEmpty
+    {
+      payload["ssid"] = ssid
+    }
+
+    if let bssid = information[kCNNetworkInfoKeyBSSID as String] as? String,
+       !bssid.isEmpty
+    {
+      payload["bssid"] = bssid
+    }
+
+    return payload
 #else
-    throw DiagnosticsError.coreWLANUnavailable
+    throw DiagnosticsError.wifiInformationUnavailable
 #endif
   }
 }

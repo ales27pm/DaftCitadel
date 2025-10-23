@@ -23,7 +23,7 @@ The collaboration service is built around `CollabSessionService` and helper modu
    - Uses `CWWiFiClient` to query the current interface (`interface()?.ssid()`, `rssiValue()`, `noiseMeasurement()`).
    - Publishes updates via `sendEventWithName("CollabNetworkDiagnosticsEvent", body: metrics)`.
    - Requests temporary full Wi-Fi usage entitlement for sideloaded builds (`com.apple.developer.networking.multiple-packets.tuple`).
-2. Ensure the module exposes `getCurrentLinkMetrics`, `startObserving`, and `stopObserving` as used in `NetworkDiagnostics.ts`.
+2. Ensure the module exposes `getCurrentLinkMetrics` and paired observation commands (`startObserving`/`stopObserving` or `beginObserving`/`endObserving`) as used in `NetworkDiagnostics.ts`.
 3. Log failures with `os_log` to aid diagnosis when CoreWLAN is unavailable (e.g., on simulator).
 
 ### Android (WifiManager)

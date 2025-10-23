@@ -16,9 +16,9 @@ describe('DiagnosticsManager', () => {
     category: 'excellent',
   };
 
-  async function flushMicrotasks(): Promise<void> {
+  const flushMicrotasks = async (): Promise<void> => {
     await new Promise((resolve) => setImmediate(resolve));
-  }
+  };
 
   it('subscribes to metrics and logs sanitized payloads', async () => {
     const logger = jest.fn();
@@ -56,12 +56,16 @@ describe('DiagnosticsManager', () => {
 
     expect(eventKey).toBe('collab.networkMetrics');
     expect(payload).not.toHaveProperty('interfaceName');
+    expect(payload).not.toHaveProperty('ssid');
+    expect(payload).not.toHaveProperty('bssid');
     expect(payload).toMatchObject({ rssi: -60, linkSpeedMbps: 480 });
 
     const initialCall = logger.mock.calls.find(
       ([key]) => key === 'collab.networkMetrics.initial',
     );
     expect(initialCall?.[1]).not.toHaveProperty('interfaceName');
+    expect(initialCall?.[1]).not.toHaveProperty('ssid');
+    expect(initialCall?.[1]).not.toHaveProperty('bssid');
     expect(initialCall?.[1]).toMatchObject({ rssi: -55 });
   });
 

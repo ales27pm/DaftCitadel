@@ -4,6 +4,8 @@ import type { Logger } from './types';
 function sanitizeMetrics(metrics: LinkMetrics): Record<string, unknown> {
   const sanitized: Record<string, unknown> = { ...metrics };
   delete sanitized.interfaceName;
+  delete sanitized.ssid;
+  delete sanitized.bssid;
   return sanitized;
 }
 

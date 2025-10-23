@@ -15,12 +15,14 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
+import java.net.NetworkInterface
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
 private const val EVENT_NAME = "CollabNetworkDiagnosticsEvent"
 private const val LOG_TAG = "CollabDiagnostics"
+private const val DEFAULT_POLL_INTERVAL_MS = 5_000L
 
 class CollabNetworkDiagnosticsModule(
   reactContext: ReactApplicationContext,
@@ -31,6 +33,7 @@ class CollabNetworkDiagnosticsModule(
     applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
   private val scheduler = Executors.newSingleThreadScheduledExecutor()
   private var pollTask: ScheduledFuture<*>? = null
+  @Volatile private var pollIntervalMs: Long = DEFAULT_POLL_INTERVAL_MS
 
   override fun getName(): String = "CollabNetworkDiagnostics"
 
@@ -69,9 +72,9 @@ class CollabNetworkDiagnosticsModule(
           sendErrorEvent(error.message ?: "Metrics unavailable")
         }
       },
-      5,
-      5,
-      TimeUnit.SECONDS,
+      pollIntervalMs,
+      pollIntervalMs,
+      TimeUnit.MILLISECONDS,
     )
   }
 
@@ -79,6 +82,16 @@ class CollabNetworkDiagnosticsModule(
   fun stopObserving() {
     pollTask?.cancel(true)
     pollTask = null
+  }
+
+  @ReactMethod
+  fun beginObserving() {
+    startObserving()
+  }
+
+  @ReactMethod
+  fun endObserving() {
+    stopObserving()
   }
 
   @ReactMethod
@@ -91,8 +104,24 @@ class CollabNetworkDiagnosticsModule(
     // Required for React Native event emitter semantics.
   }
 
+  @ReactMethod
+  fun setPollingInterval(intervalMs: Double) {
+    if (intervalMs.isNaN() || intervalMs <= 0.0) {
+      return
+    }
+    pollIntervalMs = intervalMs.toLong()
+    val wasRunning = pollTask != null
+    pollTask?.cancel(true)
+    pollTask = null
+    if (wasRunning) {
+      startObserving()
+    }
+  }
+
   override fun invalidate() {
     super.invalidate()
+    pollTask?.cancel(true)
+    pollTask = null
     scheduler.shutdownNow()
   }
 
@@ -112,7 +141,7 @@ class CollabNetworkDiagnosticsModule(
       payload.putString("bssid", info.bssid)
     }
     if (info.networkId >= 0) {
-      payload.putString("interface", "wlan0")
+      payload.putString("interface", getWifiInterfaceName())
     }
     payload.putDouble("timestamp", System.currentTimeMillis().toDouble())
 
@@ -159,16 +188,18 @@ class CollabNetworkDiagnosticsModule(
 
   @Throws(SecurityException::class)
   private fun ensurePermissions() {
-    val locationGranted =
-      hasPermission(Manifest.permission.ACCESS_FINE_LOCATION) ||
-        hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
-
-    val nearbyGranted =
-      Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-        hasPermission(Manifest.permission.NEARBY_WIFI_DEVICES)
-
-    if (!locationGranted || !nearbyGranted) {
-      throw SecurityException("ACCESS_FINE_LOCATION and NEARBY_WIFI_DEVICES permissions are required")
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      val nearbyGranted = hasPermission(Manifest.permission.NEARBY_WIFI_DEVICES)
+      if (!nearbyGranted) {
+        throw SecurityException("NEARBY_WIFI_DEVICES permission is required")
+      }
+    } else {
+      val locationGranted =
+        hasPermission(Manifest.permission.ACCESS_FINE_LOCATION) ||
+          hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
+      if (!locationGranted) {
+        throw SecurityException("ACCESS_FINE_LOCATION permission is required")
+      }
     }
   }
 
@@ -177,6 +208,24 @@ class CollabNetworkDiagnosticsModule(
       applicationContext,
       permission,
     ) == PackageManager.PERMISSION_GRANTED
+  }
+
+  private fun getWifiInterfaceName(): String {
+    return try {
+      val interfaces = NetworkInterface.getNetworkInterfaces()
+      if (interfaces != null) {
+        while (interfaces.hasMoreElements()) {
+          val iface = interfaces.nextElement()
+          if (iface.name.startsWith("wlan")) {
+            return iface.name
+          }
+        }
+      }
+      "wlan0"
+    } catch (error: Exception) {
+      Log.v(LOG_TAG, "Falling back to default Wi-Fi interface name", error)
+      "wlan0"
+    }
   }
 
   private fun sanitizeSsid(rawSsid: String?): String? {
