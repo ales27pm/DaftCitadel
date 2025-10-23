@@ -19,7 +19,7 @@ The collaboration service is built around `CollabSessionService` and helper modu
 
 ### iOS (CoreWLAN)
 
-1. Create a native module (Objective-C/Swift) named `CollabNetworkDiagnostics` that:
+1. The repository ships `native/collab/ios/CollabNetworkDiagnostics.swift`, which fulfils the following contract:
    - Uses `CWWiFiClient` to query the current interface (`interface()?.ssid()`, `rssiValue()`, `noiseMeasurement()`).
    - Publishes updates via `sendEventWithName("CollabNetworkDiagnosticsEvent", body: metrics)`.
    - Requests temporary full Wi-Fi usage entitlement for sideloaded builds (`com.apple.developer.networking.multiple-packets.tuple`).
@@ -28,10 +28,9 @@ The collaboration service is built around `CollabSessionService` and helper modu
 
 ### Android (WifiManager)
 
-1. Implement a Kotlin/Java module that acquires `WifiManager` via `context.applicationContext.getSystemService(Context.WIFI_SERVICE)`.
-2. Subscribe to `WifiManager.SCAN_RESULTS_AVAILABLE_ACTION` and `WifiManager.RSSI_CHANGED_ACTION` broadcasts. Emit metrics matching the fields consumed by `NetworkDiagnostics.ts`.
-3. Declare and request `ACCESS_FINE_LOCATION` at runtime using React Native’s permission APIs—`requiresLocationPermission()` surfaces the need to the JS layer.
-4. Optionally integrate `ConnectivityManager.registerNetworkCallback` to capture link bandwidth using `LinkProperties.getLinkBandwidths()` on Android 13+.
+1. The Android bridge lives in `native/collab/android/src/main/java/com/daftcitadel/collab/CollabNetworkDiagnosticsModule.kt` and polls `WifiManager` for link state before emitting `CollabNetworkDiagnosticsEvent` updates.
+2. Declare and request `ACCESS_FINE_LOCATION` at runtime using React Native’s permission APIs—`requiresLocationPermission()` surfaces the need to the JS layer. Android 13+ devices also require `NEARBY_WIFI_DEVICES` for link metrics.
+3. Optionally integrate `ConnectivityManager.registerNetworkCallback` to capture link bandwidth using `LinkProperties.getLinkBandwidths()` on Android 13+.
 
 ## 3. Performance Capture Workflow
 
