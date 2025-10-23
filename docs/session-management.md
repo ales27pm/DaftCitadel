@@ -16,7 +16,10 @@ The `src/session/` directory provides the following building blocks:
 - **Serialization (`serialization.ts`)** — Canonical JSON encoding/decoding with
   schema versioning. `mergeSessions` performs revision-winner reconciliation that
   keeps metadata consistent while preventing stale revisions from overwriting
-  newer work.
+  newer work. Collaboration events serialize via
+  `serializeCollabSessionPatch` and integrate on the host through
+  `createRemoteSessionPatchApplier`, which delegates to `SessionManager.updateSession`
+  so undo/redo and audio-engine notifications remain consistent.
 - **Storage adapters (`storage/`)** —
   - `SQLiteSessionStorageAdapter` targets mobile platforms and accepts any
     SQLite bridge that implements the lightweight `SQLiteConnection` interface.

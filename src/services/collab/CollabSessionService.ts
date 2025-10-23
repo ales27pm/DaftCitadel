@@ -34,6 +34,7 @@ export interface CollabSessionOptions<T> {
   readonly connectionFactory?: () => RTCPeerConnection;
   readonly logger?: Logger;
   readonly onRemoteUpdate?: (payload: CollabPayload<T>) => void;
+  readonly onRemoteUpdateApplied?: (payload: CollabPayload<T>) => Promise<void> | void;
   readonly channelLabel?: string;
   readonly channelConfig?: RTCDataChannelInit;
   readonly minBufferedAmountLowThreshold?: number;
@@ -66,6 +67,9 @@ export class CollabSessionService<T = unknown> {
   private readonly minBufferedThreshold: number;
   private readonly maxBufferedThreshold: number;
   private readonly externalUpdateListener?: (payload: CollabPayload<T>) => void;
+  private readonly remoteUpdateAppliedHandler?: (
+    payload: CollabPayload<T>,
+  ) => Promise<void> | void;
   private readonly connectionManager: ConnectionManager;
   private readonly encryptionManager: EncryptionManager;
   private readonly diagnosticsManager: DiagnosticsManager;
@@ -90,6 +94,7 @@ export class CollabSessionService<T = unknown> {
     this.maxBufferedThreshold =
       options.maxBufferedAmountLowThreshold ?? DEFAULT_MAX_BUFFERED_AMOUNT_LOW_THRESHOLD;
     this.externalUpdateListener = options.onRemoteUpdate;
+    this.remoteUpdateAppliedHandler = options.onRemoteUpdateApplied;
 
     const connectionFactory =
       options.connectionFactory ?? (() => createDefaultPeerConnection());
@@ -287,6 +292,15 @@ export class CollabSessionService<T = unknown> {
     }
 
     const receiveTime = Date.now();
+    this.processRemoteUpdate(payload, receiveTime).catch((error) => {
+      this.logger('collab.remoteUpdate.unhandledError', { error: String(error) });
+    });
+  }
+
+  private async processRemoteUpdate(
+    payload: CollabPayload<T>,
+    receiveTime: number,
+  ): Promise<void> {
     const offset = this.latencyCompensator.update({
       remoteClock: payload.clock,
       receivedAt: receiveTime,
@@ -297,7 +311,46 @@ export class CollabSessionService<T = unknown> {
       clock: compensatedClock,
     };
 
-    this.externalUpdateListener?.(normalizedPayload);
+    const latencyMs = Math.max(0, receiveTime - payload.clock);
+    const diagnosticsContext = this.diagnosticsManager.getLatestSanitizedMetrics();
+    const baseLogContext: Record<string, unknown> = {
+      remoteClock: payload.clock,
+      compensatedClock,
+      latencyMs,
+      schemaVersion: payload.schemaVersion,
+    };
+    if (diagnosticsContext) {
+      baseLogContext.diagnostics = diagnosticsContext;
+    }
+
+    this.logger('collab.remoteUpdate.received', baseLogContext);
+
+    if (this.remoteUpdateAppliedHandler) {
+      const applyStart = Date.now();
+      try {
+        await this.remoteUpdateAppliedHandler(normalizedPayload);
+        this.logger('collab.remoteUpdate.applied', {
+          ...baseLogContext,
+          applyDurationMs: Date.now() - applyStart,
+        });
+      } catch (error) {
+        this.logger('collab.remoteUpdate.applyError', {
+          ...baseLogContext,
+          error: String(error),
+        });
+      }
+    }
+
+    if (this.externalUpdateListener) {
+      try {
+        this.externalUpdateListener(normalizedPayload);
+      } catch (error) {
+        this.logger('collab.remoteUpdate.listenerError', {
+          ...baseLogContext,
+          error: String(error),
+        });
+      }
+    }
   }
 
   private tuneDataChannel(metrics: LinkMetrics): void {
