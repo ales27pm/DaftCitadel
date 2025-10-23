@@ -316,12 +316,8 @@ export const buildTransport = (
   if (runtime) {
     isPlaying = runtime.isPlaying;
     if (totalBeats > 0) {
-      const wrappedBeats = runtime.beats % totalBeats;
-      playheadBeats = clamp(
-        wrappedBeats < 0 ? wrappedBeats + totalBeats : wrappedBeats,
-        0,
-        totalBeats,
-      );
+      const wrappedBeats = ((runtime.beats % totalBeats) + totalBeats) % totalBeats;
+      playheadBeats = clamp(wrappedBeats, 0, totalBeats);
     } else {
       playheadBeats = Math.max(0, runtime.beats);
     }

@@ -176,7 +176,9 @@ export class SessionAudioBridge {
     this.supportsTransport =
       typeof this.audioEngine.getTransportState === 'function' &&
       typeof this.audioEngine.startTransport === 'function' &&
-      typeof this.audioEngine.stopTransport === 'function';
+      typeof this.audioEngine.stopTransport === 'function' &&
+      typeof (this.audioEngine as unknown as { locateTransport?: unknown })
+        .locateTransport === 'function';
     this.supportsDiagnostics =
       typeof this.audioEngine.getRenderDiagnostics === 'function';
     if (!this.supportsDiagnostics) {
