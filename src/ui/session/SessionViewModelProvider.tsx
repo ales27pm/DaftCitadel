@@ -34,6 +34,7 @@ interface SessionViewModelProviderProps extends PropsWithChildren {
 interface SessionViewModelContextValue extends SessionViewModelState {
   manager: SessionManager;
   refresh: () => Promise<void>;
+  retryPlugin: (instanceId: string) => Promise<boolean>;
 }
 
 const SessionViewModelContext = createContext<SessionViewModelContextValue | undefined>(
@@ -268,13 +269,49 @@ export const SessionViewModelProvider: React.FC<SessionViewModelProviderProps> =
     ],
   );
 
+  const retryPlugin = useCallback(
+    async (instanceId: string) => {
+      if (!audioBridge?.retryPluginInstance) {
+        console.warn('Audio bridge does not support plugin retries');
+        return false;
+      }
+      try {
+        const success = await audioBridge.retryPluginInstance(instanceId);
+        if (success) {
+          setPluginCrashMap((previous) => {
+            if (!previous.has(instanceId)) {
+              return previous;
+            }
+            const next = new Map(previous);
+            const existing = next.get(instanceId);
+            if (existing) {
+              next.set(instanceId, { ...existing, recovered: true });
+            }
+            return next;
+          });
+          setPluginAlerts((previous) =>
+            previous.map((alert) =>
+              alert.instanceId === instanceId ? { ...alert, recovered: true } : alert,
+            ),
+          );
+        }
+        return success;
+      } catch (retryPluginError) {
+        console.error('Failed to retry plugin instance', retryPluginError);
+        return false;
+      }
+    },
+    [audioBridge],
+  );
+
   const contextValue = useMemo<SessionViewModelContextValue>(
     () => ({
       manager,
       refresh: ensureSession,
+      retryPlugin,
       ...viewModel,
     }),
-    [ensureSession, manager, viewModel],
+    [ensureSession, manager, retryPlugin, viewModel],
   );
 
   const transportControls = useMemo<TransportController>(() => {

@@ -30,6 +30,8 @@ Key characteristics:
 - Link the Objective-C++ bridge into the React Native target (`PluginHostModule`).
 - Add the AudioToolbox and AVFoundation frameworks.
 - Grant the app the `com.apple.security.network.client` entitlement if plugins perform outbound requests.
+- Persist AUv3 sandboxes under `Application Support/Plugins/<format>/<identifier>` so multiple plugin formats can safely share the same identifier without clobbering metadata; the JavaScript sandbox manager mirrors this layout when restoring state after restarts.
+- Include `com.apple.security.files.user-selected.read-write` and `com.apple.security.files.downloads.read-write` entitlements when plugins import user content from outside the sandbox.
 
 ## VST3 (Android / desktop) bridge
 
@@ -48,6 +50,8 @@ Highlights:
 - Package a `vst3sandbox` executable (or `libvst3sandbox.so`) into `filesDir` or the native library directory during installation.
 - Ensure plugins include a `Contents/Info.json` manifest describing parameters. The loader tolerates missing manifests but skips descriptors it cannot parse.
 - Declare the `READ_EXTERNAL_STORAGE` and `WRITE_EXTERNAL_STORAGE` permissions in `AndroidManifest.xml` for plugins stored on shared storage. On Android 13+, only `READ_MEDIA_AUDIO` is required; the host automatically suppresses legacy prompts on API 33+.
+- Sandbox directories follow the convention `filesDir/plugin-sandboxes/<format>/<identifier>` so AUv3, VST3, and future formats can maintain isolated cache directories. The JavaScript sandbox manager persists this mapping to AsyncStorage to avoid redundant permission prompts.
+- When surfacing crash notifications via toasts or system notifications on Android 13+, request the `POST_NOTIFICATIONS` permission to ensure retry affordances are visible.
 
 ## JavaScript plugin host workflow
 
@@ -57,7 +61,8 @@ The JS facade coordinates sandboxes, native instantiation, and crash handling:
 2. `PluginHost.loadPlugin(descriptor, options)` ensures the sandbox exists, requests native instantiation, and registers crash listeners.
 3. `PluginHost.scheduleAutomation` validates instance ownership before calling the native automation scheduler; `automateParameter` remains as a compatibility wrapper.
 4. `PluginHost.onCrash` subscribers receive normalized crash reports and can trigger session routing recovery.
-5. `PluginSandboxManager` centralizes Android permission prompts and reuses resolved sandboxes.
+5. `PluginSandboxManager` centralizes Android permission prompts, persists sandbox metadata per plugin format in AsyncStorage, and reuses resolved sandboxes across launches.
+6. Restart tokens emitted by the native hosts are verified before JavaScript attempts an automatic recovery, preventing stale processes from being resurrected.
 
 ## Routing integration
 
@@ -70,6 +75,7 @@ Plugin instances are represented in the session model as `RoutingNode` entries w
 - The C++ audio engine exposes a dedicated [`PluginNode`](../audio-engine/include/audio_engine/PluginNode.h) that forwards render buffers to the platform host through [`PluginHostBridge`](../audio-engine/include/audio_engine/PluginHost.h). Hosts should call `PluginHostBridge::SetRenderCallback` when the sandbox process is ready so audio render callbacks can be proxied by `hostInstanceId`.
 - Plugin automation targets defined on routing nodes are translated into `PluginHost.scheduleAutomation` calls. Automation signatures embed the session revision to guarantee rescheduling when the timeline changes.
 - Stale plugin instances are released after the routing diff executes so native resources are reclaimed promptly.
+- Crash recovery triggers a `SessionAudioBridge` rebind that updates node options with the refreshed `hostInstanceId` and replays cached automation lanes through the shared `AutomationPublisher` helper.
 
 ### UI surfacing
 
@@ -81,9 +87,9 @@ Plugin instances are represented in the session model as `RoutingNode` entries w
 Automated coverage includes:
 
 - `src/audio/__tests__/PluginHost.test.ts` – validates JS lifecycle hooks, crash recovery, and automation scheduling using mock native modules.
-- `src/audio/__tests__/SessionAudioBridge.test.ts` – exercises plugin lifecycle diffing, automation scheduling, and routing graph mutations.
+- `src/audio/__tests__/SessionAudioBridge.test.ts` – exercises plugin lifecycle diffing, automation scheduling, routing graph mutations, and crash recovery rebinds.
 - `src/session/__tests__/routingGraph.test.ts` – verifies routing graph normalization and validation logic for plugin nodes, sends, and sidechains.
-- `src/ui/session/__tests__/SessionViewModelProvider.test.tsx` – ensures crash notifications propagate into the session view model.
+- `src/ui/session/__tests__/SessionViewModelProvider.test.tsx` – ensures crash notifications propagate into the session view model and verifies manual retry hooks update crash state.
 
 Use the following commands before committing:
 

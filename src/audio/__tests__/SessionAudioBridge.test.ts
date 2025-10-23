@@ -14,7 +14,11 @@ import {
   createDefaultTrackRoutingGraph,
   PluginRoutingNode,
 } from '../../session/models';
-import type { PluginDescriptor } from '../plugins/types';
+import type {
+  PluginCrashReport,
+  PluginDescriptor,
+  PluginInstanceHandle,
+} from '../plugins/types';
 import type { PluginHost } from '../plugins/PluginHost';
 
 type LoaderFactoryOptions = Partial<AudioFileData> & {
@@ -179,22 +183,73 @@ const createSession = (overrides: Partial<Session> = {}): Session => ({
 });
 
 const createPluginHostMock = () => {
-  const loadPlugin = jest.fn(async () => ({
-    instanceId: 'native-instance',
+  let currentHandle: PluginInstanceHandle = {
+    instanceId: 'session-plugin',
+    nativeInstanceId: 'native-instance',
     descriptor: mockDescriptor,
     cpuLoadPercent: 12,
     latencySamples: 32,
-  }));
+  };
+  let crashListener: ((report: PluginCrashReport) => void) | undefined;
+
+  const loadPlugin = jest.fn(async () => {
+    currentHandle = {
+      ...currentHandle,
+      instanceId: 'native-instance',
+      nativeInstanceId: 'native-instance',
+    };
+    return currentHandle;
+  });
   const releasePlugin = jest.fn(async () => undefined);
   const scheduleAutomation = jest.fn(async () => undefined);
-  const onCrash = jest.fn();
+  const getInstanceRuntime = jest.fn((instanceId: string) => {
+    if (instanceId !== currentHandle.instanceId) {
+      return undefined;
+    }
+    return {
+      handle: currentHandle,
+      nativeInstanceId: currentHandle.nativeInstanceId ?? currentHandle.instanceId,
+    };
+  });
+  const retryInstance = jest.fn(async (instanceId: string) => {
+    if (instanceId !== currentHandle.instanceId) {
+      return false;
+    }
+    currentHandle = {
+      ...currentHandle,
+      nativeInstanceId: `${currentHandle.nativeInstanceId}-retry`,
+    };
+    return true;
+  });
+  const onCrash = jest.fn((listener: (report: PluginCrashReport) => void) => {
+    crashListener = listener;
+    return () => {
+      crashListener = undefined;
+    };
+  });
+  const emitCrash = (report: PluginCrashReport) => {
+    crashListener?.(report);
+  };
   const host = {
     loadPlugin,
     releasePlugin,
     scheduleAutomation,
     onCrash,
+    getInstanceRuntime,
+    retryInstance,
   } as unknown as PluginHost;
-  return { host, loadPlugin, releasePlugin, scheduleAutomation };
+  return {
+    host,
+    loadPlugin,
+    releasePlugin,
+    scheduleAutomation,
+    getInstanceRuntime,
+    retryInstance,
+    emitCrash,
+    setHandle(nextHandle: PluginInstanceHandle) {
+      currentHandle = nextHandle;
+    },
+  };
 };
 
 const mockDescriptor: PluginDescriptor = {
@@ -744,6 +799,122 @@ describe('SessionAudioBridge', () => {
     await bridge.applySessionUpdate({ ...session, revision: 3 });
 
     expect(scheduleAutomation).toHaveBeenCalledTimes(1);
+  });
+
+  it('rebinds plugin nodes and replays automation after a recovered crash', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine, configureNodes } = createMockEngine(clock);
+    const hostMock = createPluginHostMock();
+    const descriptorResolver = jest.fn().mockResolvedValue(mockDescriptor);
+    const bridge = new SessionAudioBridge(engine, {
+      fileLoader: loader,
+      pluginHost: hostMock.host,
+      resolvePluginDescriptor: descriptorResolver,
+    });
+
+    const baseGraph = createDefaultTrackRoutingGraph('track-crash');
+    const trackInput = baseGraph.nodes.find((node) => node.type === 'trackInput');
+    const trackOutput = baseGraph.nodes.find((node) => node.type === 'trackOutput');
+    if (!trackInput || !trackOutput) {
+      throw new Error('missing endpoints');
+    }
+
+    const pluginNode: PluginRoutingNode = {
+      id: 'track-crash:plugin:fx',
+      type: 'plugin',
+      slot: 'insert',
+      instanceId: 'session-plugin-crash',
+      order: 0,
+      accepts: ['audio'],
+      emits: ['audio'],
+      automation: [
+        {
+          parameterId: 'mix',
+          curveId: 'curve-mix',
+        },
+      ],
+    };
+
+    const automationCurve: AutomationCurve = {
+      id: 'curve-mix',
+      parameter: 'mix',
+      interpolation: 'linear',
+      points: [
+        { time: 0, value: 0.1 },
+        { time: 250, value: 0.6 },
+      ],
+    };
+
+    const graphWithPlugin: RoutingGraph = {
+      ...baseGraph,
+      nodes: [...baseGraph.nodes, pluginNode],
+      connections: [
+        {
+          id: 'conn-in-plugin',
+          from: { nodeId: trackInput.id },
+          to: { nodeId: pluginNode.id },
+          signal: 'audio',
+          enabled: true,
+        },
+        {
+          id: 'conn-plugin-out',
+          from: { nodeId: pluginNode.id },
+          to: { nodeId: trackOutput.id },
+          signal: 'audio',
+          enabled: true,
+        },
+      ],
+    };
+
+    const session = createSession({
+      revision: 2,
+      tracks: [
+        createTrack({
+          id: 'track-crash',
+          routing: { graph: graphWithPlugin },
+          automationCurves: [automationCurve],
+        }),
+      ],
+    });
+
+    await bridge.applySessionUpdate(session);
+
+    configureNodes.mockClear();
+    hostMock.scheduleAutomation.mockClear();
+
+    hostMock.setHandle({
+      instanceId: 'native-instance',
+      nativeInstanceId: 'native-instance-retry',
+      descriptor: mockDescriptor,
+      cpuLoadPercent: 8,
+      latencySamples: 48,
+    });
+
+    hostMock.emitCrash({
+      instanceId: 'native-instance',
+      descriptor: mockDescriptor,
+      timestamp: new Date().toISOString(),
+      reason: 'Recovered crash',
+      recovered: true,
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const lastConfigureCall = configureNodes.mock.calls.pop();
+    const pluginConfig = lastConfigureCall?.[0]?.find(
+      (node: { id: string }) => node.id === pluginNode.id,
+    );
+    expect(pluginConfig?.options?.hostInstanceId).toBe('native-instance-retry');
+
+    expect(hostMock.scheduleAutomation).toHaveBeenCalledWith(
+      'native-instance-retry',
+      'mix',
+      [
+        { time: 0, value: 0.1 },
+        { time: 250, value: 0.6 },
+      ],
+    );
   });
 
   it('releases clip buffers when clips are removed between revisions', async () => {
