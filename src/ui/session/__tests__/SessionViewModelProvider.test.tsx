@@ -16,6 +16,10 @@ import {
 import type { PluginCrashReport, PluginHost } from '../../../audio';
 
 describe('SessionViewModelProvider', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it('provides tracks with waveform and midi data', async () => {
     const storage = new InMemorySessionStorageAdapter();
     await storage.initialize();
@@ -59,9 +63,13 @@ describe('SessionViewModelProvider', () => {
   });
 
   it('captures plugin crash notifications from the plugin host', async () => {
+    jest.useFakeTimers();
     const storage = new InMemorySessionStorageAdapter();
     await storage.initialize();
-    const bridge = new PassiveAudioEngineBridge();
+    class RecoveringBridge extends PassiveAudioEngineBridge {
+      public retryPluginInstance = jest.fn(async () => true);
+    }
+    const bridge = new RecoveringBridge();
     const manager = new SessionManager(storage, bridge);
 
     let listener: ((report: PluginCrashReport) => void) | undefined;
@@ -75,10 +83,12 @@ describe('SessionViewModelProvider', () => {
     } as PluginHost;
 
     let alerts: PluginCrashReport[] = [];
+    let viewModelRef: ReturnType<typeof useSessionViewModel> | undefined;
 
     const Consumer = () => {
       const viewModel = useSessionViewModel();
       alerts = viewModel.pluginAlerts;
+      viewModelRef = viewModel;
       return null;
     };
 
@@ -92,6 +102,7 @@ describe('SessionViewModelProvider', () => {
             bootstrapSession: () => demoSession,
             diagnosticsPollIntervalMs: 0,
             pluginHost: host,
+            audioBridge: bridge,
           },
           React.createElement(Consumer, null),
         ),
@@ -130,11 +141,20 @@ describe('SessionViewModelProvider', () => {
     expect(alerts[0]).toEqual(crashReport);
 
     await act(async () => {
-      listener?.(crashReport);
+      await viewModelRef?.retryPlugin('plugin-1');
       await Promise.resolve();
     });
 
-    expect(alerts).toHaveLength(1);
+    expect(bridge.retryPluginInstance).toHaveBeenCalledWith('plugin-1');
+    expect(alerts[0].recovered).toBe(true);
+
+    await act(async () => {
+      jest.advanceTimersByTime(4500);
+      await Promise.resolve();
+    });
+
+    expect(alerts).toHaveLength(0);
+    jest.useRealTimers();
   });
 
   it('surfaces audio engine failures as an error status', async () => {

@@ -45,6 +45,7 @@ export interface AudioEngineBridge {
   subscribeDiagnostics?(
     listener: (snapshot: AudioDiagnosticsSnapshot) => void,
   ): () => void;
+  retryPluginInstance?(instanceId: string): Promise<boolean>;
 }
 
 export interface SessionManagerOptions {

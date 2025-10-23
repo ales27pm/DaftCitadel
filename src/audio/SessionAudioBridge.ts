@@ -26,7 +26,11 @@ import {
 } from './bridge/AutomationManager';
 import { ConnectionKey, GraphReconciler } from './bridge/GraphReconciler';
 import type { PluginHost } from './plugins/PluginHost';
-import type { PluginDescriptor, PluginInstanceHandle } from './plugins/types';
+import type {
+  PluginCrashReport,
+  PluginDescriptor,
+  PluginInstanceHandle,
+} from './plugins/types';
 import type { PluginAutomationPoint } from './plugins/NativePluginHost';
 
 type Logger = Pick<typeof console, 'debug' | 'info' | 'warn' | 'error'>;
@@ -40,6 +44,13 @@ type SessionState = {
   pluginAutomations: Map<string, PluginAutomationRequest>;
   activePluginInstances: Set<string>;
   clipBuffers: Map<string, ClipBufferDescriptor>;
+  pluginNodes: Map<string, PluginRoutingNode>;
+};
+
+type RecoverySnapshot = {
+  pluginNodes: Map<string, PluginRoutingNode>;
+  pluginAutomations: Map<string, PluginAutomationRequest>;
+  automationRequests: Map<string, AutomationRequest>;
 };
 
 const isTrackEndpointNode = (node: RoutingNode): node is TrackEndpointNode =>
@@ -50,6 +61,185 @@ const isPluginNode = (node: RoutingNode): node is PluginRoutingNode =>
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
+
+class PluginRecoveryManager {
+  private snapshot: RecoverySnapshot = {
+    pluginNodes: new Map(),
+    pluginAutomations: new Map(),
+    automationRequests: new Map(),
+  };
+
+  private crashedSessions = new Set<string>();
+
+  private unsubscribe?: () => void;
+
+  constructor(
+    private readonly deps: {
+      pluginHost: PluginHost;
+      pluginBindings: Map<string, PluginInstanceBinding>;
+      pluginAutomationState: Map<string, string>;
+      graph: GraphReconciler;
+      automationPublisher: AutomationPublisher;
+      createNodeConfiguration: (node: PluginRoutingNode) => NodeConfiguration;
+      applyPluginAutomations: (
+        requests: Map<string, PluginAutomationRequest>,
+      ) => Promise<void>;
+      logger: Logger;
+    },
+  ) {
+    this.unsubscribe = deps.pluginHost.onCrash((report) => {
+      this.handleCrash(report).catch((error) => {
+        deps.logger.error('Failed to reconcile plugin after crash', error);
+      });
+    });
+  }
+
+  record(snapshot: RecoverySnapshot): void {
+    this.snapshot = {
+      pluginNodes: new Map(snapshot.pluginNodes),
+      pluginAutomations: new Map(snapshot.pluginAutomations),
+      automationRequests: new Map(snapshot.automationRequests),
+    };
+  }
+
+  forget(sessionInstanceId: string): void {
+    this.crashedSessions.delete(sessionInstanceId);
+  }
+
+  async retry(sessionInstanceId: string): Promise<boolean> {
+    if (!this.deps.pluginHost.retryInstance) {
+      this.deps.logger.warn('PluginHost does not expose retryInstance');
+      return false;
+    }
+    const success = await this.deps.pluginHost.retryInstance(sessionInstanceId);
+    if (!success) {
+      return false;
+    }
+    try {
+      const refreshed = await this.refreshBinding(sessionInstanceId);
+      if (!refreshed) {
+        this.deps.logger.warn('Plugin retry succeeded but binding refresh failed', {
+          instanceId: sessionInstanceId,
+        });
+      }
+      return refreshed;
+    } catch (error) {
+      this.deps.logger.error('Failed to refresh plugin binding after manual retry', error);
+      return false;
+    }
+  }
+
+  dispose(): void {
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
+    this.crashedSessions.clear();
+    this.snapshot = {
+      pluginNodes: new Map(),
+      pluginAutomations: new Map(),
+      automationRequests: new Map(),
+    };
+  }
+
+  private async handleCrash(report: PluginCrashReport): Promise<void> {
+    const bindingEntry = this.findBindingByHostInstanceId(report.instanceId);
+    if (!bindingEntry) {
+      return;
+    }
+    const [sessionInstanceId, binding] = bindingEntry;
+    if (!report.recovered) {
+      this.deps.logger.warn('Plugin reported crash without automatic recovery', {
+        instanceId: report.instanceId,
+      });
+      this.crashedSessions.add(sessionInstanceId);
+      this.deps.pluginBindings.delete(sessionInstanceId);
+      this.clearAutomationState(sessionInstanceId);
+      return;
+    }
+    const refreshed = await this.refreshBinding(sessionInstanceId);
+    if (!refreshed) {
+      this.deps.logger.warn('Plugin restart succeeded but binding refresh failed', {
+        instanceId: binding.hostInstanceId,
+      });
+    }
+  }
+
+  private async refreshBinding(sessionInstanceId: string): Promise<boolean> {
+    const runtime = this.deps.pluginHost.getInstanceRuntime?.(sessionInstanceId);
+    if (!runtime) {
+      return false;
+    }
+    let binding = this.deps.pluginBindings.get(sessionInstanceId);
+    if (!binding) {
+      binding = {
+        descriptor: runtime.handle.descriptor,
+        hostInstanceId: runtime.nativeInstanceId,
+        handle: runtime.handle,
+      };
+      this.deps.pluginBindings.set(sessionInstanceId, binding);
+    } else {
+      binding.handle = runtime.handle;
+      binding.descriptor = runtime.handle.descriptor;
+      binding.hostInstanceId = runtime.nativeInstanceId;
+    }
+
+    const node = this.snapshot.pluginNodes.get(sessionInstanceId);
+    if (node) {
+      await this.deps.graph.forceConfigureNode(
+        this.deps.createNodeConfiguration(node),
+      );
+    }
+
+    this.clearAutomationState(sessionInstanceId);
+
+    const updatedAutomations = new Map<string, PluginAutomationRequest>();
+    this.snapshot.pluginAutomations.forEach((request, key) => {
+      if (request.instanceId === sessionInstanceId) {
+        updatedAutomations.set(key, {
+          ...request,
+          hostInstanceId: binding!.hostInstanceId,
+        });
+      } else {
+        updatedAutomations.set(key, request);
+      }
+    });
+
+    this.snapshot = {
+      pluginNodes: this.snapshot.pluginNodes,
+      pluginAutomations: updatedAutomations,
+      automationRequests: this.snapshot.automationRequests,
+    };
+
+    if (updatedAutomations.size > 0) {
+      await this.deps.applyPluginAutomations(updatedAutomations);
+    }
+    if (this.snapshot.automationRequests.size > 0) {
+      await this.deps.automationPublisher.applyChanges(
+        this.snapshot.automationRequests,
+      );
+    }
+    this.crashedSessions.delete(sessionInstanceId);
+    return true;
+  }
+
+  private clearAutomationState(sessionInstanceId: string): void {
+    for (const key of Array.from(this.deps.pluginAutomationState.keys())) {
+      if (key.startsWith(`${sessionInstanceId}:`)) {
+        this.deps.pluginAutomationState.delete(key);
+      }
+    }
+  }
+
+  private findBindingByHostInstanceId(
+    hostInstanceId: string,
+  ): [string, PluginInstanceBinding] | undefined {
+    for (const entry of this.deps.pluginBindings.entries()) {
+      if (entry[1].hostInstanceId === hostInstanceId) {
+        return entry;
+      }
+    }
+    return undefined;
+  }
+}
 
 type PluginAutomationRequest = {
   key: string;
@@ -116,6 +306,8 @@ export class SessionAudioBridge {
   private readonly pluginAutomationState = new Map<string, string>();
 
   private readonly activeClipBuffers = new Map<string, ClipBufferDescriptor>();
+
+  private pluginRecovery?: PluginRecoveryManager;
 
   private readonly transportListeners = new Set<
     (snapshot: AudioTransportSnapshot) => void
@@ -212,6 +404,19 @@ export class SessionAudioBridge {
         this.logger.warn('Failed to prime diagnostics state', error);
       });
     }
+
+    if (this.pluginHost) {
+      this.pluginRecovery = new PluginRecoveryManager({
+        pluginHost: this.pluginHost,
+        pluginBindings: this.pluginBindings,
+        pluginAutomationState: this.pluginAutomationState,
+        graph: this.graph,
+        automationPublisher: this.automationPublisher,
+        createNodeConfiguration: (node) => this.createNodeConfiguration(node),
+        applyPluginAutomations: (requests) => this.applyPluginAutomations(requests),
+        logger: this.logger,
+      });
+    }
   }
 
   public async applySessionUpdate(session: Session): Promise<void> {
@@ -236,6 +441,11 @@ export class SessionAudioBridge {
     }
 
     const desiredState = await this.buildDesiredState(session, sampleRate);
+    this.pluginRecovery?.record({
+      automationRequests: desiredState.automations,
+      pluginAutomations: desiredState.pluginAutomations,
+      pluginNodes: desiredState.pluginNodes,
+    });
 
     await this.graph.apply(desiredState.nodes, desiredState.connections);
     await this.automationPublisher.applyChanges(desiredState.automations);
@@ -350,6 +560,7 @@ export class SessionAudioBridge {
     const pluginAutomations = new Map<string, PluginAutomationRequest>();
     const activePluginInstances = new Set<string>();
     const clipBuffers = new Map<string, ClipBufferDescriptor>();
+    const pluginNodes = new Map<string, PluginRoutingNode>();
 
     await Promise.all(
       session.tracks.map(async (track) => {
@@ -375,6 +586,7 @@ export class SessionAudioBridge {
           pluginAutomations,
           activePluginInstances,
           session.revision,
+          pluginNodes,
         );
 
         graph.connections.forEach((connection) => {
@@ -453,6 +665,7 @@ export class SessionAudioBridge {
       pluginAutomations,
       activePluginInstances,
       clipBuffers,
+      pluginNodes,
     };
   }
 
@@ -652,6 +865,7 @@ export class SessionAudioBridge {
     pluginAutomations: Map<string, PluginAutomationRequest>,
     activePluginInstances: Set<string>,
     sessionRevision: number,
+    discoveredNodes: Map<string, PluginRoutingNode>,
   ): Promise<void> {
     const pluginNodes = graph.nodes
       .filter(isPluginNode)
@@ -659,6 +873,7 @@ export class SessionAudioBridge {
 
     await Promise.all(
       pluginNodes.map(async (node) => {
+        discoveredNodes.set(node.instanceId, node);
         const binding = await this.ensurePluginInstance(node);
         if (!binding) {
           nodes.set(node.id, this.createNodeConfiguration(node));
@@ -723,6 +938,14 @@ export class SessionAudioBridge {
     );
   }
 
+  public async retryPluginInstance(sessionInstanceId: string): Promise<boolean> {
+    if (!this.pluginRecovery) {
+      this.logger.warn('Plugin recovery manager unavailable; cannot retry plugin');
+      return false;
+    }
+    return this.pluginRecovery.retry(sessionInstanceId);
+  }
+
   private async ensurePluginInstance(
     node: PluginRoutingNode,
   ): Promise<PluginInstanceBinding | undefined> {
@@ -775,7 +998,7 @@ export class SessionAudioBridge {
       });
       const binding: PluginInstanceBinding = {
         descriptor,
-        hostInstanceId: handle.instanceId,
+        hostInstanceId: handle.nativeInstanceId ?? handle.instanceId,
         handle,
       };
       this.pluginBindings.set(node.instanceId, binding);
@@ -867,6 +1090,7 @@ export class SessionAudioBridge {
         : Promise.resolve()
       ).then(() => {
         this.pluginBindings.delete(instanceId);
+        this.pluginRecovery?.forget(instanceId);
       }),
     );
 
@@ -1010,6 +1234,9 @@ export class SessionAudioBridge {
     this.pluginBindings.clear();
     this.pluginAutomationState.clear();
     this.resolvePluginDescriptor?.clearAll?.();
+
+    this.pluginRecovery?.dispose();
+    this.pluginRecovery = undefined;
 
     this.activeClipBuffers.forEach((descriptor) => {
       pending.push(this.bufferCache.releaseClipBuffer(descriptor.bufferKey));

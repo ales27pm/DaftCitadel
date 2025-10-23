@@ -45,12 +45,16 @@ const instanceHandle: PluginInstanceHandle = {
   cpuLoadPercent: 3,
   latencySamples: 64,
   sandboxPath: '/mock/echo',
+  nativeInstanceId: 'native-instance-1',
+  restartToken: 'token-1',
 };
 
 const restartedHandle: PluginInstanceHandle = {
   ...instanceHandle,
   instanceId: 'instance-2',
   cpuLoadPercent: 5,
+  nativeInstanceId: 'native-instance-2',
+  restartToken: 'token-2',
 };
 
 describe('PluginHost', () => {
@@ -99,7 +103,7 @@ describe('PluginHost', () => {
     await host.loadPreset(instanceHandle.instanceId, 'default');
 
     expect(NativePluginHost.loadPreset).toHaveBeenCalledWith(
-      instanceHandle.instanceId,
+      instanceHandle.nativeInstanceId,
       descriptor.factoryPresets![0],
     );
   });
@@ -148,7 +152,7 @@ describe('PluginHost', () => {
     ]);
 
     expect(NativePluginHost.scheduleAutomation).toHaveBeenCalledWith(
-      instanceHandle.instanceId,
+      instanceHandle.nativeInstanceId,
       'mix',
       [
         { time: 0, value: 0.2 },
@@ -185,14 +189,69 @@ describe('PluginHost', () => {
       host as unknown as { instances: Map<string, { nativeInstanceId: string }> }
     ).instances.get(instanceHandle.instanceId);
 
-    expect(binding?.nativeInstanceId).toBe(restartedHandle.instanceId);
+    expect(binding?.nativeInstanceId).toBe(restartedHandle.nativeInstanceId);
 
     await host.setParameter(instanceHandle.instanceId, 'mix', 0.5);
 
     expect(NativePluginHost.setParameterValue).toHaveBeenLastCalledWith(
-      restartedHandle.instanceId,
+      restartedHandle.nativeInstanceId,
       'mix',
       0.5,
     );
+  });
+
+  it('refuses to restart when the restart token mismatches', async () => {
+    const host = new PluginHost(new FakeSandboxManager());
+    await host.loadPlugin(descriptor);
+
+    __mockPluginHostEmitter.emit('pluginCrashed', {
+      instanceId: instanceHandle.instanceId,
+      descriptor,
+      timestamp: new Date().toISOString(),
+      reason: 'Test crash',
+      recovered: false,
+      restartToken: 'token-mismatch',
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(instantiateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows manual retry after automatic restart is refused', async () => {
+    instantiateMock.mockResolvedValueOnce(instanceHandle);
+    instantiateMock.mockResolvedValueOnce(restartedHandle);
+
+    const host = new PluginHost(new FakeSandboxManager());
+    await host.loadPlugin(descriptor);
+
+    __mockPluginHostEmitter.emit('pluginCrashed', {
+      instanceId: instanceHandle.instanceId,
+      descriptor,
+      timestamp: new Date().toISOString(),
+      reason: 'Test crash',
+      recovered: false,
+      restartToken: undefined,
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const retried = await host.retryInstance(instanceHandle.instanceId);
+
+    expect(retried).toBe(true);
+    expect(instantiateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('supports manual retry of plugin instances', async () => {
+    instantiateMock.mockResolvedValueOnce(instanceHandle);
+    instantiateMock.mockResolvedValueOnce(restartedHandle);
+
+    const host = new PluginHost(new FakeSandboxManager());
+    await host.loadPlugin(descriptor);
+
+    const retried = await host.retryInstance(instanceHandle.instanceId);
+
+    expect(retried).toBe(true);
+    expect(instantiateMock).toHaveBeenCalledTimes(2);
   });
 });
