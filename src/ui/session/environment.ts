@@ -125,6 +125,11 @@ class PassiveAudioEngineBridge implements AudioEngineBridge {
     };
   }
 
+  async retryPluginInstance(): Promise<boolean> {
+    console.warn('PassiveAudioEngineBridge cannot retry plugin instances.');
+    return false;
+  }
+
   async dispose(): Promise<void> {
     this.lastSession = null;
     this.transportSnapshot = null;

@@ -110,6 +110,7 @@ describe('ArrangementScreen diagnostics', () => {
       manager: {} as SessionManager,
       error: undefined,
       transportRuntime: null,
+      retryPlugin: jest.fn(async () => true),
     });
 
     const renderer = await renderScreen();
@@ -135,6 +136,7 @@ describe('ArrangementScreen diagnostics', () => {
       manager: {} as SessionManager,
       error: undefined,
       transportRuntime: null,
+      retryPlugin: jest.fn(async () => true),
     });
 
     const renderer = await renderScreen();
@@ -159,6 +161,7 @@ describe('ArrangementScreen diagnostics', () => {
       manager: {} as SessionManager,
       error: undefined,
       transportRuntime: null,
+      retryPlugin: jest.fn(async () => true),
     });
 
     const renderer = await renderScreen();

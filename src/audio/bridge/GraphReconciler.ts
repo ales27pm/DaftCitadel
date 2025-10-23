@@ -31,6 +31,11 @@ export class GraphReconciler {
     await this.reconcileConnections(connections, nodes);
   }
 
+  async forceConfigureNode(node: NodeConfiguration): Promise<void> {
+    await this.audioEngine.configureNodes([node]);
+    this.nodeState.set(node.id, node);
+  }
+
   private async reconcileNodes(desired: Map<NodeId, NodeConfiguration>): Promise<void> {
     const toConfigure: NodeConfiguration[] = [];
     desired.forEach((node) => {

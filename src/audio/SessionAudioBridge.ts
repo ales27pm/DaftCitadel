@@ -26,7 +26,11 @@ import {
 } from './bridge/AutomationManager';
 import { ConnectionKey, GraphReconciler } from './bridge/GraphReconciler';
 import type { PluginHost } from './plugins/PluginHost';
-import type { PluginDescriptor, PluginInstanceHandle } from './plugins/types';
+import type {
+  PluginCrashReport,
+  PluginDescriptor,
+  PluginInstanceHandle,
+} from './plugins/types';
 import type { PluginAutomationPoint } from './plugins/NativePluginHost';
 
 type Logger = Pick<typeof console, 'debug' | 'info' | 'warn' | 'error'>;
@@ -40,6 +44,7 @@ type SessionState = {
   pluginAutomations: Map<string, PluginAutomationRequest>;
   activePluginInstances: Set<string>;
   clipBuffers: Map<string, ClipBufferDescriptor>;
+  pluginNodes: Map<string, PluginRoutingNode>;
 };
 
 const isTrackEndpointNode = (node: RoutingNode): node is TrackEndpointNode =>
@@ -116,6 +121,14 @@ export class SessionAudioBridge {
   private readonly pluginAutomationState = new Map<string, string>();
 
   private readonly activeClipBuffers = new Map<string, ClipBufferDescriptor>();
+
+  private lastAutomationRequests = new Map<string, AutomationRequest>();
+
+  private lastPluginAutomations = new Map<string, PluginAutomationRequest>();
+
+  private lastPluginNodes = new Map<string, PluginRoutingNode>();
+
+  private pluginHostUnsubscribe?: () => void;
 
   private readonly transportListeners = new Set<
     (snapshot: AudioTransportSnapshot) => void
@@ -212,6 +225,14 @@ export class SessionAudioBridge {
         this.logger.warn('Failed to prime diagnostics state', error);
       });
     }
+
+    if (this.pluginHost) {
+      this.pluginHostUnsubscribe = this.pluginHost.onCrash((report) => {
+        this.handlePluginCrash(report).catch((error) => {
+          this.logger.error('Failed to reconcile plugin after crash', error);
+        });
+      });
+    }
   }
 
   public async applySessionUpdate(session: Session): Promise<void> {
@@ -236,6 +257,9 @@ export class SessionAudioBridge {
     }
 
     const desiredState = await this.buildDesiredState(session, sampleRate);
+    this.lastAutomationRequests = new Map(desiredState.automations);
+    this.lastPluginAutomations = new Map(desiredState.pluginAutomations);
+    this.lastPluginNodes = desiredState.pluginNodes;
 
     await this.graph.apply(desiredState.nodes, desiredState.connections);
     await this.automationPublisher.applyChanges(desiredState.automations);
@@ -350,6 +374,7 @@ export class SessionAudioBridge {
     const pluginAutomations = new Map<string, PluginAutomationRequest>();
     const activePluginInstances = new Set<string>();
     const clipBuffers = new Map<string, ClipBufferDescriptor>();
+    const pluginNodes = new Map<string, PluginRoutingNode>();
 
     await Promise.all(
       session.tracks.map(async (track) => {
@@ -375,6 +400,7 @@ export class SessionAudioBridge {
           pluginAutomations,
           activePluginInstances,
           session.revision,
+          pluginNodes,
         );
 
         graph.connections.forEach((connection) => {
@@ -453,6 +479,7 @@ export class SessionAudioBridge {
       pluginAutomations,
       activePluginInstances,
       clipBuffers,
+      pluginNodes,
     };
   }
 
@@ -652,6 +679,7 @@ export class SessionAudioBridge {
     pluginAutomations: Map<string, PluginAutomationRequest>,
     activePluginInstances: Set<string>,
     sessionRevision: number,
+    discoveredNodes: Map<string, PluginRoutingNode>,
   ): Promise<void> {
     const pluginNodes = graph.nodes
       .filter(isPluginNode)
@@ -659,6 +687,7 @@ export class SessionAudioBridge {
 
     await Promise.all(
       pluginNodes.map(async (node) => {
+        discoveredNodes.set(node.instanceId, node);
         const binding = await this.ensurePluginInstance(node);
         if (!binding) {
           nodes.set(node.id, this.createNodeConfiguration(node));
@@ -723,6 +752,106 @@ export class SessionAudioBridge {
     );
   }
 
+  private async handlePluginCrash(report: PluginCrashReport): Promise<void> {
+    if (!this.pluginHost) {
+      return;
+    }
+    const [sessionInstanceId, binding] = Array.from(this.pluginBindings.entries()).find(
+      ([, candidate]) => candidate.hostInstanceId === report.instanceId,
+    ) ?? [undefined, undefined];
+    if (!binding || !sessionInstanceId) {
+      return;
+    }
+    if (!report.recovered) {
+      this.logger.warn('Plugin reported crash without automatic recovery', {
+        instanceId: report.instanceId,
+      });
+      this.pluginBindings.delete(sessionInstanceId);
+      for (const key of Array.from(this.pluginAutomationState.keys())) {
+        if (key.startsWith(`${sessionInstanceId}:`)) {
+          this.pluginAutomationState.delete(key);
+        }
+      }
+      return;
+    }
+    const refreshed = await this.refreshPluginBinding(sessionInstanceId);
+    if (!refreshed) {
+      this.logger.warn('Plugin restart succeeded but binding refresh failed', {
+        instanceId: report.instanceId,
+      });
+    }
+  }
+
+  private async refreshPluginBinding(sessionInstanceId: string): Promise<boolean> {
+    if (!this.pluginHost) {
+      return false;
+    }
+    const binding = this.pluginBindings.get(sessionInstanceId);
+    if (!binding) {
+      return false;
+    }
+    const runtime = this.pluginHost.getInstanceRuntime?.(binding.hostInstanceId);
+    if (!runtime) {
+      return false;
+    }
+    binding.handle = runtime.handle;
+    binding.descriptor = runtime.handle.descriptor;
+    binding.hostInstanceId = runtime.nativeInstanceId;
+
+    const node = this.lastPluginNodes.get(sessionInstanceId);
+    if (node) {
+      await this.graph.forceConfigureNode(this.createNodeConfiguration(node));
+    }
+
+    for (const key of Array.from(this.pluginAutomationState.keys())) {
+      if (key.startsWith(`${sessionInstanceId}:`)) {
+        this.pluginAutomationState.delete(key);
+      }
+    }
+
+    const updated = new Map<string, PluginAutomationRequest>();
+    this.lastPluginAutomations.forEach((request, key) => {
+      if (request.instanceId === sessionInstanceId) {
+        updated.set(key, {
+          ...request,
+          hostInstanceId: binding.hostInstanceId,
+        });
+      } else {
+        updated.set(key, request);
+      }
+    });
+    this.lastPluginAutomations = updated;
+
+    if (this.lastPluginAutomations.size > 0) {
+      await this.applyPluginAutomations(this.lastPluginAutomations);
+    }
+    if (this.lastAutomationRequests.size > 0) {
+      await this.automationPublisher.applyChanges(this.lastAutomationRequests);
+    }
+    return true;
+  }
+
+  public async retryPluginInstance(sessionInstanceId: string): Promise<boolean> {
+    if (!this.pluginHost?.retryInstance) {
+      this.logger.warn('PluginHost does not expose retryInstance');
+      return false;
+    }
+    const binding = this.pluginBindings.get(sessionInstanceId);
+    if (!binding) {
+      return false;
+    }
+    const success = await this.pluginHost.retryInstance(binding.hostInstanceId);
+    if (!success) {
+      return false;
+    }
+    try {
+      return await this.refreshPluginBinding(sessionInstanceId);
+    } catch (error) {
+      this.logger.error('Failed to refresh plugin binding after manual retry', error);
+      return false;
+    }
+  }
+
   private async ensurePluginInstance(
     node: PluginRoutingNode,
   ): Promise<PluginInstanceBinding | undefined> {
@@ -775,7 +904,7 @@ export class SessionAudioBridge {
       });
       const binding: PluginInstanceBinding = {
         descriptor,
-        hostInstanceId: handle.instanceId,
+        hostInstanceId: handle.nativeInstanceId ?? handle.instanceId,
         handle,
       };
       this.pluginBindings.set(node.instanceId, binding);
@@ -1010,6 +1139,11 @@ export class SessionAudioBridge {
     this.pluginBindings.clear();
     this.pluginAutomationState.clear();
     this.resolvePluginDescriptor?.clearAll?.();
+
+    if (this.pluginHostUnsubscribe) {
+      this.pluginHostUnsubscribe();
+      this.pluginHostUnsubscribe = undefined;
+    }
 
     this.activeClipBuffers.forEach((descriptor) => {
       pending.push(this.bufferCache.releaseClipBuffer(descriptor.bufferKey));
