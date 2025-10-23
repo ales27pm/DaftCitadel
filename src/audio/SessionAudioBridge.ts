@@ -9,6 +9,10 @@ import {
   Track,
   TrackEndpointNode,
 } from '../session/models';
+import type {
+  AudioDiagnosticsSnapshot,
+  AudioTransportSnapshot,
+} from '../session/sessionManager';
 import {
   AudioFileLoader,
   ClipBufferCache,
@@ -44,6 +48,9 @@ const isTrackEndpointNode = (node: RoutingNode): node is TrackEndpointNode =>
 const isPluginNode = (node: RoutingNode): node is PluginRoutingNode =>
   node.type === 'plugin';
 
+const clamp = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
+
 type PluginAutomationRequest = {
   key: string;
   instanceId: string;
@@ -66,6 +73,9 @@ const DEFAULT_LOGGER: Logger = {
   error: (...args: unknown[]) => console.error('[SessionAudioBridge]', ...args),
 };
 
+const DEFAULT_TRANSPORT_POLL_INTERVAL_MS = 120;
+const DEFAULT_DIAGNOSTICS_POLL_INTERVAL_MS = 1500;
+
 export interface PluginDescriptorResolver {
   (
     instanceId: string,
@@ -80,6 +90,8 @@ export interface SessionAudioBridgeOptions {
   logger?: Logger;
   pluginHost?: PluginHost;
   resolvePluginDescriptor?: PluginDescriptorResolver;
+  transportPollIntervalMs?: number;
+  diagnosticsPollIntervalMs?: number;
 }
 
 export class SessionAudioBridge {
@@ -105,6 +117,38 @@ export class SessionAudioBridge {
 
   private readonly activeClipBuffers = new Map<string, ClipBufferDescriptor>();
 
+  private readonly transportListeners = new Set<
+    (snapshot: AudioTransportSnapshot) => void
+  >();
+
+  private readonly diagnosticsListeners = new Set<
+    (snapshot: AudioDiagnosticsSnapshot) => void
+  >();
+
+  private transportSnapshot: AudioTransportSnapshot | null = null;
+
+  private diagnosticsSnapshot: AudioDiagnosticsSnapshot = {
+    status: 'loading',
+    xruns: 0,
+    renderLoad: 0,
+  };
+
+  private transportPollHandle?: ReturnType<typeof setInterval>;
+
+  private diagnosticsPollHandle?: ReturnType<typeof setInterval>;
+
+  private readonly transportPollIntervalMs: number;
+
+  private readonly diagnosticsPollIntervalMs: number;
+
+  private readonly supportsTransport: boolean;
+
+  private readonly supportsDiagnostics: boolean;
+
+  private isTransportPolling = false;
+
+  private isDiagnosticsPolling = false;
+
   constructor(
     private readonly audioEngine: AudioEngine,
     options: SessionAudioBridgeOptions,
@@ -125,6 +169,49 @@ export class SessionAudioBridge {
     );
     this.pluginHost = options.pluginHost;
     this.resolvePluginDescriptor = options.resolvePluginDescriptor;
+    this.transportPollIntervalMs = Math.max(
+      16,
+      options.transportPollIntervalMs ?? DEFAULT_TRANSPORT_POLL_INTERVAL_MS,
+    );
+    this.diagnosticsPollIntervalMs = Math.max(
+      250,
+      options.diagnosticsPollIntervalMs ?? DEFAULT_DIAGNOSTICS_POLL_INTERVAL_MS,
+    );
+    this.supportsTransport =
+      typeof this.audioEngine.getTransportState === 'function' &&
+      typeof this.audioEngine.startTransport === 'function' &&
+      typeof this.audioEngine.stopTransport === 'function' &&
+      typeof (this.audioEngine as unknown as { locateTransport?: unknown })
+        .locateTransport === 'function';
+    this.supportsDiagnostics =
+      typeof this.audioEngine.getRenderDiagnostics === 'function';
+    if (!this.supportsDiagnostics) {
+      this.diagnosticsSnapshot = {
+        status: 'unavailable',
+        xruns: 0,
+        renderLoad: 0,
+      };
+    }
+    if (this.supportsTransport && this.transportPollIntervalMs > 0) {
+      this.transportPollHandle = setInterval(() => {
+        this.refreshTransportState().catch((error) => {
+          this.logger.warn('Transport polling failed', error);
+        });
+      }, this.transportPollIntervalMs);
+      this.refreshTransportState().catch((error) => {
+        this.logger.warn('Failed to prime transport state', error);
+      });
+    }
+    if (this.supportsDiagnostics && this.diagnosticsPollIntervalMs > 0) {
+      this.diagnosticsPollHandle = setInterval(() => {
+        this.refreshDiagnosticsState().catch((error) => {
+          this.logger.warn('Diagnostics polling failed', error);
+        });
+      }, this.diagnosticsPollIntervalMs);
+      this.refreshDiagnosticsState().catch((error) => {
+        this.logger.warn('Failed to prime diagnostics state', error);
+      });
+    }
   }
 
   public async applySessionUpdate(session: Session): Promise<void> {
@@ -157,6 +244,100 @@ export class SessionAudioBridge {
     await this.reconcileClipBuffers(desiredState.clipBuffers);
 
     this.previousSessionRevision = session.revision;
+    if (this.supportsTransport) {
+      this.refreshTransportState().catch((error) => {
+        this.logger.warn('Failed to refresh transport state after session update', error);
+      });
+    }
+  }
+
+  public getTransportState(): AudioTransportSnapshot | null {
+    if (!this.transportSnapshot) {
+      return null;
+    }
+    return { ...this.transportSnapshot };
+  }
+
+  public subscribeTransport(
+    listener: (snapshot: AudioTransportSnapshot) => void,
+  ): () => void {
+    this.transportListeners.add(listener);
+    const snapshot = this.transportSnapshot;
+    if (snapshot) {
+      try {
+        listener(snapshot);
+      } catch (error) {
+        this.logger.error('Transport listener threw on subscription', error);
+      }
+    } else if (!this.supportsTransport) {
+      const description = this.clock.describe();
+      const initial: AudioTransportSnapshot = {
+        frame: 0,
+        seconds: 0,
+        beats: 0,
+        bpm: description.bpm,
+        sampleRate: description.sampleRate,
+        isPlaying: false,
+        updatedAt: Date.now(),
+      };
+      try {
+        listener(initial);
+      } catch (error) {
+        this.logger.error('Transport listener threw on fallback snapshot', error);
+      }
+    } else {
+      this.refreshTransportState().catch((error) => {
+        this.logger.warn('Failed to refresh transport state for subscriber', error);
+      });
+    }
+    return () => {
+      this.transportListeners.delete(listener);
+    };
+  }
+
+  public async startTransport(): Promise<void> {
+    if (!this.supportsTransport) {
+      throw new Error('Transport controls unavailable');
+    }
+    await this.audioEngine.startTransport();
+    await this.refreshTransportState();
+  }
+
+  public async stopTransport(): Promise<void> {
+    if (!this.supportsTransport) {
+      throw new Error('Transport controls unavailable');
+    }
+    await this.audioEngine.stopTransport();
+    await this.refreshTransportState();
+  }
+
+  public async locateTransport(frame: number): Promise<void> {
+    if (!this.supportsTransport) {
+      throw new Error('Transport controls unavailable');
+    }
+    if (!Number.isFinite(frame)) {
+      throw new Error('Transport frame must be finite');
+    }
+    await this.audioEngine.locateTransport(Math.max(0, Math.floor(frame)));
+    await this.refreshTransportState();
+  }
+
+  public getDiagnosticsState(): AudioDiagnosticsSnapshot {
+    return { ...this.diagnosticsSnapshot };
+  }
+
+  public subscribeDiagnostics(
+    listener: (snapshot: AudioDiagnosticsSnapshot) => void,
+  ): () => void {
+    this.diagnosticsListeners.add(listener);
+    try {
+      listener(this.diagnosticsSnapshot);
+    } catch (error) {
+      this.logger.error('Diagnostics listener threw on subscription', error);
+    }
+    return () => {
+      this.diagnosticsListeners.delete(listener);
+    };
   }
 
   private async buildDesiredState(
@@ -728,7 +909,98 @@ export class SessionAudioBridge {
     }
   }
 
+  private async refreshTransportState(): Promise<void> {
+    if (!this.supportsTransport || this.isTransportPolling) {
+      return;
+    }
+    this.isTransportPolling = true;
+    try {
+      const state = await this.audioEngine.getTransportState();
+      const description = this.clock.describe();
+      const seconds = state.frame / description.sampleRate;
+      const beats = seconds * (description.bpm / 60);
+      const snapshot: AudioTransportSnapshot = {
+        frame: state.frame,
+        seconds,
+        beats,
+        bpm: description.bpm,
+        sampleRate: description.sampleRate,
+        isPlaying: state.isPlaying,
+        updatedAt: Date.now(),
+      };
+      this.commitTransportSnapshot(snapshot);
+    } catch (error) {
+      this.logger.warn('Failed to refresh transport state', error);
+    } finally {
+      this.isTransportPolling = false;
+    }
+  }
+
+  private commitTransportSnapshot(snapshot: AudioTransportSnapshot): void {
+    this.transportSnapshot = snapshot;
+    this.transportListeners.forEach((listener) => {
+      try {
+        listener(snapshot);
+      } catch (error) {
+        this.logger.error('Transport listener failed', error);
+      }
+    });
+  }
+
+  private async refreshDiagnosticsState(): Promise<void> {
+    if (!this.supportsDiagnostics || this.isDiagnosticsPolling) {
+      return;
+    }
+    this.isDiagnosticsPolling = true;
+    try {
+      const diagnostics = await this.audioEngine.getRenderDiagnostics();
+      const renderLoad = clamp(diagnostics.lastRenderDurationMicros / 10_000, 0, 1);
+      const snapshot: AudioDiagnosticsSnapshot = {
+        status: 'ready',
+        xruns: diagnostics.xruns,
+        lastRenderDurationMicros: diagnostics.lastRenderDurationMicros,
+        clipBufferBytes: diagnostics.clipBufferBytes,
+        renderLoad,
+        updatedAt: Date.now(),
+      };
+      this.commitDiagnosticsSnapshot(snapshot);
+    } catch (error) {
+      this.logger.warn('Failed to refresh audio diagnostics', error);
+      const snapshot: AudioDiagnosticsSnapshot = {
+        status: 'error',
+        xruns: 0,
+        renderLoad: 0,
+        error: error as Error,
+        updatedAt: Date.now(),
+      };
+      this.commitDiagnosticsSnapshot(snapshot);
+    } finally {
+      this.isDiagnosticsPolling = false;
+    }
+  }
+
+  private commitDiagnosticsSnapshot(snapshot: AudioDiagnosticsSnapshot): void {
+    this.diagnosticsSnapshot = snapshot;
+    this.diagnosticsListeners.forEach((listener) => {
+      try {
+        listener(snapshot);
+      } catch (error) {
+        this.logger.error('Diagnostics listener failed', error);
+      }
+    });
+  }
+
   public async dispose(): Promise<void> {
+    if (this.transportPollHandle) {
+      clearInterval(this.transportPollHandle);
+      this.transportPollHandle = undefined;
+    }
+    if (this.diagnosticsPollHandle) {
+      clearInterval(this.diagnosticsPollHandle);
+      this.diagnosticsPollHandle = undefined;
+    }
+    this.transportListeners.clear();
+    this.diagnosticsListeners.clear();
     const pending: Array<Promise<void>> = [];
     if (this.pluginHost) {
       this.pluginBindings.forEach((binding, instanceId) => {
