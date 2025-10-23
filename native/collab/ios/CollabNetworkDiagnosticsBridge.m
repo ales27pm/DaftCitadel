@@ -7,4 +7,5 @@ RCT_EXTERN_METHOD(getCurrentLinkMetrics:(RCTPromiseResolveBlock)resolve
 RCT_EXTERN_METHOD(beginObserving)
 RCT_EXTERN_METHOD(endObserving)
 RCT_EXTERN_METHOD(setPollingInterval:(nonnull NSNumber *)intervalMs)
+RCT_EXTERN_METHOD(setPollingInterval:(nonnull NSNumber *)intervalMs)
 @end
