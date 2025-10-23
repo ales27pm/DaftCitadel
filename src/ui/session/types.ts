@@ -7,7 +7,6 @@ import {
   PluginSlotType,
   RoutingSignalType,
   type AudioTransportSnapshot,
-  type AudioDiagnosticsSnapshot,
 } from '../../session';
 import type { PluginCrashReport } from '../../audio';
 
@@ -81,8 +80,6 @@ export interface SessionDiagnosticsView {
 }
 
 export type TransportRuntimeState = AudioTransportSnapshot;
-
-export type EngineDiagnosticsState = AudioDiagnosticsSnapshot;
 
 export interface SessionViewModelState {
   status: 'idle' | 'loading' | 'ready' | 'error';

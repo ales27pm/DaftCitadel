@@ -78,8 +78,8 @@ export const SessionViewModelProvider: React.FC<SessionViewModelProviderProps> =
   const [status, setStatus] = useState<SessionViewModelState['status']>('idle');
   const [error, setError] = useState<Error | undefined>();
   const [session, setSession] = useState<Session | null>(() => manager.getSession());
-  const shouldPollDiagnostics =
-    !audioBridge?.subscribeDiagnostics && !audioBridge?.getDiagnosticsState;
+  // Poll when the bridge cannot push diagnostics updates.
+  const shouldPollDiagnostics = !audioBridge?.subscribeDiagnostics;
   const audioDiagnostics = useAudioDiagnostics(
     shouldPollDiagnostics ? diagnosticsPollIntervalMs : 0,
   );
