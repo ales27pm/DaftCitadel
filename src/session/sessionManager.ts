@@ -157,9 +157,13 @@ export class SessionManager {
       const previous = JSON.parse(JSON.stringify(this.currentSession)) as Session;
       const workingCopy = JSON.parse(JSON.stringify(this.currentSession)) as Session;
       const mutated = (mutator(workingCopy) as Session | void) ?? workingCopy;
+      const requestedRevision =
+        typeof mutated.revision === 'number' ? mutated.revision : previous.revision;
+      const nextRevision =
+        requestedRevision > previous.revision ? requestedRevision : previous.revision + 1;
       const normalized = normalizeSession({
         ...mutated,
-        revision: previous.revision + 1,
+        revision: nextRevision,
       });
       const finalSession = updateSessionTimestamp(normalized);
       validateSession(finalSession);

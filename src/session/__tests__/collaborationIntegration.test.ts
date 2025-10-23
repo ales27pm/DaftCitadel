@@ -91,11 +91,14 @@ describe('SessionManager collaborative integration', () => {
     const merged = manager.getSession();
     expect(merged?.name).toBe('Remote Remix');
     expect(merged?.metadata.bpm).toBe(110);
-    expect(merged?.revision).toBe(localSnapshot.revision + 1);
+    const expectedRevision = Math.max(localSnapshot.revision, remoteUpdate.revision) + 1;
+    expect(merged?.revision).toBe(expectedRevision);
+    expect(audioEngine.applied).toHaveLength(3);
 
     const undoSession = await manager.undo();
     expect(undoSession?.name).toBe('Local Groove');
     expect(undoSession?.metadata.bpm).toBe(128);
+    expect(audioEngine.applied).toHaveLength(4);
   });
 
   it('preserves local changes when revisions tie and still records history', async () => {
@@ -112,6 +115,7 @@ describe('SessionManager collaborative integration', () => {
       session.metadata.bpm = 130;
       return session;
     });
+    const localSnapshot = manager.getSession() as MutableSession;
 
     const remoteUpdate: Session = {
       ...baseSnapshot,
@@ -143,9 +147,13 @@ describe('SessionManager collaborative integration', () => {
     const merged = manager.getSession();
     expect(merged?.name).toBe('Local Harmony');
     expect(merged?.metadata.bpm).toBe(130);
+    const expectedRevision = Math.max(localSnapshot.revision, remoteUpdate.revision) + 1;
+    expect(merged?.revision).toBe(expectedRevision);
+    expect(audioEngine.applied).toHaveLength(3);
 
     const undoSession = await manager.undo();
     expect(undoSession?.name).toBe('Local Harmony');
+    expect(audioEngine.applied).toHaveLength(4);
   });
 
   it('rejects remote patches that target a different session id', async () => {

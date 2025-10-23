@@ -138,6 +138,7 @@ export const createRemoteSessionPatchApplier = (
       localSession.name = merged.name;
       localSession.metadata = merged.metadata;
       localSession.tracks = merged.tracks;
+      localSession.revision = merged.revision;
 
       return localSession;
     });

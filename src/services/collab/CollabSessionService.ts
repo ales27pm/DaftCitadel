@@ -34,7 +34,7 @@ export interface CollabSessionOptions<T> {
   readonly connectionFactory?: () => RTCPeerConnection;
   readonly logger?: Logger;
   readonly onRemoteUpdate?: (payload: CollabPayload<T>) => void;
-  readonly onRemoteUpdateApply?: (payload: CollabPayload<T>) => Promise<void> | void;
+  readonly onRemoteUpdateApplied?: (payload: CollabPayload<T>) => Promise<void> | void;
   readonly channelLabel?: string;
   readonly channelConfig?: RTCDataChannelInit;
   readonly minBufferedAmountLowThreshold?: number;
@@ -67,7 +67,7 @@ export class CollabSessionService<T = unknown> {
   private readonly minBufferedThreshold: number;
   private readonly maxBufferedThreshold: number;
   private readonly externalUpdateListener?: (payload: CollabPayload<T>) => void;
-  private readonly remoteUpdateApplyHandler?: (
+  private readonly remoteUpdateAppliedHandler?: (
     payload: CollabPayload<T>,
   ) => Promise<void> | void;
   private readonly connectionManager: ConnectionManager;
@@ -94,7 +94,7 @@ export class CollabSessionService<T = unknown> {
     this.maxBufferedThreshold =
       options.maxBufferedAmountLowThreshold ?? DEFAULT_MAX_BUFFERED_AMOUNT_LOW_THRESHOLD;
     this.externalUpdateListener = options.onRemoteUpdate;
-    this.remoteUpdateApplyHandler = options.onRemoteUpdateApply;
+    this.remoteUpdateAppliedHandler = options.onRemoteUpdateApplied;
 
     const connectionFactory =
       options.connectionFactory ?? (() => createDefaultPeerConnection());
@@ -325,10 +325,10 @@ export class CollabSessionService<T = unknown> {
 
     this.logger('collab.remoteUpdate.received', baseLogContext);
 
-    if (this.remoteUpdateApplyHandler) {
+    if (this.remoteUpdateAppliedHandler) {
       const applyStart = Date.now();
       try {
-        await this.remoteUpdateApplyHandler(normalizedPayload);
+        await this.remoteUpdateAppliedHandler(normalizedPayload);
         this.logger('collab.remoteUpdate.applied', {
           ...baseLogContext,
           applyDurationMs: Date.now() - applyStart,
@@ -349,7 +349,6 @@ export class CollabSessionService<T = unknown> {
           ...baseLogContext,
           error: String(error),
         });
-        throw error;
       }
     }
   }

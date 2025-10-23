@@ -454,7 +454,7 @@ describe('CollabSessionService', () => {
     responderService.stop();
   });
 
-  it('invokes onRemoteUpdateApply and emits latency-aware diagnostics logs', async () => {
+  it('invokes onRemoteUpdateApplied and emits latency-aware diagnostics logs', async () => {
     const [initiatorSignaling, responderSignaling] = pairSignalingClients();
     const initiatorConnection = new MockPeerConnection();
     const responderConnection = new MockPeerConnection();
@@ -465,13 +465,13 @@ describe('CollabSessionService', () => {
       rssi: -65,
     });
 
-    const onRemoteUpdateApply = jest.fn().mockResolvedValue(undefined);
+    const onRemoteUpdateApplied = jest.fn().mockResolvedValue(undefined);
     const logger = jest.fn();
 
     const responderService = new CollabSessionService<{ text: string }>({
       signalingClient: responderSignaling,
       connectionFactory: () => responderConnection as unknown as RTCPeerConnection,
-      onRemoteUpdateApply,
+      onRemoteUpdateApplied,
       logger,
       networkDiagnostics: diagnostics,
     });
@@ -501,8 +501,8 @@ describe('CollabSessionService', () => {
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
 
-    expect(onRemoteUpdateApply).toHaveBeenCalledTimes(1);
-    const payload = onRemoteUpdateApply.mock.calls[0][0];
+    expect(onRemoteUpdateApplied).toHaveBeenCalledTimes(1);
+    const payload = onRemoteUpdateApplied.mock.calls[0][0];
     expect(payload.body).toEqual({ text: 'diagnostics' });
 
     const receivedLog = logger.mock.calls.find(
