@@ -204,7 +204,9 @@ class CollabNetworkDiagnosticsModule(
         hasPermission(Manifest.permission.ACCESS_FINE_LOCATION) ||
           hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
       if (!locationGranted) {
-        throw SecurityException("ACCESS_FINE_LOCATION permission is required")
+        throw SecurityException(
+          "Location permission (ACCESS_FINE_LOCATION or ACCESS_COARSE_LOCATION) is required",
+        )
       }
     }
   }

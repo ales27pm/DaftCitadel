@@ -66,7 +66,7 @@ Use `scripts/rvictl-capture.sh` to collect encrypted packets directly from a con
      CODE_SIGN_IDENTITY='Apple Development' \
      PROVISIONING_PROFILE_SPECIFIER='DaftCitadelCollab'
    ```
-2. **Entitlements** – Include `com.apple.developer.networking.multiple-packets.tuple`, `com.apple.developer.networking.wifi-info`, and `com.apple.developer.networking.vpn.api` for diagnostics tooling. Add `com.apple.developer.usernotifications.communication` if background signaling is required.
+2. **Entitlements** – Include `com.apple.developer.networking.wifi-info` and `com.apple.developer.networking.vpn.api` for diagnostics tooling. Add `com.apple.developer.usernotifications.communication` if background signaling is required.
 3. **AltStore packaging** – Export an `.ipa` with `xcodebuild -exportArchive` and sign it using an AltStore-compatible personal development certificate. Provide a manifest JSON pointing to the `.ipa` for easy sideload distribution.
 4. **Post-build artifacts** – Publish the `.ipa`, provisioning profile, and entitlements plist as CI artifacts to ensure operators can reinstall builds locally.
 
