@@ -2,8 +2,24 @@ import type { LinkMetrics, NetworkDiagnostics } from './diagnostics/NetworkDiagn
 import type { Logger } from './types';
 
 function sanitizeMetrics(metrics: LinkMetrics): Record<string, unknown> {
-  const sanitized: Record<string, unknown> = { ...metrics };
-  delete sanitized.interfaceName;
+  const sanitized: Record<string, unknown> = {
+    timestamp: metrics.timestamp,
+    category: metrics.category,
+  };
+
+  if (typeof metrics.rssi === 'number') {
+    sanitized.rssi = metrics.rssi;
+  }
+  if (typeof metrics.noise === 'number') {
+    sanitized.noise = metrics.noise;
+  }
+  if (typeof metrics.linkSpeedMbps === 'number') {
+    sanitized.linkSpeedMbps = metrics.linkSpeedMbps;
+  }
+  if (typeof metrics.transmitRateMbps === 'number') {
+    sanitized.transmitRateMbps = metrics.transmitRateMbps;
+  }
+
   return sanitized;
 }
 
