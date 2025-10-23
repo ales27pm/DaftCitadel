@@ -145,6 +145,10 @@ export class SessionAudioBridge {
 
   private readonly supportsDiagnostics: boolean;
 
+  private isTransportPolling = false;
+
+  private isDiagnosticsPolling = false;
+
   constructor(
     private readonly audioEngine: AudioEngine,
     options: SessionAudioBridgeOptions,
@@ -906,9 +910,10 @@ export class SessionAudioBridge {
   }
 
   private async refreshTransportState(): Promise<void> {
-    if (!this.supportsTransport) {
+    if (!this.supportsTransport || this.isTransportPolling) {
       return;
     }
+    this.isTransportPolling = true;
     try {
       const state = await this.audioEngine.getTransportState();
       const description = this.clock.describe();
@@ -926,6 +931,8 @@ export class SessionAudioBridge {
       this.commitTransportSnapshot(snapshot);
     } catch (error) {
       this.logger.warn('Failed to refresh transport state', error);
+    } finally {
+      this.isTransportPolling = false;
     }
   }
 
@@ -941,9 +948,10 @@ export class SessionAudioBridge {
   }
 
   private async refreshDiagnosticsState(): Promise<void> {
-    if (!this.supportsDiagnostics) {
+    if (!this.supportsDiagnostics || this.isDiagnosticsPolling) {
       return;
     }
+    this.isDiagnosticsPolling = true;
     try {
       const diagnostics = await this.audioEngine.getRenderDiagnostics();
       const renderLoad = clamp(diagnostics.lastRenderDurationMicros / 10_000, 0, 1);
@@ -966,6 +974,8 @@ export class SessionAudioBridge {
         updatedAt: Date.now(),
       };
       this.commitDiagnosticsSnapshot(snapshot);
+    } finally {
+      this.isDiagnosticsPolling = false;
     }
   }
 
