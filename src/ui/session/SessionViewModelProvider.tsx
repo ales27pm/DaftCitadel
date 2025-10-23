@@ -88,6 +88,7 @@ export const SessionViewModelProvider: React.FC<SessionViewModelProviderProps> =
     () => new Map(),
   );
   const [pluginAlerts, setPluginAlerts] = useState<PluginCrashReport[]>([]);
+  const recoveryTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const [transportRuntime, setTransportRuntime] = useState<AudioTransportSnapshot | null>(
     () => audioBridge?.getTransportState?.() ?? null,
   );
@@ -189,6 +190,52 @@ export const SessionViewModelProvider: React.FC<SessionViewModelProviderProps> =
     });
     return unsubscribe;
   }, [pluginHost]);
+
+  const removePluginAlert = useCallback((key: string) => {
+    setPluginAlerts((previous) =>
+      previous.filter(
+        (alert) => `${alert.instanceId}:${alert.timestamp}` !== key,
+      ),
+    );
+  }, []);
+
+  useEffect(() => {
+    pluginAlerts.forEach((alert) => {
+      const key = `${alert.instanceId}:${alert.timestamp}`;
+      if (alert.recovered) {
+        if (!recoveryTimers.current.has(key)) {
+          const timer = setTimeout(() => {
+            recoveryTimers.current.delete(key);
+            removePluginAlert(key);
+          }, 4000);
+          recoveryTimers.current.set(key, timer);
+        }
+      } else if (recoveryTimers.current.has(key)) {
+        const timer = recoveryTimers.current.get(key);
+        if (timer) {
+          clearTimeout(timer);
+        }
+        recoveryTimers.current.delete(key);
+      }
+    });
+
+    const activeKeys = new Set(
+      pluginAlerts.map((alert) => `${alert.instanceId}:${alert.timestamp}`),
+    );
+    recoveryTimers.current.forEach((timer, key) => {
+      if (!activeKeys.has(key)) {
+        clearTimeout(timer);
+        recoveryTimers.current.delete(key);
+      }
+    });
+  }, [pluginAlerts, removePluginAlert]);
+
+  useEffect(() => {
+    return () => {
+      recoveryTimers.current.forEach((timer) => clearTimeout(timer));
+      recoveryTimers.current.clear();
+    };
+  }, []);
 
   useEffect(() => {
     setTransportRuntime(audioBridge?.getTransportState?.() ?? null);

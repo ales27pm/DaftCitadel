@@ -40,6 +40,14 @@ export class PluginHost {
       restartToken?: string;
     }
   >();
+  private readonly crashedInstances = new Map<
+    string,
+    {
+      handle: PluginInstanceHandle;
+      nativeInstanceId: string;
+      restartToken?: string;
+    }
+  >();
   private subscriptions: Array<{ remove: () => void }> = [];
 
   constructor(sandboxManager?: PluginSandboxManager) {
@@ -79,6 +87,7 @@ export class PluginHost {
       nativeInstanceId: normalizedHandle.nativeInstanceId ?? normalizedHandle.instanceId,
       restartToken: normalizedHandle.restartToken,
     });
+    this.crashedInstances.delete(normalizedHandle.instanceId);
     return normalizedHandle;
   }
 
@@ -88,6 +97,7 @@ export class PluginHost {
     if (binding) {
       this.instances.delete(instanceId);
     }
+    this.crashedInstances.delete(instanceId);
   }
 
   async loadPreset(instanceId: string, presetId: string): Promise<void> {
@@ -162,6 +172,7 @@ export class PluginHost {
     this.crashListeners.clear();
     this.sandboxListeners.clear();
     this.instances.clear();
+    this.crashedInstances.clear();
   }
 
   private subscribeToEvents(): void {
@@ -210,46 +221,24 @@ export class PluginHost {
       return false;
     }
     if (!restartToken || restartToken !== binding.restartToken) {
-      if (restartToken) {
+      if (!restartToken) {
+        console.warn('Restart token missing; refusing automatic restart', {
+          instanceId: report.instanceId,
+        });
+      } else {
         console.warn('Restart token mismatch; refusing automatic restart', {
           instanceId: report.instanceId,
         });
       }
-      this.instances.delete(report.instanceId);
-      return false;
-    }
-    try {
-      const sandboxContext = binding.handle.sandboxPath
-        ? ({
-            descriptor: binding.handle.descriptor,
-            identifier: binding.handle.descriptor.identifier,
-            path: binding.handle.sandboxPath,
-          } as SandboxContext)
-        : undefined;
-      const newHandle = await NativePluginHost.instantiatePlugin(
-        binding.handle.descriptor.identifier,
-        {
-          sandboxIdentifier: sandboxContext?.identifier,
-          initialPresetId: binding.handle.descriptor.factoryPresets?.[0]?.id,
-          cpuBudgetPercent: binding.handle.cpuLoadPercent,
-        },
-      );
-      const revivedHandle: PluginInstanceHandle = {
-        ...newHandle,
-        instanceId: report.instanceId,
-        nativeInstanceId: newHandle.nativeInstanceId ?? newHandle.instanceId,
-      };
-      this.instances.set(report.instanceId, {
-        handle: revivedHandle,
-        nativeInstanceId: revivedHandle.nativeInstanceId ?? newHandle.instanceId,
-        restartToken: revivedHandle.restartToken,
+      this.crashedInstances.set(report.instanceId, {
+        handle: binding.handle,
+        nativeInstanceId: binding.nativeInstanceId,
+        restartToken: binding.restartToken,
       });
-      return true;
-    } catch (error) {
-      console.error('Plugin restart failed', error);
       this.instances.delete(report.instanceId);
       return false;
     }
+    return this.reviveBinding(binding, report.instanceId);
   }
 
   getInstanceRuntime(
@@ -266,18 +255,30 @@ export class PluginHost {
   }
 
   async retryInstance(instanceId: string): Promise<boolean> {
-    const binding = this.instances.get(instanceId);
+    const binding =
+      this.instances.get(instanceId) ?? this.crashedInstances.get(instanceId);
     if (!binding) {
       return false;
     }
+    return this.reviveBinding(binding, instanceId);
+  }
+
+  private async reviveBinding(
+    binding: {
+      handle: PluginInstanceHandle;
+      nativeInstanceId: string;
+      restartToken?: string;
+    },
+    targetInstanceId: string,
+  ): Promise<boolean> {
+    const sandboxContext = binding.handle.sandboxPath
+      ? ({
+          descriptor: binding.handle.descriptor,
+          identifier: binding.handle.descriptor.identifier,
+          path: binding.handle.sandboxPath,
+        } as SandboxContext)
+      : undefined;
     try {
-      const sandboxContext = binding.handle.sandboxPath
-        ? ({
-            descriptor: binding.handle.descriptor,
-            identifier: binding.handle.descriptor.identifier,
-            path: binding.handle.sandboxPath,
-          } as SandboxContext)
-        : undefined;
       const newHandle = await NativePluginHost.instantiatePlugin(
         binding.handle.descriptor.identifier,
         {
@@ -288,17 +289,24 @@ export class PluginHost {
       );
       const revivedHandle: PluginInstanceHandle = {
         ...newHandle,
-        instanceId,
+        instanceId: targetInstanceId,
         nativeInstanceId: newHandle.nativeInstanceId ?? newHandle.instanceId,
       };
-      this.instances.set(instanceId, {
+      this.instances.set(targetInstanceId, {
         handle: revivedHandle,
         nativeInstanceId: revivedHandle.nativeInstanceId ?? newHandle.instanceId,
         restartToken: revivedHandle.restartToken,
       });
+      this.crashedInstances.delete(targetInstanceId);
       return true;
     } catch (error) {
-      console.error('Plugin retry failed', error);
+      console.error('Plugin revive failed', error);
+      this.instances.delete(targetInstanceId);
+      this.crashedInstances.set(targetInstanceId, {
+        handle: binding.handle,
+        nativeInstanceId: binding.nativeInstanceId,
+        restartToken: binding.restartToken,
+      });
       return false;
     }
   }
