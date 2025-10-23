@@ -14,8 +14,37 @@ import {
 } from './storage';
 import { AsyncMutex, deepClone } from './util';
 
+export type AudioTransportSnapshot = {
+  frame: number;
+  seconds: number;
+  beats: number;
+  bpm: number;
+  sampleRate: number;
+  isPlaying: boolean;
+  updatedAt: number;
+};
+
+export type AudioDiagnosticsSnapshot = {
+  status: 'loading' | 'ready' | 'error' | 'unavailable';
+  xruns: number;
+  renderLoad: number;
+  lastRenderDurationMicros?: number;
+  clipBufferBytes?: number;
+  error?: Error;
+  updatedAt?: number;
+};
+
 export interface AudioEngineBridge {
   applySessionUpdate(session: Session): Promise<void>;
+  startTransport?(): Promise<void>;
+  stopTransport?(): Promise<void>;
+  locateTransport?(frame: number): Promise<void>;
+  getTransportState?(): AudioTransportSnapshot | null;
+  subscribeTransport?(listener: (snapshot: AudioTransportSnapshot) => void): () => void;
+  getDiagnosticsState?(): AudioDiagnosticsSnapshot | null;
+  subscribeDiagnostics?(
+    listener: (snapshot: AudioDiagnosticsSnapshot) => void,
+  ): () => void;
 }
 
 export interface SessionManagerOptions {

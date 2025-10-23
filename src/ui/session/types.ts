@@ -6,6 +6,8 @@ import {
   TrackID,
   PluginSlotType,
   RoutingSignalType,
+  type AudioTransportSnapshot,
+  type AudioDiagnosticsSnapshot,
 } from '../../session';
 import type { PluginCrashReport } from '../../audio';
 
@@ -78,6 +80,10 @@ export interface SessionDiagnosticsView {
   updatedAt?: number;
 }
 
+export type TransportRuntimeState = AudioTransportSnapshot;
+
+export type EngineDiagnosticsState = AudioDiagnosticsSnapshot;
+
 export interface SessionViewModelState {
   status: 'idle' | 'loading' | 'ready' | 'error';
   sessionId?: SessionID;
@@ -85,6 +91,7 @@ export interface SessionViewModelState {
   tracks: TrackViewModel[];
   transport: SessionTransportView | null;
   diagnostics: SessionDiagnosticsView;
+  transportRuntime: TransportRuntimeState | null;
   error?: Error;
   pluginAlerts: PluginCrashReport[];
 }

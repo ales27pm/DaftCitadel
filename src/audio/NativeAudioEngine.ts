@@ -28,6 +28,13 @@ export interface AudioEngineSpec extends TurboModule {
     frame: number,
     value: number,
   ): Promise<void>;
+  startTransport(): Promise<void>;
+  stopTransport(): Promise<void>;
+  locateTransport(frame: number): Promise<void>;
+  getTransportState(): Promise<{
+    currentFrame: number;
+    isPlaying: boolean;
+  }>;
   getRenderDiagnostics(): Promise<{
     xruns: number;
     lastRenderDurationMicros: number;

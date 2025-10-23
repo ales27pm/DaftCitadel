@@ -12,6 +12,7 @@ import {
   TrackViewModel,
   TrackPluginViewModel,
   TrackPluginStatus,
+  TransportRuntimeState,
 } from './types';
 import type { PluginCrashReport } from '../../audio';
 
@@ -301,18 +302,38 @@ export const buildTracks = (
 export const buildTransport = (
   session: Session,
   diagnostics: SessionDiagnosticsView,
+  runtime?: TransportRuntimeState,
   sessionLengthMs?: number,
 ): SessionTransportView => {
   const length = sessionLengthMs ?? computeSessionLengthMs(session);
   const beatDuration = msPerBeat(session.metadata);
   const totalBeats = length / beatDuration;
   const totalBars = Math.max(1, Math.ceil(totalBeats / beatsPerBar(session.metadata)));
-  const isPlaying = diagnostics.status === 'ready' && diagnostics.renderLoad < 0.98;
-  const cycleLengthMs = Math.max(length, MIN_SESSION_LENGTH_MS);
-  const referenceTime = diagnostics.updatedAt ?? Date.now();
-  const playheadMs = isPlaying ? referenceTime % cycleLengthMs : 0;
-  const playheadBeats = playheadMs / beatDuration;
+
+  let isPlaying = diagnostics.status === 'ready' && diagnostics.renderLoad < 0.98;
+  let playheadBeats = 0;
+
+  if (runtime) {
+    isPlaying = runtime.isPlaying;
+    if (totalBeats > 0) {
+      const wrappedBeats = runtime.beats % totalBeats;
+      playheadBeats = clamp(
+        wrappedBeats < 0 ? wrappedBeats + totalBeats : wrappedBeats,
+        0,
+        totalBeats,
+      );
+    } else {
+      playheadBeats = Math.max(0, runtime.beats);
+    }
+  } else {
+    const cycleLengthMs = Math.max(length, MIN_SESSION_LENGTH_MS);
+    const referenceTime = diagnostics.updatedAt ?? Date.now();
+    const playheadMs = isPlaying ? referenceTime % cycleLengthMs : 0;
+    playheadBeats = playheadMs / beatDuration;
+  }
+
   const playheadRatio = totalBeats > 0 ? clamp(playheadBeats / totalBeats, 0, 1) : 0;
+
   return {
     bpm: session.metadata.bpm,
     timeSignature: session.metadata.timeSignature,

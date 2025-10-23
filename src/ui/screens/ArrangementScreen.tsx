@@ -3,13 +3,20 @@ import { SafeAreaView, ScrollView, View } from 'react-native';
 import { useSharedValue } from 'react-native-reanimated';
 
 import { MidiPianoRoll, WaveformEditor } from '../editors';
-import { NeonSurface, NeonText, NeonToolbar } from '../design-system';
+import {
+  NeonSurface,
+  NeonText,
+  NeonToolbar,
+  type NeonToolbarProps,
+} from '../design-system';
 import { useAdaptiveLayout } from '../layout';
-import { useSessionViewModel } from '../session';
+import { useSessionViewModel, useTransportControls } from '../session';
 
 export const ArrangementScreen: React.FC = () => {
   const adaptive = useAdaptiveLayout();
-  const { status, tracks, transport, refresh, diagnostics } = useSessionViewModel();
+  const { status, tracks, transport, refresh, diagnostics, pluginAlerts } =
+    useSessionViewModel();
+  const transportControls = useTransportControls();
   const arrangementTrack = useMemo(
     () => tracks.find((track) => track.waveform.length > 0) ?? tracks[0],
     [tracks],
@@ -21,17 +28,70 @@ export const ArrangementScreen: React.FC = () => {
   const waveform = arrangementTrack?.waveform ?? new Float32Array(0);
   const playhead = useSharedValue(0.25);
   const safeAreaStyle = useMemo(() => ({ flex: 1 }), []);
+  const contentHorizontalPadding = adaptive.breakpoint === 'phone' ? 16 : 32;
   const contentStyle = useMemo(
     () => ({
-      paddingHorizontal: adaptive.breakpoint === 'phone' ? 16 : 32,
+      paddingHorizontal: contentHorizontalPadding,
       paddingBottom: adaptive.breakpoint === 'desktop' ? 48 : 24,
     }),
-    [adaptive.breakpoint],
+    [adaptive.breakpoint, contentHorizontalPadding],
+  );
+  const alertsContainerStyle = useMemo(
+    () => ({
+      paddingHorizontal: contentHorizontalPadding,
+      marginBottom: 12,
+    }),
+    [contentHorizontalPadding],
   );
   const waveformCardStyle = useMemo(() => ({ marginBottom: 24 }), []);
   const summaryStyle = useMemo(() => ({ marginTop: 12 }), []);
   const automationStyle = useMemo(() => ({ marginTop: 8 }), []);
   const diagnosticsStyle = useMemo(() => ({ marginTop: 12 }), []);
+  const alertSurfaceStyle = useMemo(() => ({ marginBottom: 12 }), []);
+  const diagnosticsSummary = useMemo(() => {
+    if (diagnostics.status === 'ready') {
+      const renderPercent = Number.isFinite(diagnostics.renderLoad)
+        ? `${Math.round(diagnostics.renderLoad * 100)}%`
+        : '0%';
+      const clipBytes = diagnostics.clipBufferBytes ?? 0;
+      const clipInfo =
+        clipBytes > 0 ? ` • Clip buffers: ${(clipBytes / 1024).toFixed(0)} KB` : '';
+      return `XRuns: ${diagnostics.xruns} • Render load: ${renderPercent}${clipInfo}`;
+    }
+    if (diagnostics.status === 'error') {
+      return `Diagnostics error: ${diagnostics.error?.message ?? 'Unknown failure.'}`;
+    }
+    if (diagnostics.status === 'unavailable') {
+      return 'Audio diagnostics unavailable.';
+    }
+    return 'Gathering audio diagnostics...';
+  }, [diagnostics]);
+  const diagnosticsIntent =
+    diagnostics.status === 'error' ? 'critical' : ('secondary' as const);
+  const pluginAlertViews = useMemo(
+    () =>
+      pluginAlerts.map((alert) => {
+        const label = alert.descriptor?.name ?? alert.instanceId;
+        const timestamp = new Date(alert.timestamp).toLocaleString();
+        const recoveryNote = alert.recovered ? ' • Recovered' : '';
+        return (
+          <NeonSurface
+            key={`${alert.instanceId}:${alert.timestamp}`}
+            intent="critical"
+            style={alertSurfaceStyle}
+          >
+            <NeonText variant="body" weight="medium" intent="critical">
+              Plugin crash: {label}
+            </NeonText>
+            <NeonText variant="caption" intent="secondary">
+              {timestamp} • {alert.reason}
+              {recoveryNote}
+            </NeonText>
+          </NeonSurface>
+        );
+      }),
+    [alertSurfaceStyle, pluginAlerts],
+  );
   const totalBars = transport?.totalBars ?? 4;
   const midiNotes = midiSourceTrack?.midiNotes ?? [];
   const automationSummary = useMemo(() => {
@@ -52,9 +112,65 @@ export const ArrangementScreen: React.FC = () => {
     }
   }, [playhead, transport]);
 
+  const handlePlay = useCallback(() => {
+    transportControls.play().catch((error) => {
+      console.error('Failed to start transport playback', error);
+    });
+  }, [transportControls]);
+
+  const handleStop = useCallback(() => {
+    transportControls.stop().catch((error) => {
+      console.error('Failed to stop transport playback', error);
+    });
+  }, [transportControls]);
+
+  const handleRewind = useCallback(() => {
+    transportControls.locateStart().catch((error) => {
+      console.error('Failed to rewind transport', error);
+    });
+  }, [transportControls]);
+
   const handleRefresh = useCallback(() => {
-    refresh().catch(() => undefined);
+    refresh().catch((error) => {
+      console.error('Failed to refresh session data', error);
+    });
   }, [refresh]);
+
+  const toolbarActions = useMemo<NonNullable<NeonToolbarProps['actions']>>(
+    () => [
+      {
+        label: 'Play',
+        onPress: handlePlay,
+        intent: 'primary',
+        disabled: !transportControls.isAvailable || transport?.isPlaying,
+      },
+      {
+        label: 'Stop',
+        onPress: handleStop,
+        intent: 'secondary',
+        disabled: !transportControls.isAvailable || !transport?.isPlaying,
+      },
+      {
+        label: 'Rewind',
+        onPress: handleRewind,
+        intent: 'secondary',
+        disabled: !transportControls.isAvailable,
+      },
+      {
+        label: 'Refresh',
+        onPress: handleRefresh,
+        intent: 'secondary',
+      },
+    ],
+    [
+      handlePlay,
+      handleRefresh,
+      handleRewind,
+      handleStop,
+      transport?.isPlaying,
+      transportControls.isAvailable,
+    ],
+  );
 
   const renderContent = () => {
     if (status === 'loading' || status === 'idle') {
@@ -98,9 +214,8 @@ export const ArrangementScreen: React.FC = () => {
           <NeonText variant="body" style={automationStyle}>
             Automation: {automationSummary}
           </NeonText>
-          <NeonText variant="body" intent="secondary" style={diagnosticsStyle}>
-            XRuns: {diagnostics.xruns} • Render load:{' '}
-            {(diagnostics.renderLoad * 100).toFixed(0)}%
+          <NeonText variant="body" intent={diagnosticsIntent} style={diagnosticsStyle}>
+            {diagnosticsSummary}
           </NeonText>
         </NeonSurface>
         <NeonSurface>
@@ -120,10 +235,10 @@ export const ArrangementScreen: React.FC = () => {
   return (
     <SafeAreaView style={safeAreaStyle}>
       <ScrollView contentInsetAdjustmentBehavior="automatic">
-        <NeonToolbar
-          title="Arrangement"
-          actions={[{ label: 'Refresh', onPress: handleRefresh, intent: 'secondary' }]}
-        />
+        <NeonToolbar title="Arrangement" actions={toolbarActions} />
+        {pluginAlertViews.length > 0 && (
+          <View style={alertsContainerStyle}>{pluginAlertViews}</View>
+        )}
         <View accessibilityRole="summary">{renderContent()}</View>
       </ScrollView>
     </SafeAreaView>

@@ -6,7 +6,11 @@ import { demoSession, DEMO_SESSION_ID } from '../../session/fixtures/demoSession
 import { InMemorySessionStorageAdapter } from '../../session/storage/memoryAdapter';
 import type { SessionStorageAdapter } from '../../session/storage';
 import { SessionManager } from '../../session/sessionManager';
-import type { AudioEngineBridge } from '../../session/sessionManager';
+import type {
+  AudioDiagnosticsSnapshot,
+  AudioEngineBridge,
+  AudioTransportSnapshot,
+} from '../../session/sessionManager';
 import {
   AudioEngine,
   NativeAudioFileLoader,
@@ -25,16 +29,140 @@ import { createSessionStorageAdapter } from './storageAdapter';
 class PassiveAudioEngineBridge implements AudioEngineBridge {
   private lastSession: Session | null = null;
 
+  private transportSnapshot: AudioTransportSnapshot | null = null;
+
+  private diagnosticsSnapshot: AudioDiagnosticsSnapshot = {
+    status: 'unavailable',
+    xruns: 0,
+    renderLoad: 0,
+  };
+
+  private readonly transportListeners = new Set<
+    (snapshot: AudioTransportSnapshot) => void
+  >();
+
+  private readonly diagnosticsListeners = new Set<
+    (snapshot: AudioDiagnosticsSnapshot) => void
+  >();
+
   async applySessionUpdate(session: Session): Promise<void> {
     this.lastSession = session;
+    const snapshot = this.ensureTransportSnapshot();
+    this.transportSnapshot = {
+      ...snapshot,
+      bpm: session.metadata.bpm,
+      sampleRate: session.metadata.sampleRate,
+      updatedAt: Date.now(),
+    };
+    this.emitTransport();
   }
 
   getSnapshot(): Session | null {
     return this.lastSession;
   }
 
+  getTransportState(): AudioTransportSnapshot | null {
+    return this.transportSnapshot ? { ...this.transportSnapshot } : null;
+  }
+
+  subscribeTransport(listener: (snapshot: AudioTransportSnapshot) => void): () => void {
+    this.transportListeners.add(listener);
+    const snapshot = this.transportSnapshot;
+    if (snapshot) {
+      listener({ ...snapshot });
+    }
+    return () => {
+      this.transportListeners.delete(listener);
+    };
+  }
+
+  async startTransport(): Promise<void> {
+    const snapshot = this.ensureTransportSnapshot();
+    this.transportSnapshot = {
+      ...snapshot,
+      isPlaying: true,
+      updatedAt: Date.now(),
+    };
+    this.emitTransport();
+  }
+
+  async stopTransport(): Promise<void> {
+    const snapshot = this.ensureTransportSnapshot();
+    this.transportSnapshot = {
+      ...snapshot,
+      isPlaying: false,
+      updatedAt: Date.now(),
+    };
+    this.emitTransport();
+  }
+
+  async locateTransport(frame: number): Promise<void> {
+    const snapshot = this.ensureTransportSnapshot();
+    const sanitized = Number.isFinite(frame) ? Math.max(0, Math.floor(frame)) : 0;
+    const seconds = snapshot.sampleRate > 0 ? sanitized / snapshot.sampleRate : 0;
+    const beats = snapshot.bpm > 0 ? (seconds * snapshot.bpm) / 60 : 0;
+    this.transportSnapshot = {
+      ...snapshot,
+      frame: sanitized,
+      seconds,
+      beats,
+      updatedAt: Date.now(),
+    };
+    this.emitTransport();
+  }
+
+  getDiagnosticsState(): AudioDiagnosticsSnapshot | null {
+    return { ...this.diagnosticsSnapshot };
+  }
+
+  subscribeDiagnostics(
+    listener: (snapshot: AudioDiagnosticsSnapshot) => void,
+  ): () => void {
+    this.diagnosticsListeners.add(listener);
+    listener({ ...this.diagnosticsSnapshot });
+    return () => {
+      this.diagnosticsListeners.delete(listener);
+    };
+  }
+
   async dispose(): Promise<void> {
     this.lastSession = null;
+    this.transportSnapshot = null;
+    this.transportListeners.clear();
+    this.diagnosticsListeners.clear();
+  }
+
+  private ensureTransportSnapshot(): AudioTransportSnapshot {
+    if (this.transportSnapshot) {
+      return this.transportSnapshot;
+    }
+    const bpm = this.lastSession?.metadata.bpm ?? 120;
+    const sampleRate = this.lastSession?.metadata.sampleRate ?? 48000;
+    const snapshot: AudioTransportSnapshot = {
+      frame: 0,
+      seconds: 0,
+      beats: 0,
+      bpm,
+      sampleRate,
+      isPlaying: false,
+      updatedAt: Date.now(),
+    };
+    this.transportSnapshot = snapshot;
+    return snapshot;
+  }
+
+  private emitTransport(): void {
+    const snapshot = this.transportSnapshot;
+    if (!snapshot) {
+      return;
+    }
+    this.transportListeners.forEach((listener) => {
+      try {
+        listener({ ...snapshot });
+      } catch (error) {
+        console.error('PassiveAudioEngineBridge transport listener failed', error);
+      }
+    });
   }
 }
 
