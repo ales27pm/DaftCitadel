@@ -6,7 +6,13 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
-import { NeonSurface, NeonText, NeonToolbar, ThemeIntent } from '../design-system';
+import {
+  NeonButton,
+  NeonSurface,
+  NeonText,
+  NeonToolbar,
+  ThemeIntent,
+} from '../design-system';
 import { useAdaptiveLayout } from '../layout';
 import { TrackViewModel, useSessionViewModel } from '../session';
 
@@ -43,6 +49,15 @@ const channelStyles = StyleSheet.create({
 
 const screenStyles = StyleSheet.create({
   safeArea: { flex: 1 },
+  alertContainer: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    gap: 12,
+  },
+  retryButton: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
+  },
 });
 
 const MixerChannel: React.FC<{ track: TrackViewModel }> = ({ track }) => {
@@ -118,7 +133,8 @@ const MixerChannel: React.FC<{ track: TrackViewModel }> = ({ track }) => {
 
 export const MixerScreen: React.FC = () => {
   const adaptive = useAdaptiveLayout();
-  const { status, tracks, diagnostics, refresh, pluginAlerts } = useSessionViewModel();
+  const { status, tracks, diagnostics, refresh, pluginAlerts, retryPlugin } =
+    useSessionViewModel();
   const channelListStyle = useMemo<ViewStyle>(
     () => ({
       paddingHorizontal: adaptive.breakpoint === 'phone' ? 12 : 32,
@@ -129,10 +145,65 @@ export const MixerScreen: React.FC = () => {
   );
   const diagnosticsCardStyle = useMemo(() => ({ margin: 16 }), []);
   const statusTextStyle = useMemo(() => ({ marginTop: 8 }), []);
+  const alertContainerStyle = useMemo(
+    () => [
+      screenStyles.alertContainer,
+      { paddingHorizontal: adaptive.breakpoint === 'phone' ? 16 : 32 },
+    ],
+    [adaptive.breakpoint],
+  );
 
   const handleRefresh = useCallback(() => {
     refresh().catch(() => undefined);
   }, [refresh]);
+
+  const handleRetryPlugin = useCallback(
+    (instanceId: string) => {
+      retryPlugin(instanceId).catch((error) => {
+        console.error('Failed to retry plugin instantiation', error);
+      });
+    },
+    [retryPlugin],
+  );
+
+  const pluginAlertToasts = useMemo(() => {
+    if (pluginAlerts.length === 0) {
+      return null;
+    }
+    return pluginAlerts.map((alert) => {
+      const timestamp = new Date(alert.timestamp).toLocaleTimeString();
+      const title = alert.descriptor?.name ?? alert.instanceId;
+      const recovered = alert.recovered === true;
+      const intent: ThemeIntent = recovered ? 'success' : 'critical';
+      const actionLabel = recovered ? 'Recovered' : 'Retry';
+      return (
+        <NeonSurface
+          key={`${alert.instanceId}:${alert.timestamp}`}
+          intent={intent}
+          accessibilityRole="alert"
+        >
+          <NeonText variant="body" weight="medium">
+            {title}
+          </NeonText>
+          <NeonText variant="caption" intent="secondary">
+            {timestamp} • {alert.reason}
+          </NeonText>
+          <NeonButton
+            label={actionLabel}
+            intent={recovered ? 'secondary' : 'primary'}
+            disabled={recovered}
+            onPress={() => handleRetryPlugin(alert.instanceId)}
+            accessibilityHint={
+              recovered
+                ? 'Plugin already recovered'
+                : 'Retry instantiating the crashed plugin'
+            }
+            style={screenStyles.retryButton}
+          />
+        </NeonSurface>
+      );
+    });
+  }, [handleRetryPlugin, pluginAlerts]);
 
   const renderChannels = () => {
     if (status === 'loading' || status === 'idle') {
@@ -174,18 +245,8 @@ export const MixerScreen: React.FC = () => {
           title="Mixer"
           actions={[{ label: 'Refresh', onPress: handleRefresh, intent: 'secondary' }]}
         />
-        {pluginAlerts.length > 0 && (
-          <NeonSurface style={diagnosticsCardStyle} intent="critical">
-            <NeonText variant="title" weight="medium">
-              Plugin Alerts
-            </NeonText>
-            {pluginAlerts.map((alert) => (
-              <NeonText key={`${alert.instanceId}:${alert.timestamp}`} variant="body">
-                {alert.descriptor.name} crashed at{' '}
-                {new Date(alert.timestamp).toLocaleTimeString()}
-              </NeonText>
-            ))}
-          </NeonSurface>
+        {pluginAlertToasts && (
+          <View style={alertContainerStyle}>{pluginAlertToasts}</View>
         )}
         <NeonSurface style={diagnosticsCardStyle}>
           <NeonText variant="title" weight="medium">
