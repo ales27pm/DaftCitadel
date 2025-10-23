@@ -50,6 +50,10 @@ describe('DiagnosticsManager', () => {
     expect(onMetrics).toHaveBeenCalledWith({ ...baseMetrics, rssi: -60 });
     expect(onMetrics).toHaveBeenCalledWith(baseMetrics);
 
+    const initialCall = logger.mock.calls.find(
+      ([key]) => key === 'collab.networkMetrics.initial',
+    );
+
     const [eventKey, payload] = logger.mock.calls.find(
       ([key]) => key === 'collab.networkMetrics',
     ) ?? ['', {}];
@@ -58,15 +62,8 @@ describe('DiagnosticsManager', () => {
     expect(payload).not.toHaveProperty('interfaceName');
     expect(payload).not.toHaveProperty('ssid');
     expect(payload).not.toHaveProperty('bssid');
-    expect(initialCall?.[1]).not.toHaveProperty('ssid');
-    expect(initialCall?.[1]).not.toHaveProperty('bssid');
-    expect(payload).not.toHaveProperty('ssid');
-    expect(payload).not.toHaveProperty('bssid');
     expect(payload).toMatchObject({ rssi: -60, linkSpeedMbps: 480 });
 
-    const initialCall = logger.mock.calls.find(
-      ([key]) => key === 'collab.networkMetrics.initial',
-    );
     expect(initialCall?.[1]).not.toHaveProperty('interfaceName');
     expect(initialCall?.[1]).not.toHaveProperty('ssid');
     expect(initialCall?.[1]).not.toHaveProperty('bssid');

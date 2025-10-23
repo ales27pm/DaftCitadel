@@ -16,70 +16,20 @@ import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import java.net.NetworkInterface
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
+
+private const val LOG_TAG = "CollabNetworkDiagnostics"
+private const val EVENT_NAME = "CollabNetworkDiagnosticsEvent"
 private const val DEFAULT_POLL_INTERVAL_MS = 5_000L
-  @Volatile private var pollIntervalMs: Long = DEFAULT_POLL_INTERVAL_MS
-      pollIntervalMs,
-      pollIntervalMs,
-      TimeUnit.MILLISECONDS,
-  @ReactMethod
-  fun beginObserving() {
-    startObserving()
-  }
 
-  @ReactMethod
-  fun endObserving() {
-    stopObserving()
-  }
+class CollabNetworkDiagnosticsModule(
+  reactContext: ReactApplicationContext,
+) : ReactContextBaseJavaModule(reactContext) {
 
-  @ReactMethod
-  fun setPollingInterval(intervalMs: Double) {
-    if (intervalMs.isNaN() || intervalMs <= 0.0) {
-      return
-    }
-    pollIntervalMs = intervalMs.toLong()
-    val wasRunning = pollTask != null
-    pollTask?.cancel(true)
-    pollTask = null
-    if (wasRunning) {
-      startObserving()
-    }
-  }
-
-    pollTask?.cancel(true)
-    pollTask = null
-      payload.putString("interface", getWifiInterfaceName())
-
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-      val nearbyGranted = hasPermission(Manifest.permission.NEARBY_WIFI_DEVICES)
-      if (!nearbyGranted) {
-        throw SecurityException("NEARBY_WIFI_DEVICES permission is required")
-      }
-    } else {
-      val locationGranted =
-        hasPermission(Manifest.permission.ACCESS_FINE_LOCATION) ||
-          hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
-      if (!locationGranted) {
-        throw SecurityException("ACCESS_FINE_LOCATION permission is required")
-      }
-  private fun getWifiInterfaceName(): String {
-    return try {
-      val interfaces = NetworkInterface.getNetworkInterfaces()
-      if (interfaces != null) {
-        while (interfaces.hasMoreElements()) {
-          val iface = interfaces.nextElement()
-          if (iface.name.startsWith("wlan")) {
-            return iface.name
-          }
-        }
-      }
-      "wlan0"
-    } catch (error: Exception) {
-      Log.v(LOG_TAG, "Falling back to default Wi-Fi interface name", error)
-      "wlan0"
-    }
-  }
-
-    applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+  private val wifiManager: WifiManager? =
+    reactApplicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
   private val scheduler = Executors.newSingleThreadScheduledExecutor()
   private var pollTask: ScheduledFuture<*>? = null
   @Volatile private var pollIntervalMs: Long = DEFAULT_POLL_INTERVAL_MS
@@ -107,6 +57,10 @@ private const val DEFAULT_POLL_INTERVAL_MS = 5_000L
 
     try {
       emitMetrics()
+    } catch (error: SecurityException) {
+      Log.w(LOG_TAG, "Permission required for Wi-Fi metrics", error)
+      sendErrorEvent(error.message ?: "Permission required")
+      return
     } catch (error: Exception) {
       Log.w(LOG_TAG, "Initial metrics unavailable", error)
       sendErrorEvent(error.message ?: "Metrics unavailable")
@@ -116,6 +70,9 @@ private const val DEFAULT_POLL_INTERVAL_MS = 5_000L
       {
         try {
           emitMetrics()
+        } catch (error: SecurityException) {
+          Log.w(LOG_TAG, "Permission revoked during polling", error)
+          sendErrorEvent(error.message ?: "Permission required")
         } catch (error: Exception) {
           Log.w(LOG_TAG, "Polling failure", error)
           sendErrorEvent(error.message ?: "Metrics unavailable")
@@ -145,12 +102,12 @@ private const val DEFAULT_POLL_INTERVAL_MS = 5_000L
 
   @ReactMethod
   fun addListener(@Suppress("UNUSED_PARAMETER") eventName: String) {
-    // Required for React Native event emitter semantics.
+    // Required by React Native's event emitter semantics.
   }
 
   @ReactMethod
   fun removeListeners(@Suppress("UNUSED_PARAMETER") count: Double) {
-    // Required for React Native event emitter semantics.
+    // Required by React Native's event emitter semantics.
   }
 
   @ReactMethod
@@ -254,7 +211,7 @@ private const val DEFAULT_POLL_INTERVAL_MS = 5_000L
 
   private fun hasPermission(permission: String): Boolean {
     return ContextCompat.checkSelfPermission(
-      applicationContext,
+      reactApplicationContext,
       permission,
     ) == PackageManager.PERMISSION_GRANTED
   }

@@ -17,19 +17,19 @@ The collaboration service is built around `CollabSessionService` and helper modu
 
 ## 2. Native Diagnostics Integration
 
-### iOS (CoreWLAN)
+### iOS (Wi-Fi APIs)
 
 1. The repository ships `native/collab/ios/CollabNetworkDiagnostics.swift`, which fulfils the following contract:
-   - Uses `CWWiFiClient` to query the current interface (`interface()?.ssid()`, `rssiValue()`, `noiseMeasurement()`).
-   - Publishes updates via `sendEventWithName("CollabNetworkDiagnosticsEvent", body: metrics)`.
-   - Requests temporary full Wi-Fi usage entitlement for sideloaded builds (`com.apple.developer.networking.multiple-packets.tuple`).
-2. Ensure the module exposes `getCurrentLinkMetrics` and paired observation commands (`startObserving`/`stopObserving` or `beginObserving`/`endObserving`) as used in `NetworkDiagnostics.ts`.
-3. Log failures with `os_log` to aid diagnosis when CoreWLAN is unavailable (e.g., on simulator).
+   - On iOS 14+, it gathers metrics with `NEHotspotNetwork.fetchCurrent(completionHandler:)`, falling back to `CNCopyCurrentNetworkInfo` on older OS versions and using `CWWiFiClient` when built for Mac Catalyst.
+   - Publishes updates via `sendEvent(withName: "CollabNetworkDiagnosticsEvent", body: metrics)`.
+   - Requires the `com.apple.developer.networking.wifi-info` entitlement; production builds must also meet Apple's documented access requirements (authorized Core Location usage, configured networks via `NEHotspotConfiguration`, active VPN, or managed DNS settings). When these requirements are not met, the module emits error payloads instead of metrics.
+2. Ensure the module exposes `getCurrentLinkMetrics` together with the `beginObserving`/`endObserving` commands that mirror the React Native lifecycle (`startObserving`/`stopObserving`). `beginObserving`/`endObserving` are the public commands invoked by `NetworkDiagnostics.ts`.
+3. Log failures with `os_log` to aid diagnosis when Wi-Fi information is unavailable (e.g., on simulator hardware or when the entitlement is missing). NEHotspotNetwork does not expose RSSI or noise floor values, so expect partial payloads on physical iOS devices.
 
 ### Android (WifiManager)
 
 1. The Android bridge lives in `native/collab/android/src/main/java/com/daftcitadel/collab/CollabNetworkDiagnosticsModule.kt` and polls `WifiManager` for link state before emitting `CollabNetworkDiagnosticsEvent` updates.
-2. Declare and request `ACCESS_FINE_LOCATION` at runtime using React Native’s permission APIs—`requiresLocationPermission()` surfaces the need to the JS layer. Android 13+ devices also require `NEARBY_WIFI_DEVICES` for link metrics.
+2. Declare `ACCESS_WIFI_STATE`, `ACCESS_FINE_LOCATION`, and `NEARBY_WIFI_DEVICES` in the library manifest. The module requests `ACCESS_FINE_LOCATION` (or `ACCESS_COARSE_LOCATION`) on Android 12 and below, and `NEARBY_WIFI_DEVICES` on Android 13+. Surface permission requirements through the JS helper `requiresLocationPermission()`.
 3. Optionally integrate `ConnectivityManager.registerNetworkCallback` to capture link bandwidth using `LinkProperties.getLinkBandwidths()` on Android 13+.
 
 ## 3. Performance Capture Workflow

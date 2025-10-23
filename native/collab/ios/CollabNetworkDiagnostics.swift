@@ -7,101 +7,27 @@ import CoreWLAN
 #if canImport(SystemConfiguration)
 import SystemConfiguration.CaptiveNetwork
 #endif
+#if canImport(NetworkExtension)
+import NetworkExtension
+#endif
+
+@objc(CollabNetworkDiagnostics)
+final class CollabNetworkDiagnostics: RCTEventEmitter {
+  private enum DiagnosticsError: LocalizedError {
+    case interfaceUnavailable
     case wifiInformationUnavailable
+
+    var errorDescription: String? {
+      switch self {
+      case .interfaceUnavailable:
+        return "Wi-Fi interface unavailable"
       case .wifiInformationUnavailable:
         return "Wi-Fi metrics are unavailable on this device."
-
-  private var pollInterval: TimeInterval = 5.0
-  @objc(beginObserving)
-  func beginObserving() {
-  @objc(endObserving)
-  func endObserving() {
-  @objc(setPollingInterval:)
-  func setPollingInterval(intervalMs: NSNumber) {
-    let interval = intervalMs.doubleValue
-    guard interval.isFinite, interval > 0 else {
-      return
-    }
-    metricsQueue.async {
-      self.pollInterval = interval / 1000.0
-      let wasActive = self.pollTimer != nil
-      self.pollTimer?.cancel()
-      self.pollTimer = nil
-      if wasActive {
-        self.scheduleTimerLocked()
       }
     }
   }
 
-      self.scheduleTimerLocked()
-  private func scheduleTimerLocked() {
-    guard pollTimer == nil else {
-      return
-    }
-    let timer = DispatchSource.makeTimerSource(queue: metricsQueue)
-    timer.schedule(
-      deadline: .now(),
-      repeating: .milliseconds(Int(pollInterval * 1_000.0)),
-      leeway: .milliseconds(250)
-    )
-    timer.setEventHandler { [weak self] in
-      self?.emitLatestMetrics()
-    }
-    pollTimer = timer
-    timer.resume()
-  }
-
-#if canImport(CoreWLAN) && targetEnvironment(macCatalyst)
-    return try fetchMetricsUsingCoreWLAN()
-#else
-    return try fetchMetricsUsingCaptiveNetwork()
-#endif
-  }
-
-  private func fetchMetricsUsingCoreWLAN() throws -> [String: Any] {
-      throw DiagnosticsError.wifiInformationUnavailable
-    if let ssid = interface.ssid(), !ssid.isEmpty {
-    }
-    if let bssid = interface.bssid(), !bssid.isEmpty {
-
-    return payload
-  }
-#endif
-
-  private func fetchMetricsUsingCaptiveNetwork() throws -> [String: Any] {
-#if canImport(SystemConfiguration)
-    guard
-      let supportedInterfaces = CNCopySupportedInterfaces() as? [String],
-      let interfaceName = supportedInterfaces.first
-    else {
-      throw DiagnosticsError.interfaceUnavailable
-    }
-
-    guard
-      let information = CNCopyCurrentNetworkInfo(interfaceName as CFString)
-        as? [String: Any]
-    else {
-      throw DiagnosticsError.wifiInformationUnavailable
-    }
-
-    var payload: [String: Any] = [
-      "timestamp": Date().timeIntervalSince1970 * 1000.0,
-      "interface": interfaceName,
-    ]
-
-    if let ssid = information[kCNNetworkInfoKeySSID as String] as? String,
-       !ssid.isEmpty
-    {
-      payload["ssid"] = ssid
-    }
-
-    if let bssid = information[kCNNetworkInfoKeyBSSID as String] as? String,
-       !bssid.isEmpty
-    {
-      payload["bssid"] = bssid
-    }
-
-    throw DiagnosticsError.wifiInformationUnavailable
+  private let log = OSLog(subsystem: "com.daftcitadel.collab", category: "diagnostics")
   private let eventName = "CollabNetworkDiagnosticsEvent"
   private let metricsQueue = DispatchQueue(label: "com.daftcitadel.collab.diagnostics")
   private var pollTimer: DispatchSourceTimer?
@@ -139,6 +65,7 @@ import SystemConfiguration.CaptiveNetwork
     guard interval.isFinite, interval > 0 else {
       return
     }
+
     metricsQueue.async {
       self.pollInterval = interval / 1000.0
       let wasActive = self.pollTimer != nil
@@ -171,7 +98,6 @@ import SystemConfiguration.CaptiveNetwork
       guard self.pollTimer == nil else {
         return
       }
-
       self.scheduleTimerLocked()
     }
   }
@@ -184,9 +110,6 @@ import SystemConfiguration.CaptiveNetwork
   }
 
   private func scheduleTimerLocked() {
-    guard pollTimer == nil else {
-      return
-    }
     let timer = DispatchSource.makeTimerSource(queue: metricsQueue)
     timer.schedule(
       deadline: .now(),
@@ -208,6 +131,15 @@ import SystemConfiguration.CaptiveNetwork
       }
     } catch {
       logFailure(error: error)
+      DispatchQueue.main.async {
+        self.sendEvent(
+          withName: self.eventName,
+          body: [
+            "error": error.localizedDescription,
+            "timestamp": Date().timeIntervalSince1970 * 1000.0,
+          ]
+        )
+      }
     }
   }
 
@@ -223,20 +155,22 @@ import SystemConfiguration.CaptiveNetwork
   }
 
   private func fetchMetrics() throws -> [String: Any] {
-#if canImport(CoreWLAN) && targetEnvironment(macCatalyst)
+#if targetEnvironment(macCatalyst)
     return try fetchMetricsUsingCoreWLAN()
 #else
-    return try fetchMetricsUsingCaptiveNetwork()
+    if #available(iOS 14.0, *) {
+      return try fetchMetricsUsingHotspotNetwork()
+    } else {
+      return try fetchMetricsUsingCaptiveNetwork()
+    }
 #endif
   }
 
 #if canImport(CoreWLAN)
   private func fetchMetricsUsingCoreWLAN() throws -> [String: Any] {
-    guard let client = CWWiFiClient.shared() else {
-      throw DiagnosticsError.wifiInformationUnavailable
-    }
-
-    guard let interface = client.interface() else {
+    guard let client = CWWiFiClient.shared(),
+          let interface = client.interface()
+    else {
       throw DiagnosticsError.interfaceUnavailable
     }
 
@@ -244,7 +178,7 @@ import SystemConfiguration.CaptiveNetwork
       "timestamp": Date().timeIntervalSince1970 * 1000.0,
     ]
 
-    if let name = interface.interfaceName {
+    if let name = interface.interfaceName, !name.isEmpty {
       payload["interface"] = name
     }
     if let ssid = interface.ssid(), !ssid.isEmpty {
@@ -280,6 +214,47 @@ import SystemConfiguration.CaptiveNetwork
   }
 #endif
 
+#if canImport(NetworkExtension)
+  @available(iOS 14.0, *)
+  private func fetchMetricsUsingHotspotNetwork() throws -> [String: Any] {
+    let semaphore = DispatchSemaphore(value: 0)
+    var result: Result<[String: Any], Error> = .failure(DiagnosticsError.wifiInformationUnavailable)
+
+    NEHotspotNetwork.fetchCurrent { network in
+      defer { semaphore.signal() }
+      guard let network = network else {
+        result = .failure(DiagnosticsError.wifiInformationUnavailable)
+        return
+      }
+
+      var payload: [String: Any] = [
+        "timestamp": Date().timeIntervalSince1970 * 1000.0,
+      ]
+
+      if let interfaceName = network.interfaceName, !interfaceName.isEmpty {
+        payload["interface"] = interfaceName
+      }
+      if let ssid = network.ssid, !ssid.isEmpty {
+        payload["ssid"] = ssid
+      }
+      if let bssid = network.bssid, !bssid.isEmpty {
+        payload["bssid"] = bssid
+      }
+
+      result = .success(payload)
+    }
+
+    semaphore.wait()
+
+    switch result {
+    case .success(let payload):
+      return payload
+    case .failure(let error):
+      throw error
+    }
+  }
+#endif
+
   private func fetchMetricsUsingCaptiveNetwork() throws -> [String: Any] {
 #if canImport(SystemConfiguration)
     guard
@@ -290,8 +265,7 @@ import SystemConfiguration.CaptiveNetwork
     }
 
     guard
-      let information = CNCopyCurrentNetworkInfo(interfaceName as CFString)
-        as? [String: Any]
+      let information = CNCopyCurrentNetworkInfo(interfaceName as CFString) as? [String: Any]
     else {
       throw DiagnosticsError.wifiInformationUnavailable
     }
@@ -302,14 +276,12 @@ import SystemConfiguration.CaptiveNetwork
     ]
 
     if let ssid = information[kCNNetworkInfoKeySSID as String] as? String,
-       !ssid.isEmpty
-    {
+       !ssid.isEmpty {
       payload["ssid"] = ssid
     }
 
     if let bssid = information[kCNNetworkInfoKeyBSSID as String] as? String,
-       !bssid.isEmpty
-    {
+       !bssid.isEmpty {
       payload["bssid"] = bssid
     }
 
