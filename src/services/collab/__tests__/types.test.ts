@@ -92,6 +92,79 @@ describe('collaboration types', () => {
     expect(roundTrip.update.tracks[0].automationCurves[0].points[0].time).toBe(0);
   });
 
+  it('rejects serialization when actor id is blank', () => {
+    const base = createSession();
+    const update = createSession({ revision: 1 });
+
+    expect(() =>
+      serializeCollabSessionPatch({
+        sessionId: base.id,
+        base,
+        update,
+        actorId: '   ',
+      }),
+    ).toThrow('Collaborative patch requires a non-empty actor id');
+  });
+
+  it('throws when deserializing patches missing actorId', () => {
+    const base = createSession();
+    const update = createSession({ revision: 1 });
+    const patch = {
+      sessionId: base.id,
+      base,
+      update,
+      version: COLLAB_SESSION_PATCH_VERSION,
+    } as unknown;
+
+    expect(() => deserializeCollabSessionPatch(patch)).toThrow(
+      'Collaborative patch requires a non-empty actor id',
+    );
+  });
+
+  it('throws when deserializing patches missing base session', () => {
+    const base = createSession();
+    const patch = {
+      sessionId: base.id,
+      update: createSession({ revision: 1 }),
+      actorId: 'peer-a',
+      version: COLLAB_SESSION_PATCH_VERSION,
+    } as unknown;
+
+    expect(() => deserializeCollabSessionPatch(patch)).toThrow(
+      'Collaborative session patch missing base or update payload',
+    );
+  });
+
+  it('throws when deserializing patches missing update session', () => {
+    const base = createSession();
+    const patch = {
+      sessionId: base.id,
+      base,
+      actorId: 'peer-a',
+      version: COLLAB_SESSION_PATCH_VERSION,
+    } as unknown;
+
+    expect(() => deserializeCollabSessionPatch(patch)).toThrow(
+      'Collaborative session patch missing base or update payload',
+    );
+  });
+
+  it('throws when deserializing unsupported patch version', () => {
+    const base = createSession();
+    const update = createSession({ revision: 1 });
+    const patch = {
+      sessionId: base.id,
+      base,
+      update,
+      actorId: 'peer-a',
+      version: 99,
+    } as unknown;
+
+    expect(() => deserializeCollabSessionPatch(patch)).toThrow(
+      'Unsupported collaborative session patch version',
+    );
+  });
+
   it('merges remote patches through the session manager applier', async () => {
     const base = createSession();
     const metadataTemplate = base.metadata;
