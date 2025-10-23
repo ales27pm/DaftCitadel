@@ -29,6 +29,9 @@ interface NativeDiagnosticsModule {
   beginObserving?: () => void;
   endObserving?: () => void;
   setPollingInterval?: (intervalMs: number) => void;
+  beginObserving?: () => void;
+  endObserving?: () => void;
+  setPollingInterval?: (intervalMs: number) => void;
 }
 
 const COLLAPSED_INTERFACE_KEYS = ['interface', 'ssid', 'bssid'];
@@ -114,8 +117,30 @@ class DefaultNetworkDiagnostics implements NetworkDiagnostics {
 
   constructor(module?: NativeDiagnosticsModule) {
     this.module = module;
-    if (module) {
-      this.emitter = new NativeEventEmitter(
+      this.startNativeObservation();
+        this.stopNativeObservation();
+
+  private startNativeObservation(): void {
+    if (!this.module) {
+      return;
+    }
+    if (typeof this.module.beginObserving === 'function') {
+      this.module.beginObserving();
+    } else if (typeof this.module.startObserving === 'function') {
+      this.module.startObserving();
+    }
+  }
+
+  private stopNativeObservation(): void {
+    if (!this.module) {
+      return;
+    }
+    if (typeof this.module.endObserving === 'function') {
+      this.module.endObserving();
+    } else if (typeof this.module.stopObserving === 'function') {
+      this.module.stopObserving();
+    }
+  }
         module as unknown as {
           addListener: (eventType: string) => void;
           removeListeners: (count: number) => void;

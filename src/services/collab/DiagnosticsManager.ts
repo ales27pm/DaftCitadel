@@ -6,6 +6,8 @@ function sanitizeMetrics(metrics: LinkMetrics): Record<string, unknown> {
   delete sanitized.interfaceName;
   delete sanitized.ssid;
   delete sanitized.bssid;
+  delete sanitized.ssid;
+  delete sanitized.bssid;
   return sanitized;
 }
 
