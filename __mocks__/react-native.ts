@@ -428,16 +428,39 @@ const pluginHostModule = {
 
 const collabDiagnosticsEmitter = new MockNativeEventEmitter();
 
+interface CollabDiagnosticsState {
+  isObserving: boolean;
+  startCount: number;
+  stopCount: number;
+}
+
+const collabDiagnosticsState: CollabDiagnosticsState = {
+  isObserving: false,
+  startCount: 0,
+  stopCount: 0,
+};
+
 const collabNetworkDiagnosticsModule = {
   getCurrentLinkMetrics: async () => ({
     interface: 'en0',
+    ssid: 'DaftLab',
+    bssid: '00:11:22:33:44:55',
     rssi: -58,
     noise: -95,
     linkSpeedMbps: 420,
+    transmitRateMbps: 480,
+    timestamp: Date.now(),
   }),
-  startObserving: () => {},
-  stopObserving: () => {},
+  startObserving: () => {
+    collabDiagnosticsState.isObserving = true;
+    collabDiagnosticsState.startCount += 1;
+  },
+  stopObserving: () => {
+    collabDiagnosticsState.isObserving = false;
+    collabDiagnosticsState.stopCount += 1;
+  },
   __emitter: collabDiagnosticsEmitter,
+  __state: collabDiagnosticsState,
 };
 
 const audioSampleLoaderModule = {
@@ -538,4 +561,5 @@ export type TurboModule = unknown;
 
 export const __mockPluginHostEmitter = pluginHostEmitter;
 export const __mockCollabDiagnosticsEmitter = collabDiagnosticsEmitter;
+export const __mockCollabDiagnosticsState = collabDiagnosticsState;
 export const __mockAudioEngineState = audioEngineState;
