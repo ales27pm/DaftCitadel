@@ -47,6 +47,12 @@ type SessionState = {
   pluginNodes: Map<string, PluginRoutingNode>;
 };
 
+type RecoverySnapshot = {
+  pluginNodes: Map<string, PluginRoutingNode>;
+  pluginAutomations: Map<string, PluginAutomationRequest>;
+  automationRequests: Map<string, AutomationRequest>;
+};
+
 const isTrackEndpointNode = (node: RoutingNode): node is TrackEndpointNode =>
   node.type === 'trackInput' || node.type === 'trackOutput';
 
@@ -55,6 +61,185 @@ const isPluginNode = (node: RoutingNode): node is PluginRoutingNode =>
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
+
+class PluginRecoveryManager {
+  private snapshot: RecoverySnapshot = {
+    pluginNodes: new Map(),
+    pluginAutomations: new Map(),
+    automationRequests: new Map(),
+  };
+
+  private crashedSessions = new Set<string>();
+
+  private unsubscribe?: () => void;
+
+  constructor(
+    private readonly deps: {
+      pluginHost: PluginHost;
+      pluginBindings: Map<string, PluginInstanceBinding>;
+      pluginAutomationState: Map<string, string>;
+      graph: GraphReconciler;
+      automationPublisher: AutomationPublisher;
+      createNodeConfiguration: (node: PluginRoutingNode) => NodeConfiguration;
+      applyPluginAutomations: (
+        requests: Map<string, PluginAutomationRequest>,
+      ) => Promise<void>;
+      logger: Logger;
+    },
+  ) {
+    this.unsubscribe = deps.pluginHost.onCrash((report) => {
+      this.handleCrash(report).catch((error) => {
+        deps.logger.error('Failed to reconcile plugin after crash', error);
+      });
+    });
+  }
+
+  record(snapshot: RecoverySnapshot): void {
+    this.snapshot = {
+      pluginNodes: new Map(snapshot.pluginNodes),
+      pluginAutomations: new Map(snapshot.pluginAutomations),
+      automationRequests: new Map(snapshot.automationRequests),
+    };
+  }
+
+  forget(sessionInstanceId: string): void {
+    this.crashedSessions.delete(sessionInstanceId);
+  }
+
+  async retry(sessionInstanceId: string): Promise<boolean> {
+    if (!this.deps.pluginHost.retryInstance) {
+      this.deps.logger.warn('PluginHost does not expose retryInstance');
+      return false;
+    }
+    const success = await this.deps.pluginHost.retryInstance(sessionInstanceId);
+    if (!success) {
+      return false;
+    }
+    try {
+      const refreshed = await this.refreshBinding(sessionInstanceId);
+      if (!refreshed) {
+        this.deps.logger.warn('Plugin retry succeeded but binding refresh failed', {
+          instanceId: sessionInstanceId,
+        });
+      }
+      return refreshed;
+    } catch (error) {
+      this.deps.logger.error('Failed to refresh plugin binding after manual retry', error);
+      return false;
+    }
+  }
+
+  dispose(): void {
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
+    this.crashedSessions.clear();
+    this.snapshot = {
+      pluginNodes: new Map(),
+      pluginAutomations: new Map(),
+      automationRequests: new Map(),
+    };
+  }
+
+  private async handleCrash(report: PluginCrashReport): Promise<void> {
+    const bindingEntry = this.findBindingByHostInstanceId(report.instanceId);
+    if (!bindingEntry) {
+      return;
+    }
+    const [sessionInstanceId, binding] = bindingEntry;
+    if (!report.recovered) {
+      this.deps.logger.warn('Plugin reported crash without automatic recovery', {
+        instanceId: report.instanceId,
+      });
+      this.crashedSessions.add(sessionInstanceId);
+      this.deps.pluginBindings.delete(sessionInstanceId);
+      this.clearAutomationState(sessionInstanceId);
+      return;
+    }
+    const refreshed = await this.refreshBinding(sessionInstanceId);
+    if (!refreshed) {
+      this.deps.logger.warn('Plugin restart succeeded but binding refresh failed', {
+        instanceId: binding.hostInstanceId,
+      });
+    }
+  }
+
+  private async refreshBinding(sessionInstanceId: string): Promise<boolean> {
+    const runtime = this.deps.pluginHost.getInstanceRuntime?.(sessionInstanceId);
+    if (!runtime) {
+      return false;
+    }
+    let binding = this.deps.pluginBindings.get(sessionInstanceId);
+    if (!binding) {
+      binding = {
+        descriptor: runtime.handle.descriptor,
+        hostInstanceId: runtime.nativeInstanceId,
+        handle: runtime.handle,
+      };
+      this.deps.pluginBindings.set(sessionInstanceId, binding);
+    } else {
+      binding.handle = runtime.handle;
+      binding.descriptor = runtime.handle.descriptor;
+      binding.hostInstanceId = runtime.nativeInstanceId;
+    }
+
+    const node = this.snapshot.pluginNodes.get(sessionInstanceId);
+    if (node) {
+      await this.deps.graph.forceConfigureNode(
+        this.deps.createNodeConfiguration(node),
+      );
+    }
+
+    this.clearAutomationState(sessionInstanceId);
+
+    const updatedAutomations = new Map<string, PluginAutomationRequest>();
+    this.snapshot.pluginAutomations.forEach((request, key) => {
+      if (request.instanceId === sessionInstanceId) {
+        updatedAutomations.set(key, {
+          ...request,
+          hostInstanceId: binding!.hostInstanceId,
+        });
+      } else {
+        updatedAutomations.set(key, request);
+      }
+    });
+
+    this.snapshot = {
+      pluginNodes: this.snapshot.pluginNodes,
+      pluginAutomations: updatedAutomations,
+      automationRequests: this.snapshot.automationRequests,
+    };
+
+    if (updatedAutomations.size > 0) {
+      await this.deps.applyPluginAutomations(updatedAutomations);
+    }
+    if (this.snapshot.automationRequests.size > 0) {
+      await this.deps.automationPublisher.applyChanges(
+        this.snapshot.automationRequests,
+      );
+    }
+    this.crashedSessions.delete(sessionInstanceId);
+    return true;
+  }
+
+  private clearAutomationState(sessionInstanceId: string): void {
+    for (const key of Array.from(this.deps.pluginAutomationState.keys())) {
+      if (key.startsWith(`${sessionInstanceId}:`)) {
+        this.deps.pluginAutomationState.delete(key);
+      }
+    }
+  }
+
+  private findBindingByHostInstanceId(
+    hostInstanceId: string,
+  ): [string, PluginInstanceBinding] | undefined {
+    for (const entry of this.deps.pluginBindings.entries()) {
+      if (entry[1].hostInstanceId === hostInstanceId) {
+        return entry;
+      }
+    }
+    return undefined;
+  }
+}
 
 type PluginAutomationRequest = {
   key: string;
@@ -122,13 +307,7 @@ export class SessionAudioBridge {
 
   private readonly activeClipBuffers = new Map<string, ClipBufferDescriptor>();
 
-  private lastAutomationRequests = new Map<string, AutomationRequest>();
-
-  private lastPluginAutomations = new Map<string, PluginAutomationRequest>();
-
-  private lastPluginNodes = new Map<string, PluginRoutingNode>();
-
-  private pluginHostUnsubscribe?: () => void;
+  private pluginRecovery?: PluginRecoveryManager;
 
   private readonly transportListeners = new Set<
     (snapshot: AudioTransportSnapshot) => void
@@ -227,10 +406,15 @@ export class SessionAudioBridge {
     }
 
     if (this.pluginHost) {
-      this.pluginHostUnsubscribe = this.pluginHost.onCrash((report) => {
-        this.handlePluginCrash(report).catch((error) => {
-          this.logger.error('Failed to reconcile plugin after crash', error);
-        });
+      this.pluginRecovery = new PluginRecoveryManager({
+        pluginHost: this.pluginHost,
+        pluginBindings: this.pluginBindings,
+        pluginAutomationState: this.pluginAutomationState,
+        graph: this.graph,
+        automationPublisher: this.automationPublisher,
+        createNodeConfiguration: (node) => this.createNodeConfiguration(node),
+        applyPluginAutomations: (requests) => this.applyPluginAutomations(requests),
+        logger: this.logger,
       });
     }
   }
@@ -257,9 +441,11 @@ export class SessionAudioBridge {
     }
 
     const desiredState = await this.buildDesiredState(session, sampleRate);
-    this.lastAutomationRequests = new Map(desiredState.automations);
-    this.lastPluginAutomations = new Map(desiredState.pluginAutomations);
-    this.lastPluginNodes = desiredState.pluginNodes;
+    this.pluginRecovery?.record({
+      automationRequests: desiredState.automations,
+      pluginAutomations: desiredState.pluginAutomations,
+      pluginNodes: desiredState.pluginNodes,
+    });
 
     await this.graph.apply(desiredState.nodes, desiredState.connections);
     await this.automationPublisher.applyChanges(desiredState.automations);
@@ -752,104 +938,12 @@ export class SessionAudioBridge {
     );
   }
 
-  private async handlePluginCrash(report: PluginCrashReport): Promise<void> {
-    if (!this.pluginHost) {
-      return;
-    }
-    const [sessionInstanceId, binding] = Array.from(this.pluginBindings.entries()).find(
-      ([, candidate]) => candidate.hostInstanceId === report.instanceId,
-    ) ?? [undefined, undefined];
-    if (!binding || !sessionInstanceId) {
-      return;
-    }
-    if (!report.recovered) {
-      this.logger.warn('Plugin reported crash without automatic recovery', {
-        instanceId: report.instanceId,
-      });
-      this.pluginBindings.delete(sessionInstanceId);
-      for (const key of Array.from(this.pluginAutomationState.keys())) {
-        if (key.startsWith(`${sessionInstanceId}:`)) {
-          this.pluginAutomationState.delete(key);
-        }
-      }
-      return;
-    }
-    const refreshed = await this.refreshPluginBinding(sessionInstanceId);
-    if (!refreshed) {
-      this.logger.warn('Plugin restart succeeded but binding refresh failed', {
-        instanceId: report.instanceId,
-      });
-    }
-  }
-
-  private async refreshPluginBinding(sessionInstanceId: string): Promise<boolean> {
-    if (!this.pluginHost) {
-      return false;
-    }
-    const binding = this.pluginBindings.get(sessionInstanceId);
-    if (!binding) {
-      return false;
-    }
-    const runtime = this.pluginHost.getInstanceRuntime?.(binding.hostInstanceId);
-    if (!runtime) {
-      return false;
-    }
-    binding.handle = runtime.handle;
-    binding.descriptor = runtime.handle.descriptor;
-    binding.hostInstanceId = runtime.nativeInstanceId;
-
-    const node = this.lastPluginNodes.get(sessionInstanceId);
-    if (node) {
-      await this.graph.forceConfigureNode(this.createNodeConfiguration(node));
-    }
-
-    for (const key of Array.from(this.pluginAutomationState.keys())) {
-      if (key.startsWith(`${sessionInstanceId}:`)) {
-        this.pluginAutomationState.delete(key);
-      }
-    }
-
-    const updated = new Map<string, PluginAutomationRequest>();
-    this.lastPluginAutomations.forEach((request, key) => {
-      if (request.instanceId === sessionInstanceId) {
-        updated.set(key, {
-          ...request,
-          hostInstanceId: binding.hostInstanceId,
-        });
-      } else {
-        updated.set(key, request);
-      }
-    });
-    this.lastPluginAutomations = updated;
-
-    if (this.lastPluginAutomations.size > 0) {
-      await this.applyPluginAutomations(this.lastPluginAutomations);
-    }
-    if (this.lastAutomationRequests.size > 0) {
-      await this.automationPublisher.applyChanges(this.lastAutomationRequests);
-    }
-    return true;
-  }
-
   public async retryPluginInstance(sessionInstanceId: string): Promise<boolean> {
-    if (!this.pluginHost?.retryInstance) {
-      this.logger.warn('PluginHost does not expose retryInstance');
+    if (!this.pluginRecovery) {
+      this.logger.warn('Plugin recovery manager unavailable; cannot retry plugin');
       return false;
     }
-    const binding = this.pluginBindings.get(sessionInstanceId);
-    if (!binding) {
-      return false;
-    }
-    const success = await this.pluginHost.retryInstance(binding.hostInstanceId);
-    if (!success) {
-      return false;
-    }
-    try {
-      return await this.refreshPluginBinding(sessionInstanceId);
-    } catch (error) {
-      this.logger.error('Failed to refresh plugin binding after manual retry', error);
-      return false;
-    }
+    return this.pluginRecovery.retry(sessionInstanceId);
   }
 
   private async ensurePluginInstance(
@@ -996,6 +1090,7 @@ export class SessionAudioBridge {
         : Promise.resolve()
       ).then(() => {
         this.pluginBindings.delete(instanceId);
+        this.pluginRecovery?.forget(instanceId);
       }),
     );
 
@@ -1140,10 +1235,8 @@ export class SessionAudioBridge {
     this.pluginAutomationState.clear();
     this.resolvePluginDescriptor?.clearAll?.();
 
-    if (this.pluginHostUnsubscribe) {
-      this.pluginHostUnsubscribe();
-      this.pluginHostUnsubscribe = undefined;
-    }
+    this.pluginRecovery?.dispose();
+    this.pluginRecovery = undefined;
 
     this.activeClipBuffers.forEach((descriptor) => {
       pending.push(this.bufferCache.releaseClipBuffer(descriptor.bufferKey));

@@ -218,6 +218,30 @@ describe('PluginHost', () => {
     expect(instantiateMock).toHaveBeenCalledTimes(1);
   });
 
+  it('allows manual retry after automatic restart is refused', async () => {
+    instantiateMock.mockResolvedValueOnce(instanceHandle);
+    instantiateMock.mockResolvedValueOnce(restartedHandle);
+
+    const host = new PluginHost(new FakeSandboxManager());
+    await host.loadPlugin(descriptor);
+
+    __mockPluginHostEmitter.emit('pluginCrashed', {
+      instanceId: instanceHandle.instanceId,
+      descriptor,
+      timestamp: new Date().toISOString(),
+      reason: 'Test crash',
+      recovered: false,
+      restartToken: undefined,
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const retried = await host.retryInstance(instanceHandle.instanceId);
+
+    expect(retried).toBe(true);
+    expect(instantiateMock).toHaveBeenCalledTimes(2);
+  });
+
   it('supports manual retry of plugin instances', async () => {
     instantiateMock.mockResolvedValueOnce(instanceHandle);
     instantiateMock.mockResolvedValueOnce(restartedHandle);

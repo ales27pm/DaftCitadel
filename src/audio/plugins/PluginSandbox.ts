@@ -22,10 +22,17 @@ interface SandboxRecord extends SandboxContext {
 const STORAGE_KEY = 'daftcitadel.pluginSandboxes.v1';
 
 export class PluginSandboxManager {
-  private readonly sandboxes = new Map<
-    PluginDescriptor['format'],
-    Map<string, SandboxRecord>
-  >();
+  private readonly sandboxes = new Map<string, SandboxRecord>();
+
+  private persistTimer?: ReturnType<typeof setTimeout>;
+
+  private pendingPersist?: Promise<void>;
+
+  private pendingResolve?: () => void;
+
+  private pendingReject?: (error: unknown) => void;
+
+  private readonly persistDebounceMs = 150;
 
   private readonly ready: Promise<void>;
 
@@ -47,7 +54,7 @@ export class PluginSandboxManager {
     const existing = this.lookup(descriptor.format, identifier);
     if (existing) {
       existing.lastAccessedAt = Date.now();
-      await this.persist().catch((error) => {
+      await this.schedulePersist().catch((error) => {
         console.warn('Failed to persist sandbox metadata', error);
       });
       return existing;
@@ -66,7 +73,7 @@ export class PluginSandboxManager {
       lastAccessedAt: Date.now(),
     };
     this.insert(context);
-    await this.persist().catch((error) => {
+    await this.schedulePersist().catch((error) => {
       console.warn('Failed to persist sandbox metadata', error);
     });
     return context;
@@ -79,7 +86,7 @@ export class PluginSandboxManager {
       lastAccessedAt: Date.now(),
     };
     this.insert(record);
-    this.persist().catch((error) => {
+    this.schedulePersist().catch((error) => {
       console.warn('Failed to persist sandbox metadata', error);
     });
   }
@@ -88,15 +95,11 @@ export class PluginSandboxManager {
     format: PluginDescriptor['format'],
     identifier: string,
   ): SandboxRecord | undefined {
-    const byFormat = this.sandboxes.get(format);
-    return byFormat?.get(identifier);
+    return this.sandboxes.get(this.makeKey(format, identifier));
   }
 
   private insert(record: SandboxRecord): void {
-    const byFormat =
-      this.sandboxes.get(record.format) ?? new Map<string, SandboxRecord>();
-    byFormat.set(record.identifier, record);
-    this.sandboxes.set(record.format, byFormat);
+    this.sandboxes.set(this.makeKey(record.format, record.identifier), record);
   }
 
   private async hydrateFromStorage(): Promise<void> {
@@ -120,14 +123,38 @@ export class PluginSandboxManager {
     }
   }
 
-  private async persist(): Promise<void> {
-    const serialized: SandboxRecord[] = [];
-    this.sandboxes.forEach((records) => {
-      records.forEach((record) => {
-        serialized.push({ ...record });
+  private schedulePersist(): Promise<void> {
+    if (!this.pendingPersist) {
+      this.pendingPersist = new Promise<void>((resolve, reject) => {
+        this.pendingResolve = resolve;
+        this.pendingReject = reject;
+      }).finally(() => {
+        this.pendingPersist = undefined;
+        this.pendingResolve = undefined;
+        this.pendingReject = undefined;
       });
-    });
+    }
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+    }
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = undefined;
+      this.persistNow()
+        .then(() => this.pendingResolve?.())
+        .catch((error) => this.pendingReject?.(error));
+    }, this.persistDebounceMs);
+    return this.pendingPersist;
+  }
+
+  private async persistNow(): Promise<void> {
+    const serialized = Array.from(this.sandboxes.values()).map((record) => ({
+      ...record,
+    }));
     await this.storage.setItem(STORAGE_KEY, JSON.stringify(serialized));
+  }
+
+  private makeKey(format: PluginDescriptor['format'], identifier: string): string {
+    return `${format}:${identifier}`;
   }
 
   private async ensureAndroidPermissions(): Promise<void> {

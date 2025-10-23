@@ -16,6 +16,10 @@ import {
 import type { PluginCrashReport, PluginHost } from '../../../audio';
 
 describe('SessionViewModelProvider', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it('provides tracks with waveform and midi data', async () => {
     const storage = new InMemorySessionStorageAdapter();
     await storage.initialize();
@@ -59,6 +63,7 @@ describe('SessionViewModelProvider', () => {
   });
 
   it('captures plugin crash notifications from the plugin host', async () => {
+    jest.useFakeTimers();
     const storage = new InMemorySessionStorageAdapter();
     await storage.initialize();
     class RecoveringBridge extends PassiveAudioEngineBridge {
@@ -142,6 +147,14 @@ describe('SessionViewModelProvider', () => {
 
     expect(bridge.retryPluginInstance).toHaveBeenCalledWith('plugin-1');
     expect(alerts[0].recovered).toBe(true);
+
+    await act(async () => {
+      jest.advanceTimersByTime(4500);
+      await Promise.resolve();
+    });
+
+    expect(alerts).toHaveLength(0);
+    jest.useRealTimers();
   });
 
   it('surfaces audio engine failures as an error status', async () => {
