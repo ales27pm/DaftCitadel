@@ -29,12 +29,9 @@ interface NativeDiagnosticsModule {
   beginObserving?: () => void;
   endObserving?: () => void;
   setPollingInterval?: (intervalMs: number) => void;
-  beginObserving?: () => void;
-  endObserving?: () => void;
-  setPollingInterval?: (intervalMs: number) => void;
 }
 
-const COLLAPSED_INTERFACE_KEYS = ['interface', 'ssid', 'bssid'];
+const COLLAPSED_INTERFACE_KEYS = ['interface'];
 const EVENT_NAME = 'CollabNetworkDiagnosticsEvent';
 
 function normalizeNumber(value: NullableNumber): number | undefined {
@@ -98,6 +95,7 @@ function normalizeMetrics(raw: Record<string, unknown>): LinkMetrics {
     0,
     10_000,
   );
+  const timestamp = normalizeNumber(raw.timestamp as NullableNumber) ?? Date.now();
 
   return {
     interfaceName: coerceInterfaceName(raw),
@@ -105,7 +103,7 @@ function normalizeMetrics(raw: Record<string, unknown>): LinkMetrics {
     noise,
     linkSpeedMbps,
     transmitRateMbps,
-    timestamp: Date.now(),
+    timestamp,
     category: evaluateQuality({ rssi, noise, linkSpeedMbps }),
   };
 }
@@ -117,30 +115,9 @@ class DefaultNetworkDiagnostics implements NetworkDiagnostics {
 
   constructor(module?: NativeDiagnosticsModule) {
     this.module = module;
-      this.startNativeObservation();
-        this.stopNativeObservation();
 
-  private startNativeObservation(): void {
-    if (!this.module) {
-      return;
-    }
-    if (typeof this.module.beginObserving === 'function') {
-      this.module.beginObserving();
-    } else if (typeof this.module.startObserving === 'function') {
-      this.module.startObserving();
-    }
-  }
-
-  private stopNativeObservation(): void {
-    if (!this.module) {
-      return;
-    }
-    if (typeof this.module.endObserving === 'function') {
-      this.module.endObserving();
-    } else if (typeof this.module.stopObserving === 'function') {
-      this.module.stopObserving();
-    }
-  }
+    if (module) {
+      this.emitter = new NativeEventEmitter(
         module as unknown as {
           addListener: (eventType: string) => void;
           removeListeners: (count: number) => void;
@@ -155,6 +132,7 @@ class DefaultNetworkDiagnostics implements NetworkDiagnostics {
     if (!this.module) {
       return this.getFallbackMetrics();
     }
+
     const metrics = await this.module.getCurrentLinkMetrics();
     return normalizeMetrics(metrics);
   }
