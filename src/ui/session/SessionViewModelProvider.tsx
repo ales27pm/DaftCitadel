@@ -193,9 +193,7 @@ export const SessionViewModelProvider: React.FC<SessionViewModelProviderProps> =
 
   const removePluginAlert = useCallback((key: string) => {
     setPluginAlerts((previous) =>
-      previous.filter(
-        (alert) => `${alert.instanceId}:${alert.timestamp}` !== key,
-      ),
+      previous.filter((alert) => `${alert.instanceId}:${alert.timestamp}` !== key),
     );
   }, []);
 
