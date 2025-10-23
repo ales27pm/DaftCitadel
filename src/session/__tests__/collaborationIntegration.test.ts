@@ -147,4 +147,45 @@ describe('SessionManager collaborative integration', () => {
     const undoSession = await manager.undo();
     expect(undoSession?.name).toBe('Local Harmony');
   });
+
+  it('rejects remote patches that target a different session id', async () => {
+    const storage = new InMemorySessionStorageAdapter();
+    const audioEngine = new RecordingAudioEngine();
+    const manager = new SessionManager(storage, audioEngine);
+
+    const baseSession = createBaseSession();
+    await manager.createSession(baseSession);
+
+    const remoteBase: Session = {
+      ...baseSession,
+      id: 'session-remote',
+    };
+
+    const remoteUpdate: Session = {
+      ...remoteBase,
+      revision: remoteBase.revision + 1,
+      name: 'Remote Out-of-Band',
+    };
+
+    const patch = serializeCollabSessionPatch({
+      sessionId: remoteBase.id,
+      base: remoteBase,
+      update: remoteUpdate,
+      actorId: 'peer-remote',
+    });
+
+    const payload: CollabPayload<typeof patch> = {
+      clock: Date.now(),
+      schemaVersion: 1,
+      body: patch,
+    };
+
+    const applyRemote = createRemoteSessionPatchApplier(manager);
+
+    await expect(applyRemote(payload)).rejects.toThrow('Remote patch targeted session');
+
+    const current = manager.getSession();
+    expect(current?.id).toBe(baseSession.id);
+    expect(current?.name).toBe(baseSession.name);
+  });
 });

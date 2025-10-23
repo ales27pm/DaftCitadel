@@ -45,6 +45,7 @@ describe('DiagnosticsManager', () => {
     await flushMicrotasks();
 
     const initialLatest = manager.getLatestMetrics();
+    expect(initialLatest).toBeDefined();
     expect(initialLatest).toMatchObject(baseMetrics);
 
     capturedListener?.({ ...baseMetrics, rssi: -60 });
@@ -56,10 +57,13 @@ describe('DiagnosticsManager', () => {
     expect(onMetrics).toHaveBeenCalledWith(baseMetrics);
 
     const latestMetrics = manager.getLatestMetrics();
-    if (initialLatest && latestMetrics) {
-      expect(latestMetrics).not.toBe(initialLatest);
-    }
-    expect(latestMetrics).toMatchObject({ ...baseMetrics, rssi: -60 });
+    expect(latestMetrics).toBeDefined();
+
+    const definedInitial = initialLatest as LinkMetrics;
+    const definedLatest = latestMetrics as LinkMetrics;
+
+    expect(definedLatest).not.toBe(definedInitial);
+    expect(definedLatest).toMatchObject({ ...baseMetrics, rssi: -60 });
     expect(manager.getLatestSanitizedMetrics()).toMatchObject({
       rssi: -60,
       linkSpeedMbps: 480,

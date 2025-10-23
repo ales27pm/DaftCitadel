@@ -38,26 +38,42 @@ const assertSessionAlignment = (
   }
 };
 
-export const serializeCollabSessionPatch = (
-  patch: CollabSessionPatchInput,
-): CollabSessionPatchMessage => {
-  if (!patch.actorId || typeof patch.actorId !== 'string') {
+const sanitizePatchSessions = (
+  sessionId: SessionID,
+  base: Session,
+  update: Session,
+): { base: Session; update: Session } => {
+  const sanitizedBase = sanitizeSession(base);
+  const sanitizedUpdate = sanitizeSession(update);
+
+  assertSessionAlignment(sanitizedBase, sessionId, 'base');
+  assertSessionAlignment(sanitizedUpdate, sessionId, 'update');
+
+  return { base: sanitizedBase, update: sanitizedUpdate };
+};
+
+const requireActorId = (actorId: unknown): string => {
+  if (typeof actorId !== 'string' || actorId.trim().length === 0) {
     throw new Error('Collaborative patch requires a non-empty actor id');
   }
 
-  const sessionId = patch.sessionId;
-  const base = sanitizeSession(patch.base);
-  const update = sanitizeSession(patch.update);
+  return actorId.trim();
+};
 
-  assertSessionAlignment(base, sessionId, 'base');
-  assertSessionAlignment(update, sessionId, 'update');
+export const serializeCollabSessionPatch = (
+  patch: CollabSessionPatchInput,
+): CollabSessionPatchMessage => {
+  const { sessionId, base, update } = patch;
+  const actorId = requireActorId(patch.actorId);
+
+  const sanitized = sanitizePatchSessions(sessionId, base, update);
 
   return {
     version: COLLAB_SESSION_PATCH_VERSION,
     sessionId,
-    actorId: patch.actorId,
-    base,
-    update,
+    actorId,
+    base: sanitized.base,
+    update: sanitized.update,
   };
 };
 
@@ -80,24 +96,21 @@ export const deserializeCollabSessionPatch = (
     throw new Error('Collaborative session patch missing session id');
   }
 
-  if (!record.actorId || typeof record.actorId !== 'string') {
-    throw new Error('Collaborative session patch missing actor id');
-  }
-
   if (!record.base || !record.update) {
     throw new Error('Collaborative session patch missing base or update payload');
   }
 
-  const base = sanitizeSession(record.base);
-  const update = sanitizeSession(record.update);
-
-  assertSessionAlignment(base, record.sessionId, 'base');
-  assertSessionAlignment(update, record.sessionId, 'update');
+  const actorId = requireActorId(record.actorId);
+  const { base, update } = sanitizePatchSessions(
+    record.sessionId,
+    record.base,
+    record.update,
+  );
 
   return {
     version: COLLAB_SESSION_PATCH_VERSION,
     sessionId: record.sessionId,
-    actorId: record.actorId,
+    actorId,
     base,
     update,
   };
