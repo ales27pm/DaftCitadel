@@ -9,6 +9,7 @@ export type {
 } from './types';
 export { buildTracks, buildTransport } from './selectors';
 export { SessionStoryProvider, SessionAppProvider } from './fixtures';
+export { useTransportControls } from './useTransportControls';
 export {
   createDemoSessionEnvironment,
   createPassiveSessionEnvironment,

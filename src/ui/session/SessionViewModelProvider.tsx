@@ -9,10 +9,17 @@ import React, {
   useState,
 } from 'react';
 
-import { Session, SessionManager, SessionStorageError } from '../../session';
+import {
+  Session,
+  SessionManager,
+  SessionStorageError,
+  type AudioDiagnosticsSnapshot,
+  type AudioEngineBridge,
+  type AudioTransportSnapshot,
+} from '../../session';
 import type { PluginHost, PluginCrashReport } from '../../audio';
 import { buildTracks, buildTransport } from './selectors';
-import { SessionViewModelState } from './types';
+import { SessionDiagnosticsView, SessionViewModelState } from './types';
 import { useAudioDiagnostics } from './useAudioDiagnostics';
 
 interface SessionViewModelProviderProps extends PropsWithChildren {
@@ -21,6 +28,7 @@ interface SessionViewModelProviderProps extends PropsWithChildren {
   bootstrapSession?: () => Session;
   diagnosticsPollIntervalMs?: number;
   pluginHost?: PluginHost;
+  audioBridge?: AudioEngineBridge;
 }
 
 interface SessionViewModelContextValue extends SessionViewModelState {
@@ -32,23 +40,60 @@ const SessionViewModelContext = createContext<SessionViewModelContextValue | und
   undefined,
 );
 
+interface TransportController {
+  isAvailable: boolean;
+  start: () => Promise<void>;
+  stop: () => Promise<void>;
+  locateFrame: (frame: number) => Promise<void>;
+}
+
+export const TransportControlsContext = createContext<TransportController | undefined>(
+  undefined,
+);
+
+type TransportCapableBridge = AudioEngineBridge & {
+  startTransport: NonNullable<AudioEngineBridge['startTransport']>;
+  stopTransport: NonNullable<AudioEngineBridge['stopTransport']>;
+  locateTransport: NonNullable<AudioEngineBridge['locateTransport']>;
+};
+
+const hasTransportControls = (
+  bridge: AudioEngineBridge | undefined,
+): bridge is TransportCapableBridge =>
+  !!bridge &&
+  typeof bridge.startTransport === 'function' &&
+  typeof bridge.stopTransport === 'function' &&
+  typeof bridge.locateTransport === 'function';
+
 export const SessionViewModelProvider: React.FC<SessionViewModelProviderProps> = ({
   manager,
   sessionId,
   bootstrapSession,
   diagnosticsPollIntervalMs,
   pluginHost,
+  audioBridge,
   children,
 }) => {
   const mounted = useRef(true);
   const [status, setStatus] = useState<SessionViewModelState['status']>('idle');
   const [error, setError] = useState<Error | undefined>();
   const [session, setSession] = useState<Session | null>(() => manager.getSession());
-  const audioDiagnostics = useAudioDiagnostics(diagnosticsPollIntervalMs);
+  const shouldPollDiagnostics =
+    !audioBridge?.subscribeDiagnostics && !audioBridge?.getDiagnosticsState;
+  const audioDiagnostics = useAudioDiagnostics(
+    shouldPollDiagnostics ? diagnosticsPollIntervalMs : 0,
+  );
   const [pluginCrashMap, setPluginCrashMap] = useState<Map<string, PluginCrashReport>>(
     () => new Map(),
   );
   const [pluginAlerts, setPluginAlerts] = useState<PluginCrashReport[]>([]);
+  const [transportRuntime, setTransportRuntime] = useState<AudioTransportSnapshot | null>(
+    () => audioBridge?.getTransportState?.() ?? null,
+  );
+  const [bridgeDiagnostics, setBridgeDiagnostics] =
+    useState<AudioDiagnosticsSnapshot | null>(
+      () => audioBridge?.getDiagnosticsState?.() ?? null,
+    );
 
   useEffect(() => {
     return () => {
@@ -144,7 +189,45 @@ export const SessionViewModelProvider: React.FC<SessionViewModelProviderProps> =
     return unsubscribe;
   }, [pluginHost]);
 
-  const diagnostics = audioDiagnostics.diagnostics;
+  useEffect(() => {
+    setTransportRuntime(audioBridge?.getTransportState?.() ?? null);
+    setBridgeDiagnostics(audioBridge?.getDiagnosticsState?.() ?? null);
+  }, [audioBridge]);
+
+  useEffect(() => {
+    if (!audioBridge?.subscribeTransport) {
+      return undefined;
+    }
+    const unsubscribe = audioBridge.subscribeTransport((snapshot) => {
+      setTransportRuntime(snapshot);
+    });
+    return unsubscribe;
+  }, [audioBridge]);
+
+  useEffect(() => {
+    if (!audioBridge?.subscribeDiagnostics) {
+      return undefined;
+    }
+    const unsubscribe = audioBridge.subscribeDiagnostics((snapshot) => {
+      setBridgeDiagnostics(snapshot);
+    });
+    return unsubscribe;
+  }, [audioBridge]);
+
+  const diagnostics: SessionDiagnosticsView = useMemo(() => {
+    if (bridgeDiagnostics) {
+      return {
+        status: bridgeDiagnostics.status,
+        xruns: bridgeDiagnostics.xruns,
+        renderLoad: bridgeDiagnostics.renderLoad,
+        lastRenderDurationMicros: bridgeDiagnostics.lastRenderDurationMicros,
+        clipBufferBytes: bridgeDiagnostics.clipBufferBytes,
+        error: bridgeDiagnostics.error,
+        updatedAt: bridgeDiagnostics.updatedAt,
+      };
+    }
+    return audioDiagnostics.diagnostics;
+  }, [audioDiagnostics.diagnostics, bridgeDiagnostics]);
 
   const tracks = useMemo(() => {
     if (!session) {
@@ -157,8 +240,8 @@ export const SessionViewModelProvider: React.FC<SessionViewModelProviderProps> =
     if (!session) {
       return null;
     }
-    return buildTransport(session, diagnostics);
-  }, [diagnostics, session]);
+    return buildTransport(session, diagnostics, transportRuntime ?? undefined);
+  }, [diagnostics, session, transportRuntime]);
 
   const viewModel: SessionViewModelState = useMemo(
     () => ({
@@ -168,6 +251,7 @@ export const SessionViewModelProvider: React.FC<SessionViewModelProviderProps> =
       tracks,
       transport,
       diagnostics,
+      transportRuntime,
       error,
       pluginAlerts,
     }),
@@ -180,6 +264,7 @@ export const SessionViewModelProvider: React.FC<SessionViewModelProviderProps> =
       status,
       tracks,
       transport,
+      transportRuntime,
     ],
   );
 
@@ -192,10 +277,32 @@ export const SessionViewModelProvider: React.FC<SessionViewModelProviderProps> =
     [ensureSession, manager, viewModel],
   );
 
+  const transportControls = useMemo<TransportController>(() => {
+    if (!hasTransportControls(audioBridge)) {
+      const fallback = async () => {
+        console.warn('Transport controls unavailable in current session environment.');
+      };
+      return {
+        isAvailable: false,
+        start: fallback,
+        stop: fallback,
+        locateFrame: fallback,
+      };
+    }
+    return {
+      isAvailable: true,
+      start: () => audioBridge.startTransport(),
+      stop: () => audioBridge.stopTransport(),
+      locateFrame: (frame: number) => audioBridge.locateTransport(frame),
+    };
+  }, [audioBridge]);
+
   return (
-    <SessionViewModelContext.Provider value={contextValue}>
-      {children}
-    </SessionViewModelContext.Provider>
+    <TransportControlsContext.Provider value={transportControls}>
+      <SessionViewModelContext.Provider value={contextValue}>
+        {children}
+      </SessionViewModelContext.Provider>
+    </TransportControlsContext.Provider>
   );
 };
 

@@ -133,6 +133,12 @@ type AudioEngineMockState = {
       byteLength: number;
     }
   >;
+  transport: {
+    frame: number;
+    startFrame: number;
+    isPlaying: boolean;
+    lastUpdatedMs: number;
+  };
 };
 
 const audioEngineState: AudioEngineMockState = {
@@ -144,6 +150,12 @@ const audioEngineState: AudioEngineMockState = {
   diagnostics: { xruns: 0, lastRenderDurationMicros: 0, clipBufferBytes: 0 },
   automations: new Map(),
   clipBuffers: new Map(),
+  transport: {
+    frame: 0,
+    startFrame: 0,
+    isPlaying: false,
+    lastUpdatedMs: Date.now(),
+  },
 };
 
 const recomputeClipBufferBytes = () => {
@@ -159,6 +171,20 @@ export const connectionKey = (source: string, destination: string) =>
 
 export const OUTPUT_BUS_ID = '__output__';
 
+const computeTransportFrame = (now: number): number => {
+  if (!audioEngineState.transport.isPlaying) {
+    return audioEngineState.transport.frame;
+  }
+  const elapsedMs = now - audioEngineState.transport.lastUpdatedMs;
+  if (elapsedMs <= 0 || audioEngineState.sampleRate <= 0) {
+    return audioEngineState.transport.startFrame;
+  }
+  const framesAdvanced = Math.floor(
+    (elapsedMs / 1000) * audioEngineState.sampleRate,
+  );
+  return audioEngineState.transport.startFrame + framesAdvanced;
+};
+
 const audioEngineModule = {
   initialize: async (sampleRate: number, framesPerBuffer: number) => {
     audioEngineState.initialized = true;
@@ -167,6 +193,10 @@ const audioEngineModule = {
     audioEngineState.diagnostics.xruns = 0;
     audioEngineState.diagnostics.lastRenderDurationMicros = 0;
     audioEngineState.diagnostics.clipBufferBytes = 0;
+    audioEngineState.transport.frame = 0;
+    audioEngineState.transport.startFrame = 0;
+    audioEngineState.transport.isPlaying = false;
+    audioEngineState.transport.lastUpdatedMs = Date.now();
   },
   shutdown: async () => {
     audioEngineState.initialized = false;
@@ -177,6 +207,10 @@ const audioEngineModule = {
     audioEngineState.diagnostics.lastRenderDurationMicros = 0;
     audioEngineState.diagnostics.clipBufferBytes = 0;
     audioEngineState.clipBuffers.clear();
+    audioEngineState.transport.frame = 0;
+    audioEngineState.transport.startFrame = 0;
+    audioEngineState.transport.isPlaying = false;
+    audioEngineState.transport.lastUpdatedMs = Date.now();
   },
   addNode: async (
     nodeId: string,
@@ -291,6 +325,36 @@ const audioEngineModule = {
   },
   disconnectNodes: async (source: string, destination: string) => {
     audioEngineState.connections.delete(connectionKey(source.trim(), destination.trim()));
+  },
+  startTransport: async () => {
+    const now = Date.now();
+    audioEngineState.transport.frame = computeTransportFrame(now);
+    audioEngineState.transport.startFrame = audioEngineState.transport.frame;
+    audioEngineState.transport.isPlaying = true;
+    audioEngineState.transport.lastUpdatedMs = now;
+  },
+  stopTransport: async () => {
+    const now = Date.now();
+    audioEngineState.transport.frame = computeTransportFrame(now);
+    audioEngineState.transport.startFrame = audioEngineState.transport.frame;
+    audioEngineState.transport.isPlaying = false;
+    audioEngineState.transport.lastUpdatedMs = now;
+  },
+  locateTransport: async (frame: number) => {
+    const sanitized = Number.isFinite(frame) ? Math.max(0, Math.floor(frame)) : 0;
+    audioEngineState.transport.frame = sanitized;
+    audioEngineState.transport.startFrame = sanitized;
+    audioEngineState.transport.lastUpdatedMs = Date.now();
+  },
+  getTransportState: async () => {
+    const now = Date.now();
+    const currentFrame = computeTransportFrame(now);
+    audioEngineState.transport.frame = currentFrame;
+    audioEngineState.transport.lastUpdatedMs = now;
+    return {
+      currentFrame,
+      isPlaying: audioEngineState.transport.isPlaying,
+    };
   },
   scheduleParameterAutomation: async (
     nodeId: string,
