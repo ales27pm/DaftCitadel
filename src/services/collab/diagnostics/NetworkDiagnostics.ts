@@ -24,8 +24,11 @@ export interface NetworkDiagnostics {
 
 interface NativeDiagnosticsModule {
   getCurrentLinkMetrics: () => Promise<Record<string, unknown>>;
-  startObserving: () => void;
-  stopObserving: () => void;
+  startObserving?: () => void;
+  stopObserving?: () => void;
+  beginObserving?: () => void;
+  endObserving?: () => void;
+  setPollingInterval?: (intervalMs: number) => void;
 }
 
 const COLLAPSED_INTERFACE_KEYS = ['interface', 'ssid', 'bssid'];
@@ -139,7 +142,7 @@ class DefaultNetworkDiagnostics implements NetworkDiagnostics {
     }
 
     if (this.emitter.listenerCount(EVENT_NAME) === 0) {
-      this.module.startObserving();
+      this.startNativeObservation();
     }
 
     const handler = (payload: Record<string, unknown>) => {
@@ -154,7 +157,7 @@ class DefaultNetworkDiagnostics implements NetworkDiagnostics {
     return () => {
       subscription.remove();
       if (this.emitter.listenerCount(EVENT_NAME) === 0) {
-        this.module?.stopObserving();
+        this.stopNativeObservation();
       }
     };
   }
@@ -167,6 +170,28 @@ class DefaultNetworkDiagnostics implements NetworkDiagnostics {
       };
     }
     return this.cachedFallbackMetrics;
+  }
+
+  private startNativeObservation(): void {
+    if (!this.module) {
+      return;
+    }
+    if (typeof this.module.beginObserving === 'function') {
+      this.module.beginObserving();
+    } else if (typeof this.module.startObserving === 'function') {
+      this.module.startObserving();
+    }
+  }
+
+  private stopNativeObservation(): void {
+    if (!this.module) {
+      return;
+    }
+    if (typeof this.module.endObserving === 'function') {
+      this.module.endObserving();
+    } else if (typeof this.module.stopObserving === 'function') {
+      this.module.stopObserving();
+    }
   }
 }
 

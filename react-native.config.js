@@ -2,7 +2,7 @@ const path = require('path');
 
 module.exports = {
   dependencies: {
-    'daft-citadel-collab': {
+    'daft-citadel-audio': {
       root: __dirname,
       platforms: {
         ios: {
