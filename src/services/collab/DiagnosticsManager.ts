@@ -28,6 +28,7 @@ export class DiagnosticsManager {
   private readonly logger: Logger;
   private readonly onMetrics: (metrics: LinkMetrics) => void;
   private unsubscribe?: () => void;
+  private latestMetrics?: LinkMetrics;
 
   constructor({
     diagnostics,
@@ -46,12 +47,14 @@ export class DiagnosticsManager {
   start(): void {
     this.stop();
     this.unsubscribe = this.diagnostics.subscribe((metrics) => {
+      this.latestMetrics = metrics;
       this.logger('collab.networkMetrics', sanitizeMetrics(metrics));
       this.onMetrics(metrics);
     });
     this.diagnostics
       .getCurrentLinkMetrics()
       .then((metrics) => {
+        this.latestMetrics = metrics;
         this.logger('collab.networkMetrics.initial', sanitizeMetrics(metrics));
         this.onMetrics(metrics);
       })
@@ -63,5 +66,13 @@ export class DiagnosticsManager {
   stop(): void {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+  }
+
+  getLatestMetrics(): LinkMetrics | undefined {
+    return this.latestMetrics ? { ...this.latestMetrics } : undefined;
+  }
+
+  getLatestSanitizedMetrics(): Record<string, unknown> | undefined {
+    return this.latestMetrics ? sanitizeMetrics(this.latestMetrics) : undefined;
   }
 }
