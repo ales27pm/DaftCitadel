@@ -2,3 +2,4 @@ node_modules/
 audio-engine/build/
 *.log
 .DS_Store
+.vscode/PythonImportHelper-v2-Completion.json
