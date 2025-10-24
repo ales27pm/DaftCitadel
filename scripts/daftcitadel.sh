@@ -180,6 +180,30 @@ download_and_verify() {
     verify_sha256 "$dest" "$sha"
 }
 
+json_get_field() {
+    local file="$1"
+    local path="$2"
+    python3 - "$file" "$path" <<'PY'
+import json
+import sys
+
+file_path, key_path = sys.argv[1:3]
+try:
+    with open(file_path, 'r', encoding='utf-8') as handle:
+        data = json.load(handle)
+    for key in key_path.split('.'):
+        if isinstance(data, dict):
+            data = data.get(key)
+        else:
+            data = None
+            break
+    if data is not None:
+        print(data)
+except Exception:
+    pass
+PY
+}
+
 extract_zip_as_user() {
     local archive="$1"
     local dest="$2"
@@ -371,19 +395,59 @@ if $ENABLE_EXPANDED_SYNTHS; then
     VITAL_SHA256="68f3c7e845f3d7a5b44a83adeb6e34ef221503df00e7964f7d5a1f132a252d13"
     download_and_verify "$VITAL_URL" /tmp/vital.zip "$VITAL_SHA256"
     unzip -o /tmp/vital.zip -d /tmp/vital
-    if [[ -x /tmp/vital/install.sh ]]; then
-        /tmp/vital/install.sh --no-register || true
+    VITAL_ROOT="/tmp/vital"
+    VITAL_INSTALL_SCRIPT=""
+    for candidate in \
+        "$VITAL_ROOT/install.sh" \
+        "$VITAL_ROOT/install" \
+        "$VITAL_ROOT"/VitalInstaller/install.sh \
+        "$VITAL_ROOT"/VitalInstaller/install
+    do
+        if [[ -f "$candidate" ]]; then
+            chmod +x "$candidate" || true
+            if [[ -x "$candidate" ]]; then
+                VITAL_INSTALL_SCRIPT="$candidate"
+                break
+            fi
+        fi
+    done
+    if [[ -n "$VITAL_INSTALL_SCRIPT" ]]; then
+        "$VITAL_INSTALL_SCRIPT" --no-register || true
     else
-        VITAL_PAYLOAD="/tmp/vital/VitalInstaller"
-        if [[ -d "$VITAL_PAYLOAD" ]]; then
+        VITAL_PAYLOAD=$(find "$VITAL_ROOT" -maxdepth 1 -type d -name 'VitalInstaller*' -print -quit)
+        if [[ -n "$VITAL_PAYLOAD" && -d "$VITAL_PAYLOAD" ]]; then
             log "[PLUGINS] Vital installer script missing; performing manual deployment"
             install -d /usr/lib/vst /usr/lib/vst3 /usr/lib/clap /opt/vital
-            install -m 644 "$VITAL_PAYLOAD/lib/vst/Vital.so" /usr/lib/vst/Vital.so
-            rm -rf /usr/lib/vst3/Vital.vst3
-            cp -r "$VITAL_PAYLOAD/lib/vst3/Vital.vst3" /usr/lib/vst3/
-            install -m 755 "$VITAL_PAYLOAD/lib/clap/Vital.clap" /usr/lib/clap/Vital.clap
-            install -m 755 "$VITAL_PAYLOAD/bin/Vital" /opt/vital/Vital
-            ln -sf /opt/vital/Vital /usr/local/bin/Vital
+            missing_components=()
+            VITAL_VST="$VITAL_PAYLOAD/lib/vst/Vital.so"
+            VITAL_VST3_DIR="$VITAL_PAYLOAD/lib/vst3/Vital.vst3"
+            VITAL_CLAP="$VITAL_PAYLOAD/lib/clap/Vital.clap"
+            VITAL_BIN="$VITAL_PAYLOAD/bin/Vital"
+            if [[ -f "$VITAL_VST" ]]; then
+                install -m 644 "$VITAL_VST" /usr/lib/vst/Vital.so
+            else
+                missing_components+=("VST plugin")
+            fi
+            if [[ -d "$VITAL_VST3_DIR" ]]; then
+                rm -rf /usr/lib/vst3/Vital.vst3
+                cp -r "$VITAL_VST3_DIR" /usr/lib/vst3/
+            else
+                missing_components+=("VST3 plugin")
+            fi
+            if [[ -f "$VITAL_CLAP" ]]; then
+                install -m 755 "$VITAL_CLAP" /usr/lib/clap/Vital.clap
+            else
+                missing_components+=("CLAP plugin")
+            fi
+            if [[ -f "$VITAL_BIN" ]]; then
+                install -m 755 "$VITAL_BIN" /opt/vital/Vital
+                ln -sf /opt/vital/Vital /usr/local/bin/Vital
+            else
+                missing_components+=("standalone binary")
+            fi
+            if ((${#missing_components[@]})); then
+                log "[WARN] Vital manual install missing: ${missing_components[*]}"
+            fi
         else
             log "[WARN] Vital payload layout changed; skipping manual install"
         fi
@@ -406,17 +470,186 @@ if $ENABLE_EXPANDED_SYNTHS; then
 
     # Tyrell N6
     if [[ ! -d /usr/lib/vst3/TyrellN6.vst3 ]]; then
-        dl "https://u-he.com/downloads/TyrellN6/TyrellN6_305_12092_Linux.tar.xz" /tmp/tyrell.tar.xz
-        mkdir -p /usr/lib/vst3
-        tar -xJf /tmp/tyrell.tar.xz -C /usr/lib/vst3/
-        rm -f /tmp/tyrell.tar.xz
+        TYRELL_ARCHIVE="/tmp/tyrell.tar.xz"
+        rm -f "$TYRELL_ARCHIVE"
+        TYRELL_DYNAMIC_URL=""
+        TYRELL_PY_AVAILABLE=false
+        if command -v python3 >/dev/null 2>&1; then
+            TYRELL_PY_AVAILABLE=true
+            TYRELL_DYNAMIC_URL=$(python3 <<'PY' 2>/dev/null
+import re
+import sys
+import urllib.request
+
+index_urls = [
+    "https://uhe-dl.b-cdn.net/releases/?C=M;O=D",
+    "https://dl.u-he.com/releases/?C=M;O=D",
+]
+pattern = re.compile(r"href=\"(TyrellN6[^\"']*_Linux\.tar\.xz)\"", re.IGNORECASE)
+
+for index_url in index_urls:
+    try:
+        with urllib.request.urlopen(index_url, timeout=20) as resp:
+            html = resp.read().decode("utf-8", "ignore")
+    except Exception:
+        continue
+    match = pattern.search(html)
+    if match:
+        href = match.group(1)
+        if href.startswith("http"):
+            print(href)
+        else:
+            print("https://uhe-dl.b-cdn.net/releases/" + href.lstrip("/"))
+        sys.exit(0)
+PY
+            )
+        fi
+        TYRELL_MIRRORS=()
+        if [[ -n "$TYRELL_DYNAMIC_URL" ]]; then
+            TYRELL_MIRRORS+=("$TYRELL_DYNAMIC_URL")
+            log "[PLUGINS] Resolved latest Tyrell N6 release: $TYRELL_DYNAMIC_URL"
+        else
+            if $TYRELL_PY_AVAILABLE; then
+                log "[WARN] Unable to auto-discover Tyrell N6 release; falling back to static mirrors"
+            else
+                log "[INFO] python3 unavailable; using static Tyrell N6 mirrors"
+            fi
+        fi
+        TYRELL_MIRRORS+=(
+            "https://uhe-dl.b-cdn.net/releases/TyrellN6_300_public_beta_16976_Linux.tar.xz"
+            "https://dl.u-he.com/releases/TyrellN6_300_public_beta_16976_Linux.tar.xz"
+            "https://uhe-dl.b-cdn.net/TyrellN6_307_Linux.tar.xz"
+            "https://u-he.com/downloads/TyrellN6/TyrellN6_307_Linux.tar.xz"
+            "https://uhe-dl.b-cdn.net/TyrellN6_306_Linux.tar.xz"
+            "https://u-he.com/downloads/TyrellN6/TyrellN6_306_Linux.tar.xz"
+            "https://uhe-dl.b-cdn.net/TyrellN6_305_Linux.tar.xz"
+            "https://u-he.com/downloads/TyrellN6/TyrellN6_305_12092_Linux.tar.xz"
+        )
+        tyrell_installed=false
+        for mirror in "${TYRELL_MIRRORS[@]}"; do
+            if dl "$mirror" "$TYRELL_ARCHIVE"; then
+                if tar -tJf "$TYRELL_ARCHIVE" >/dev/null 2>&1; then
+                    TYRELL_WORKDIR=$(mktemp -d /tmp/tyrell.XXXXXX)
+                    if tar -xJf "$TYRELL_ARCHIVE" -C "$TYRELL_WORKDIR" >/dev/null 2>&1; then
+                        TYRELL_SRC=$(find "$TYRELL_WORKDIR" -maxdepth 2 -type d -name 'TyrellN6' | head -n 1)
+                        if [[ -n "$TYRELL_SRC" && -f "$TYRELL_SRC/TyrellN6.64.so" ]]; then
+                            install -d -m 755 /opt/u-he
+                            rm -rf /opt/u-he/TyrellN6
+                            cp -a "$TYRELL_SRC" /opt/u-he/TyrellN6
+                            chown -R root:root /opt/u-he/TyrellN6
+
+                            install -d -m 755 /usr/lib/vst
+                            install -m 755 "$TYRELL_SRC/TyrellN6.64.so" /usr/lib/vst/TyrellN6.64.so
+
+                            install -d -m 755 /usr/lib/vst3/TyrellN6.vst3/Contents/x86_64-linux
+                            install -m 755 "$TYRELL_SRC/TyrellN6.64.so" /usr/lib/vst3/TyrellN6.vst3/Contents/x86_64-linux/TyrellN6.so
+                            install -d -m 755 /usr/lib/vst3/TyrellN6.vst3/Contents/Resources/Documentation
+
+                            TYRELL_DOC=$(find "$TYRELL_SRC" -maxdepth 1 -type f -name '*user guide.pdf' | head -n 1)
+                            if [[ -n "$TYRELL_DOC" ]]; then
+                                install -m 644 "$TYRELL_DOC" \
+                                    "/usr/lib/vst3/TyrellN6.vst3/Contents/Resources/Documentation/$(basename "$TYRELL_DOC")"
+                            fi
+                            TYRELL_LICENSE=$(find "$TYRELL_SRC" -maxdepth 1 -type f -name 'license.txt' | head -n 1)
+                            if [[ -n "$TYRELL_LICENSE" ]]; then
+                                install -m 644 "$TYRELL_LICENSE" \
+                                    "/usr/lib/vst3/TyrellN6.vst3/Contents/Resources/Documentation/$(basename "$TYRELL_LICENSE")"
+                            fi
+
+                            install -d -m 755 /usr/lib/clap
+                            install -m 755 "$TYRELL_SRC/TyrellN6.64.so" /usr/lib/clap/TyrellN6.clap
+
+                            as_user "mkdir -p ~/.u-he ~/.vst ~/.vst3 ~/.clap"
+                            as_user "ln -snf /opt/u-he/TyrellN6 ~/.u-he/TyrellN6"
+                            as_user "ln -snf /usr/lib/vst/TyrellN6.64.so ~/.vst/TyrellN6.64.so"
+                            as_user "ln -snf /usr/lib/vst3/TyrellN6.vst3 ~/.vst3/TyrellN6.vst3"
+                            as_user "ln -snf /usr/lib/clap/TyrellN6.clap ~/.clap/TyrellN6.clap"
+
+                            tyrell_installed=true
+                            log "[PLUGINS] Installed Tyrell N6 from $mirror"
+                            rm -rf "$TYRELL_WORKDIR"
+                            break
+                        else
+                            log "[WARN] Tyrell N6 payload from $mirror missing expected content"
+                        fi
+                    else
+                        log "[WARN] Unable to extract Tyrell N6 archive from $mirror"
+                    fi
+                    rm -rf "${TYRELL_WORKDIR:-}"
+                else
+                    log "[WARN] Tyrell N6 archive from $mirror is not a valid tarball"
+                fi
+            else
+                log "[WARN] Failed to download Tyrell N6 from $mirror"
+            fi
+            rm -f "$TYRELL_ARCHIVE"
+        done
+        rm -f "$TYRELL_ARCHIVE"
+        if ! $tyrell_installed; then
+            log "[WARN] Tyrell N6 download unavailable; skipping automated install"
+        fi
     fi
 
     # OB-Xd
-    if [[ ! -d /usr/lib/vst3/OB-Xd.vst3 ]]; then
-        dl "https://github.com/reales/OB-Xd/releases/download/v2.11/OB-Xd-2.11-Linux.tar.gz" /tmp/obxd.tar.gz
-        tar -xzf /tmp/obxd.tar.gz -C /usr/lib/vst3/
-        rm -f /tmp/obxd.tar.gz
+    obxd_target_version="2.17.0"
+    obxd_current_version=""
+    if [[ -f /usr/lib/vst3/OB-Xd.vst3/Contents/Resources/moduleinfo.json ]]; then
+        obxd_current_version=$(json_get_field \
+            /usr/lib/vst3/OB-Xd.vst3/Contents/Resources/moduleinfo.json \
+            "Version")
+    fi
+
+    if [[ "$obxd_current_version" != "$obxd_target_version" ]]; then
+        OBXD_ARCHIVE=$(mktemp -t obxd.XXXXXX.zip)
+        OBXD_WORKDIR=$(mktemp -d -t obxd.XXXXXX)
+        download_and_verify \
+            "https://github.com/reales/OB-Xd/releases/download/2.17/Obxd217FreeLinux.zip" \
+            "$OBXD_ARCHIVE" \
+            "c70c01aba78c499e67ccfa1916204a4ddcff9982ec17ca33a95e5ed605cc9472"
+        if unzip -q "$OBXD_ARCHIVE" -d "$OBXD_WORKDIR"; then
+            if [[ -d "$OBXD_WORKDIR/OB-Xd.vst3" && -f "$OBXD_WORKDIR/OB-Xd.so" ]]; then
+                install -d -m 755 /usr/lib/vst3
+                rm -rf /usr/lib/vst3/OB-Xd.vst3
+                cp -a "$OBXD_WORKDIR/OB-Xd.vst3" /usr/lib/vst3/
+                chmod -R go-w /usr/lib/vst3/OB-Xd.vst3
+
+                install -d -m 755 /usr/lib/vst
+                install -m 755 "$OBXD_WORKDIR/OB-Xd.so" /usr/lib/vst/OB-Xd.so
+
+                install -d -m 755 /opt/discoDSP
+                rm -rf /opt/discoDSP/OB-Xd
+                if [[ -d "$OBXD_WORKDIR/discoDSP/OB-Xd" ]]; then
+                    cp -a "$OBXD_WORKDIR/discoDSP/OB-Xd" /opt/discoDSP/
+                    chmod -R go-w /opt/discoDSP/OB-Xd
+                fi
+
+                install -d -m 755 /usr/share/doc/obxd
+                if [[ -f "$OBXD_WORKDIR/OB-Xd Manual.pdf" ]]; then
+                    install -m 644 "$OBXD_WORKDIR/OB-Xd Manual.pdf" \
+                        "/usr/share/doc/obxd/OB-Xd Manual.pdf"
+                fi
+                if [[ -f "$OBXD_WORKDIR/License.txt" ]]; then
+                    install -m 644 "$OBXD_WORKDIR/License.txt" \
+                        /usr/share/doc/obxd/License.txt
+                fi
+
+                as_user "mkdir -p ~/.vst ~/.vst3 ~/Documents ~/Documents/discoDSP"
+                as_user "ln -snf /usr/lib/vst/OB-Xd.so ~/.vst/OB-Xd.so"
+                as_user "ln -snf /usr/lib/vst3/OB-Xd.vst3 ~/.vst3/OB-Xd.vst3"
+                if [[ -d /opt/discoDSP/OB-Xd ]]; then
+                    as_user "ln -snf /opt/discoDSP/OB-Xd ~/Documents/discoDSP/OB-Xd"
+                fi
+
+                obxd_current_version="$obxd_target_version"
+                log "[PLUGINS] Installed OB-Xd Legacy $obxd_target_version"
+            else
+                log "[WARN] OB-Xd payload missing expected plugin binaries"
+            fi
+        else
+            log "[WARN] Failed to extract OB-Xd archive"
+        fi
+        rm -f "${OBXD_ARCHIVE:-}"
+        rm -rf "${OBXD_WORKDIR:-}"
     fi
 
     # Valhalla Supermassive
