@@ -371,19 +371,59 @@ if $ENABLE_EXPANDED_SYNTHS; then
     VITAL_SHA256="68f3c7e845f3d7a5b44a83adeb6e34ef221503df00e7964f7d5a1f132a252d13"
     download_and_verify "$VITAL_URL" /tmp/vital.zip "$VITAL_SHA256"
     unzip -o /tmp/vital.zip -d /tmp/vital
-    if [[ -x /tmp/vital/install.sh ]]; then
-        /tmp/vital/install.sh --no-register || true
+    VITAL_ROOT="/tmp/vital"
+    VITAL_INSTALL_SCRIPT=""
+    for candidate in \
+        "$VITAL_ROOT/install.sh" \
+        "$VITAL_ROOT/install" \
+        "$VITAL_ROOT"/VitalInstaller/install.sh \
+        "$VITAL_ROOT"/VitalInstaller/install
+    do
+        if [[ -f "$candidate" ]]; then
+            chmod +x "$candidate" || true
+            if [[ -x "$candidate" ]]; then
+                VITAL_INSTALL_SCRIPT="$candidate"
+                break
+            fi
+        fi
+    done
+    if [[ -n "$VITAL_INSTALL_SCRIPT" ]]; then
+        "$VITAL_INSTALL_SCRIPT" --no-register || true
     else
-        VITAL_PAYLOAD="/tmp/vital/VitalInstaller"
-        if [[ -d "$VITAL_PAYLOAD" ]]; then
+        VITAL_PAYLOAD=$(find "$VITAL_ROOT" -maxdepth 1 -type d -name 'VitalInstaller*' -print -quit)
+        if [[ -n "$VITAL_PAYLOAD" && -d "$VITAL_PAYLOAD" ]]; then
             log "[PLUGINS] Vital installer script missing; performing manual deployment"
             install -d /usr/lib/vst /usr/lib/vst3 /usr/lib/clap /opt/vital
-            install -m 644 "$VITAL_PAYLOAD/lib/vst/Vital.so" /usr/lib/vst/Vital.so
-            rm -rf /usr/lib/vst3/Vital.vst3
-            cp -r "$VITAL_PAYLOAD/lib/vst3/Vital.vst3" /usr/lib/vst3/
-            install -m 755 "$VITAL_PAYLOAD/lib/clap/Vital.clap" /usr/lib/clap/Vital.clap
-            install -m 755 "$VITAL_PAYLOAD/bin/Vital" /opt/vital/Vital
-            ln -sf /opt/vital/Vital /usr/local/bin/Vital
+            missing_components=()
+            VITAL_VST="$VITAL_PAYLOAD/lib/vst/Vital.so"
+            VITAL_VST3_DIR="$VITAL_PAYLOAD/lib/vst3/Vital.vst3"
+            VITAL_CLAP="$VITAL_PAYLOAD/lib/clap/Vital.clap"
+            VITAL_BIN="$VITAL_PAYLOAD/bin/Vital"
+            if [[ -f "$VITAL_VST" ]]; then
+                install -m 644 "$VITAL_VST" /usr/lib/vst/Vital.so
+            else
+                missing_components+=("VST plugin")
+            fi
+            if [[ -d "$VITAL_VST3_DIR" ]]; then
+                rm -rf /usr/lib/vst3/Vital.vst3
+                cp -r "$VITAL_VST3_DIR" /usr/lib/vst3/
+            else
+                missing_components+=("VST3 plugin")
+            fi
+            if [[ -f "$VITAL_CLAP" ]]; then
+                install -m 755 "$VITAL_CLAP" /usr/lib/clap/Vital.clap
+            else
+                missing_components+=("CLAP plugin")
+            fi
+            if [[ -f "$VITAL_BIN" ]]; then
+                install -m 755 "$VITAL_BIN" /opt/vital/Vital
+                ln -sf /opt/vital/Vital /usr/local/bin/Vital
+            else
+                missing_components+=("standalone binary")
+            fi
+            if ((${#missing_components[@]})); then
+                log "[WARN] Vital manual install missing: ${missing_components[*]}"
+            fi
         else
             log "[WARN] Vital payload layout changed; skipping manual install"
         fi
@@ -406,10 +446,37 @@ if $ENABLE_EXPANDED_SYNTHS; then
 
     # Tyrell N6
     if [[ ! -d /usr/lib/vst3/TyrellN6.vst3 ]]; then
-        dl "https://u-he.com/downloads/TyrellN6/TyrellN6_305_12092_Linux.tar.xz" /tmp/tyrell.tar.xz
-        mkdir -p /usr/lib/vst3
-        tar -xJf /tmp/tyrell.tar.xz -C /usr/lib/vst3/
-        rm -f /tmp/tyrell.tar.xz
+        TYRELL_ARCHIVE="/tmp/tyrell.tar.xz"
+        rm -f "$TYRELL_ARCHIVE"
+        TYRELL_MIRRORS=(
+            "https://u-he.com/downloads/TyrellN6/TyrellN6_307_Linux.tar.xz"
+            "https://u-he.com/downloads/TyrellN6/TyrellN6_306_Linux.tar.xz"
+            "https://u-he.com/downloads/TyrellN6/TyrellN6_305_Linux.tar.xz"
+            "https://uhe-dl.b-cdn.net/TyrellN6_307_Linux.tar.xz"
+            "https://uhe-dl.b-cdn.net/TyrellN6_306_Linux.tar.xz"
+            "https://uhe-dl.b-cdn.net/TyrellN6_305_Linux.tar.xz"
+        )
+        tyrell_installed=false
+        for mirror in "${TYRELL_MIRRORS[@]}"; do
+            if dl "$mirror" "$TYRELL_ARCHIVE"; then
+                if tar -tJf "$TYRELL_ARCHIVE" >/dev/null 2>&1; then
+                    mkdir -p /usr/lib/vst3
+                    tar -xJf "$TYRELL_ARCHIVE" -C /usr/lib/vst3/
+                    tyrell_installed=true
+                    log "[PLUGINS] Installed Tyrell N6 from $mirror"
+                    break
+                else
+                    log "[WARN] Tyrell N6 archive from $mirror is not a valid tarball"
+                fi
+            else
+                log "[WARN] Failed to download Tyrell N6 from $mirror"
+            fi
+            rm -f "$TYRELL_ARCHIVE"
+        done
+        rm -f "$TYRELL_ARCHIVE"
+        if ! $tyrell_installed; then
+            log "[WARN] Tyrell N6 download unavailable; skipping automated install"
+        fi
     fi
 
     # OB-Xd
