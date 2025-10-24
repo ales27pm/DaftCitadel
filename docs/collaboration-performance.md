@@ -29,7 +29,7 @@ The collaboration service is built around `CollabSessionService` and helper modu
 ### Android (WifiManager)
 
 1. The Android bridge lives in `native/collab/android/src/main/java/com/daftcitadel/collab/CollabNetworkDiagnosticsModule.kt` and polls `WifiManager` for link state before emitting `CollabNetworkDiagnosticsEvent` updates.
-2. Declare `ACCESS_WIFI_STATE`, `ACCESS_FINE_LOCATION`, and `NEARBY_WIFI_DEVICES` in the library manifest. The module requests `ACCESS_FINE_LOCATION` (or `ACCESS_COARSE_LOCATION`) on Android 12 and below, and `NEARBY_WIFI_DEVICES` on Android 13+. Surface permission requirements through the JS helper `requiresLocationPermission()`.
+2. Declare `ACCESS_WIFI_STATE`, `ACCESS_FINE_LOCATION`, and `NEARBY_WIFI_DEVICES` in the library manifest. The module requests `ACCESS_FINE_LOCATION` (or `ACCESS_COARSE_LOCATION`) on Android 12 and below, and `NEARBY_WIFI_DEVICES` on Android 13+. Surface permission requirements through the JS helper `requiresLocationPermission()`, which inspects the Android API level so UI flows skip the legacy location prompt once `NEARBY_WIFI_DEVICES` is available.
 3. Optionally integrate `ConnectivityManager.registerNetworkCallback` to capture link bandwidth using `LinkProperties.getLinkBandwidths()` on Android 13+.
 
 ## 3. Performance Capture Workflow
