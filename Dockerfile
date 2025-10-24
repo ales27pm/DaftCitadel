@@ -1,5 +1,7 @@
 FROM ubuntu:24.04
 
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 ARG TARGET_USER=daftpunk
 ARG TARGET_UID=1000
 ARG TARGET_GID=1000
