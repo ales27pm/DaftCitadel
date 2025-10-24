@@ -187,24 +187,49 @@ dl() {
 
 verify_sha256() {
     local file="$1"
-    local expected="$2"
+    shift
+    local expected_hashes=()
     local actual
-    actual=$(sha256sum "$file" | awk '{print $1}')
-    if [[ "$actual" != "$expected" ]]; then
-        log "[ERR] SHA256 mismatch for $file"
-        log "[ERR] Expected: $expected"
-        log "[ERR] Actual:   $actual"
+    local index=0
+
+    if (($# == 0)); then
+        log "[ERR] No expected checksums provided for $file"
         exit 1
     fi
-    log "[CHECK] Verified $file"
+
+    for expected in "$@"; do
+        expected_hashes+=("${expected,,}")
+    done
+
+    actual=$(sha256sum "$file" | awk '{print $1}')
+    for expected in "${expected_hashes[@]}"; do
+        if [[ -n "$expected" && "$actual" == "$expected" ]]; then
+            if (( index == 0 )); then
+                log "[CHECK] Verified $file"
+            else
+                log "[CHECK] Verified $file (matched alternate checksum #$((index + 1)))"
+            fi
+            return 0
+        fi
+        ((index++))
+    done
+
+    log "[ERR] SHA256 mismatch for $file"
+    log "[ERR] Expected one of: ${expected_hashes[*]}"
+    log "[ERR] Actual:   $actual"
+    exit 1
 }
 
 download_and_verify() {
     local url="$1"
     local dest="$2"
-    local sha="$3"
+    shift 2
+    if (($# == 0)); then
+        log "[ERR] Missing checksum metadata for $url"
+        exit 1
+    fi
     dl "$url" "$dest"
-    verify_sha256 "$dest" "$sha"
+    verify_sha256 "$dest" "$@"
 }
 
 verify_md5() {
@@ -696,6 +721,16 @@ declare -A HELM_KNOWN_SHAS=(
     ["0.9.0"]="aedf8b676657f72782513e5ad5f9c61a6bc21fe9357b23052928adafa8215eca"
 )
 
+declare -A VITAL_FALLBACK_URLS=(
+    ["1.5.5"]="https://builds.vital.audio/VitalAudio/vital/1_5_5/VitalInstaller.zip"
+)
+
+declare -A VITAL_KNOWN_SHAS=(
+    ["1.5.5"]="68f3c7e845f3d7a5b44a83adeb6e34ef221503df00e7964f7d5a1f132a252d13 842c17494881074629435a0de9a74ba6bc00a1e97a7fbdad046e5f11beb53822"
+)
+
+VITAL_DEFAULT_VERSION="1.5.5"
+
 SURGE_DEB_PATH="/tmp/surge.deb"
 surge_installed=false
 if command -v python3 >/dev/null 2>&1; then
@@ -756,14 +791,14 @@ if $ENABLE_EXPANDED_SYNTHS; then
     # Vital
     # Vital distributes binaries under an EULA; prefer nixpkgs metadata to resolve the latest Linux build.
     VITAL_URL=""
-    VITAL_SHA256=""
     VITAL_VERSION_DISPLAY=""
+    VITAL_DYNAMIC_SHA256=""
+    VITAL_CHECKSUM_CANDIDATES=()
     if command -v python3 >/dev/null 2>&1; then
         if VITAL_DYNAMIC_OUTPUT=$(resolve_vital_manifest 2>/dev/null); then
             eval "$VITAL_DYNAMIC_OUTPUT"
             if [[ -n "${VITAL_DYNAMIC_URL:-}" && -n "${VITAL_DYNAMIC_SHA256:-}" ]]; then
                 VITAL_URL="$VITAL_DYNAMIC_URL"
-                VITAL_SHA256="$VITAL_DYNAMIC_SHA256"
                 VITAL_VERSION_DISPLAY="${VITAL_DYNAMIC_VERSION:-latest}"
                 log "[PLUGINS] Resolved Vital ${VITAL_VERSION_DISPLAY} via nixpkgs manifest"
             fi
@@ -773,13 +808,65 @@ if $ENABLE_EXPANDED_SYNTHS; then
     else
         log "[INFO] python3 unavailable; using static Vital manifest fallback"
     fi
+    if [[ -n "${VITAL_DYNAMIC_SHA256:-}" ]]; then
+        VITAL_CHECKSUM_CANDIDATES+=("${VITAL_DYNAMIC_SHA256,,}")
+    fi
     if [[ -z "${VITAL_URL:-}" ]]; then
-        VITAL_URL="https://builds.vital.audio/VitalAudio/vital/1_5_5/VitalInstaller.zip"
-        VITAL_SHA256="68f3c7e845f3d7a5b44a83adeb6e34ef221503df00e7964f7d5a1f132a252d13"
-        VITAL_VERSION_DISPLAY="1.5.5"
+        if [[ -n "${VITAL_FALLBACK_URLS[$VITAL_DEFAULT_VERSION]:-}" ]]; then
+            VITAL_VERSION_DISPLAY="$VITAL_DEFAULT_VERSION"
+            VITAL_URL="${VITAL_FALLBACK_URLS[$VITAL_VERSION_DISPLAY]}"
+            if [[ -z "$VITAL_URL" ]]; then
+                log "[ERR] Vital fallback URL resolution failed for $VITAL_VERSION_DISPLAY"
+                exit 1
+            fi
+        else
+            log "[ERR] Vital fallback URL metadata missing for $VITAL_DEFAULT_VERSION"
+            exit 1
+        fi
+    fi
+    if [[ -n "${VITAL_VERSION_DISPLAY:-}" && -n "${VITAL_KNOWN_SHAS[$VITAL_VERSION_DISPLAY]:-}" ]]; then
+        read -r -a __vital_known_shas <<<"${VITAL_KNOWN_SHAS[$VITAL_VERSION_DISPLAY]}"
+        for candidate in "${__vital_known_shas[@]}"; do
+            candidate="${candidate,,}"
+            [[ -z "$candidate" ]] && continue
+            duplicate=false
+            for existing in "${VITAL_CHECKSUM_CANDIDATES[@]}"; do
+                if [[ "$existing" == "$candidate" ]]; then
+                    duplicate=true
+                    break
+                fi
+            done
+            if ! $duplicate; then
+                VITAL_CHECKSUM_CANDIDATES+=("$candidate")
+            fi
+        done
+    fi
+    if ((${#VITAL_CHECKSUM_CANDIDATES[@]} == 0)); then
+        if [[ "${VITAL_VERSION_DISPLAY:-}" != "$VITAL_DEFAULT_VERSION" ]]; then
+            log "[WARN] Missing checksum metadata for Vital ${VITAL_VERSION_DISPLAY:-unknown}; falling back to $VITAL_DEFAULT_VERSION"
+            VITAL_VERSION_DISPLAY="$VITAL_DEFAULT_VERSION"
+            VITAL_URL="${VITAL_FALLBACK_URLS[$VITAL_VERSION_DISPLAY]}"
+            if [[ -z "$VITAL_URL" ]]; then
+                log "[ERR] Vital fallback URL resolution failed for $VITAL_VERSION_DISPLAY"
+                exit 1
+            fi
+            VITAL_CHECKSUM_CANDIDATES=()
+            if [[ -n "${VITAL_KNOWN_SHAS[$VITAL_VERSION_DISPLAY]:-}" ]]; then
+                read -r -a __vital_known_shas <<<"${VITAL_KNOWN_SHAS[$VITAL_VERSION_DISPLAY]}"
+                for candidate in "${__vital_known_shas[@]}"; do
+                    candidate="${candidate,,}"
+                    [[ -z "$candidate" ]] && continue
+                    VITAL_CHECKSUM_CANDIDATES+=("$candidate")
+                done
+            fi
+        fi
+    fi
+    if ((${#VITAL_CHECKSUM_CANDIDATES[@]} == 0)); then
+        log "[ERR] No checksum metadata available for Vital ${VITAL_VERSION_DISPLAY:-unknown}"
+        exit 1
     fi
     log "[PLUGINS] Installing Vital ${VITAL_VERSION_DISPLAY:-1.5.x}"
-    download_and_verify "$VITAL_URL" /tmp/vital.zip "$VITAL_SHA256"
+    download_and_verify "$VITAL_URL" /tmp/vital.zip "${VITAL_CHECKSUM_CANDIDATES[@]}"
     unzip -o /tmp/vital.zip -d /tmp/vital
     VITAL_ROOT="/tmp/vital"
     VITAL_INSTALL_SCRIPT=""
