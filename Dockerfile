@@ -20,6 +20,7 @@ RUN apt-get update \
         git \
         unzip \
         gnupg \
+        xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 RUN locale-gen en_US.UTF-8
