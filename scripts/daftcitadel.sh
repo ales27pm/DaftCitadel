@@ -371,14 +371,37 @@ if $ENABLE_EXPANDED_SYNTHS; then
     VITAL_SHA256="68f3c7e845f3d7a5b44a83adeb6e34ef221503df00e7964f7d5a1f132a252d13"
     download_and_verify "$VITAL_URL" /tmp/vital.zip "$VITAL_SHA256"
     unzip -o /tmp/vital.zip -d /tmp/vital
-    /tmp/vital/install.sh --no-register || true
+    if [[ -x /tmp/vital/install.sh ]]; then
+        /tmp/vital/install.sh --no-register || true
+    else
+        VITAL_PAYLOAD="/tmp/vital/VitalInstaller"
+        if [[ -d "$VITAL_PAYLOAD" ]]; then
+            log "[PLUGINS] Vital installer script missing; performing manual deployment"
+            install -d /usr/lib/vst /usr/lib/vst3 /usr/lib/clap /opt/vital
+            install -m 644 "$VITAL_PAYLOAD/lib/vst/Vital.so" /usr/lib/vst/Vital.so
+            rm -rf /usr/lib/vst3/Vital.vst3
+            cp -r "$VITAL_PAYLOAD/lib/vst3/Vital.vst3" /usr/lib/vst3/
+            install -m 755 "$VITAL_PAYLOAD/lib/clap/Vital.clap" /usr/lib/clap/Vital.clap
+            install -m 755 "$VITAL_PAYLOAD/bin/Vital" /opt/vital/Vital
+            ln -sf /opt/vital/Vital /usr/local/bin/Vital
+        else
+            log "[WARN] Vital payload layout changed; skipping manual install"
+        fi
+    fi
     rm -rf /tmp/vital /tmp/vital.zip
 
     # TAL-Vocoder
     if [[ ! -d /usr/lib/lv2/TAL-Vocoder-2.lv2 ]]; then
-        dl "https://tal-software.com/downloads/plugins/TAL-Vocoder-64bit-linux-v3.0.4.zip" /tmp/tal-vocoder.zip
-        unzip -o /tmp/tal-vocoder.zip -d /usr/lib/lv2/
-        rm -f /tmp/tal-vocoder.zip
+        if dl "https://tal-software.com/downloads/plugins/TAL-Vocoder-64bit-linux-v3.0.4.zip" /tmp/tal-vocoder.zip; then
+            if unzip -t /tmp/tal-vocoder.zip >/dev/null 2>&1; then
+                unzip -o /tmp/tal-vocoder.zip -d /usr/lib/lv2/
+            else
+                log "[WARN] Unexpected TAL-Vocoder download content; skipping automated install"
+            fi
+            rm -f /tmp/tal-vocoder.zip
+        else
+            log "[WARN] Failed to download TAL-Vocoder archive"
+        fi
     fi
 
     # Tyrell N6
