@@ -22,8 +22,15 @@ RUN apt-get update \
 
 RUN locale-gen en_US.UTF-8
 
-RUN groupadd -g ${TARGET_GID} ${TARGET_USER} \
-    && useradd -m -u ${TARGET_UID} -g ${TARGET_GID} -s /bin/bash ${TARGET_USER} \
+RUN if ! getent group ${TARGET_GID} > /dev/null; then \
+        groupadd -g ${TARGET_GID} ${TARGET_USER}; \
+    fi \
+    && if id -u ${TARGET_USER} > /dev/null 2>&1; then \
+        usermod -u ${TARGET_UID} -g ${TARGET_GID} -s /bin/bash ${TARGET_USER}; \
+        usermod -d /home/${TARGET_USER} -m ${TARGET_USER}; \
+    else \
+        useradd -m -u ${TARGET_UID} -g ${TARGET_GID} -s /bin/bash ${TARGET_USER}; \
+    fi \
     && usermod -a -G sudo ${TARGET_USER} \
     && echo "${TARGET_USER} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/${TARGET_USER}
 
