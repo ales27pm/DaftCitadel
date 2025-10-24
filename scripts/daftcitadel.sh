@@ -189,6 +189,96 @@ apt_install_available() {
     fi
 }
 
+search_first_match() {
+    local type="$1"
+    local pattern="$2"
+    shift 2
+    local dirs=("$@")
+    local dir
+    local result
+    for dir in "${dirs[@]}"; do
+        if [[ -d "$dir" ]]; then
+            result=$(find "$dir" -maxdepth 2 -type "$type" -iname "$pattern" -print -quit 2>/dev/null || true)
+            if [[ -n "$result" ]]; then
+                printf '%s\n' "$result"
+                return 0
+            fi
+        fi
+    done
+    return 1
+}
+
+locate_tal_vocoder() {
+    local path
+    path=$(search_first_match d 'TAL-Vocoder-2.lv2' /usr/lib/lv2 /usr/local/lib/lv2)
+    if [[ -n "$path" ]]; then
+        printf '%s\n' "$path"
+        return 0
+    fi
+    path=$(search_first_match d 'tal-vocoder-2.lv2' /usr/lib/lv2 /usr/local/lib/lv2)
+    if [[ -n "$path" ]]; then
+        printf '%s\n' "$path"
+        return 0
+    fi
+    path=$(search_first_match d 'TAL-Vocoder*.vst3' /usr/lib/vst3 /usr/local/lib/vst3)
+    if [[ -n "$path" ]]; then
+        printf '%s\n' "$path"
+        return 0
+    fi
+    path=$(search_first_match d 'tal-vocoder*.vst3' /usr/lib/vst3 /usr/local/lib/vst3)
+    if [[ -n "$path" ]]; then
+        printf '%s\n' "$path"
+        return 0
+    fi
+    path=$(search_first_match f 'TAL-Vocoder*.clap' /usr/lib/clap /usr/local/lib/clap)
+    if [[ -n "$path" ]]; then
+        printf '%s\n' "$path"
+        return 0
+    fi
+    path=$(search_first_match f 'tal-vocoder*.clap' /usr/lib/clap /usr/local/lib/clap)
+    if [[ -n "$path" ]]; then
+        printf '%s\n' "$path"
+        return 0
+    fi
+
+    local fallback_dirs=(/usr/lib /usr/local/lib)
+    local dir
+    for dir in "${fallback_dirs[@]}"; do
+        if [[ -d "$dir" ]]; then
+            path=$(find "$dir" -maxdepth 5 -iname 'tal-vocoder*' -print -quit 2>/dev/null || true)
+            if [[ -n "$path" ]]; then
+                printf '%s\n' "$path"
+                return 0
+            fi
+        fi
+    done
+    return 1
+}
+
+locate_distrho_reference_plugin() {
+    local names=("MVerb" "3BandEQ" "Kars")
+    local name
+    local path
+    for name in "${names[@]}"; do
+        path=$(search_first_match d "${name}.lv2" /usr/lib/lv2 /usr/local/lib/lv2)
+        if [[ -n "$path" ]]; then
+            printf '%s\n' "$path"
+            return 0
+        fi
+        path=$(search_first_match d "${name}.vst3" /usr/lib/vst3 /usr/local/lib/vst3)
+        if [[ -n "$path" ]]; then
+            printf '%s\n' "$path"
+            return 0
+        fi
+        path=$(search_first_match f "${name}.clap" /usr/lib/clap /usr/local/lib/clap)
+        if [[ -n "$path" ]]; then
+            printf '%s\n' "$path"
+            return 0
+        fi
+    done
+    return 1
+}
+
 sysctl_set() {
     local key="$1"
     local value="$2"
@@ -1067,11 +1157,20 @@ if $ENABLE_EXPANDED_SYNTHS; then
     # TAL-Vocoder via DISTRHO Ports (Ubuntu-packaged build)
     log "[PLUGINS] Installing DISTRHO Ports collection for TAL instruments"
     apt_install_available dpf-plugins
-    if [[ -d /usr/lib/lv2/TAL-Vocoder-2.lv2 || -d /usr/lib/vst3/TAL-Vocoder-2.vst3 ]]; then
-        log "[PLUGINS] TAL-Vocoder deployed via DISTRHO Ports packages"
+    local tal_vocoder_path
+    tal_vocoder_path=$(locate_tal_vocoder || true)
+    if [[ -n "$tal_vocoder_path" ]]; then
+        log "[PLUGINS] TAL-Vocoder deployed via DISTRHO Ports packages (${tal_vocoder_path})"
     else
-        log "[WARN] TAL-Vocoder files not detected after DISTRHO Ports install; verify package contents"
-        log "[INFO] Manual download remains available: https://github.com/DISTRHO/DISTRHO-Ports"
+        local distrho_reference
+        distrho_reference=$(locate_distrho_reference_plugin || true)
+        if [[ -n "$distrho_reference" ]]; then
+            log "[INFO] DISTRHO Ports plugins detected (e.g. ${distrho_reference}); TAL-Vocoder is not bundled in this release."
+            log "[INFO] Manual download remains available: https://github.com/DISTRHO/DISTRHO-Ports"
+        else
+            log "[WARN] DISTRHO Ports payload not detected after install; verify package contents"
+            log "[INFO] Manual download remains available: https://github.com/DISTRHO/DISTRHO-Ports"
+        fi
     fi
 
     # Tyrell N6
