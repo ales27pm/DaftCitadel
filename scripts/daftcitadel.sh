@@ -118,6 +118,25 @@ apt_install() {
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@"
 }
 
+apt_install_available() {
+    local pkg
+    local to_install=()
+    local missing=()
+    for pkg in "$@"; do
+        if apt-cache show "$pkg" >/dev/null 2>&1; then
+            to_install+=("$pkg")
+        else
+            missing+=("$pkg")
+        fi
+    done
+    if ((${#to_install[@]})); then
+        apt_install "${to_install[@]}"
+    fi
+    if ((${#missing[@]})); then
+        log "[WARN] Skipping unavailable packages: ${missing[*]}"
+    fi
+}
+
 sysctl_set() {
     local key="$1"
     local value="$2"
@@ -251,7 +270,7 @@ done
 apt-get update -y
 
 log "[AUDIO] Installing PipeWire/JACK and configuring realtime"
-apt_install pipewire pipewire-jack pipewire-pulse wireplumber jackd2 rtirq-init alsa-utils libasound2-plugins ubuntustudio-pipewire-config dbus-user-session pw-top
+apt_install_available pipewire pipewire-jack pipewire-pulse wireplumber jackd2 rtirq-init alsa-utils libasound2-plugins ubuntustudio-pipewire-config dbus-user-session pw-top
 getent group realtime >/dev/null || groupadd -r realtime
 usermod -a -G audio,realtime "$USER_NAME" || log "[WARN] Could not update groups for $USER_NAME"
 mkdir -p /etc/security/limits.d
