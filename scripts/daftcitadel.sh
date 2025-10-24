@@ -446,10 +446,37 @@ if $ENABLE_EXPANDED_SYNTHS; then
 
     # Tyrell N6
     if [[ ! -d /usr/lib/vst3/TyrellN6.vst3 ]]; then
-        dl "https://u-he.com/downloads/TyrellN6/TyrellN6_305_12092_Linux.tar.xz" /tmp/tyrell.tar.xz
-        mkdir -p /usr/lib/vst3
-        tar -xJf /tmp/tyrell.tar.xz -C /usr/lib/vst3/
-        rm -f /tmp/tyrell.tar.xz
+        TYRELL_ARCHIVE="/tmp/tyrell.tar.xz"
+        rm -f "$TYRELL_ARCHIVE"
+        TYRELL_MIRRORS=(
+            "https://u-he.com/downloads/TyrellN6/TyrellN6_307_Linux.tar.xz"
+            "https://u-he.com/downloads/TyrellN6/TyrellN6_306_Linux.tar.xz"
+            "https://u-he.com/downloads/TyrellN6/TyrellN6_305_Linux.tar.xz"
+            "https://uhe-dl.b-cdn.net/TyrellN6_307_Linux.tar.xz"
+            "https://uhe-dl.b-cdn.net/TyrellN6_306_Linux.tar.xz"
+            "https://uhe-dl.b-cdn.net/TyrellN6_305_Linux.tar.xz"
+        )
+        tyrell_installed=false
+        for mirror in "${TYRELL_MIRRORS[@]}"; do
+            if dl "$mirror" "$TYRELL_ARCHIVE"; then
+                if tar -tJf "$TYRELL_ARCHIVE" >/dev/null 2>&1; then
+                    mkdir -p /usr/lib/vst3
+                    tar -xJf "$TYRELL_ARCHIVE" -C /usr/lib/vst3/
+                    tyrell_installed=true
+                    log "[PLUGINS] Installed Tyrell N6 from $mirror"
+                    break
+                else
+                    log "[WARN] Tyrell N6 archive from $mirror is not a valid tarball"
+                fi
+            else
+                log "[WARN] Failed to download Tyrell N6 from $mirror"
+            fi
+            rm -f "$TYRELL_ARCHIVE"
+        done
+        rm -f "$TYRELL_ARCHIVE"
+        if ! $tyrell_installed; then
+            log "[WARN] Tyrell N6 download unavailable; skipping automated install"
+        fi
     fi
 
     # OB-Xd
