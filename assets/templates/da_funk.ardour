@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Session version="7001" name="Daft_da_funk" sample-rate="48000" meter-denominator="4" meter-numerator="4" tempo="128000">
   <Metadata>
-    <Description>Daft Funk template with Vital bass, TAL Vocoder, Surge lead, and Valhalla reverb chain.</Description>
+    <Description>Daft Funk template with Vital bass, TAL Vocoder, Surge lead, and Dragonfly reverb chain.</Description>
   </Metadata>
   <Routes>
     <Route name="Da Funk Drums" default-type="audio" strict-io="1" remote-control-id="1">
@@ -10,7 +10,7 @@
     </Route>
     <Route name="Vital Bass" default-type="audio" remote-control-id="2">
       <Processor id="0" name="Vital" type="vst3"/>
-      <Processor id="1" name="ValhallaSupermassive" type="vst3"/>
+      <Processor id="1" name="Dragonfly Room Reverb" type="lv2"/>
     </Route>
     <Route name="Surge Lead" default-type="audio" remote-control-id="3">
       <Processor id="0" name="Surge XT" type="vst3"/>
