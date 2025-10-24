@@ -666,9 +666,13 @@ fi
 apt_install "${CORE_DAWS[@]}"
 
 if $WITH_REAPER || { [[ $PROFILE != "apex" ]] && confirm "Install Reaper (evaluation) as an additional DAW?"; }; then
-    REAPER_DL=$(curl -Ls -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36" https://www.reaper.fm/download.php \
-        | grep -Eo 'https://www\.reaper\.fm/files/7\.x/reaper[0-9]+_linux_x86_64\.tar\.xz' \
-        | head -n1)
+    REAPER_DL=$(\
+        curl -Ls -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36" https://www.reaper.fm/download.php \
+            | grep -Eo 'https://www\\.reaper\\.fm/files/7\\.x/reaper[0-9]+_linux_x86_64\\.tar\\.xz' \
+            | head -n1 \
+            || true
+    )
+    REAPER_DL="${REAPER_DL:-}"
     if [[ -n "$REAPER_DL" ]]; then
         dl "$REAPER_DL" /tmp/reaper.tar.xz
         mkdir -p /opt/reaper
