@@ -448,23 +448,110 @@ if $ENABLE_EXPANDED_SYNTHS; then
     if [[ ! -d /usr/lib/vst3/TyrellN6.vst3 ]]; then
         TYRELL_ARCHIVE="/tmp/tyrell.tar.xz"
         rm -f "$TYRELL_ARCHIVE"
-        TYRELL_MIRRORS=(
-            "https://u-he.com/downloads/TyrellN6/TyrellN6_307_Linux.tar.xz"
-            "https://u-he.com/downloads/TyrellN6/TyrellN6_306_Linux.tar.xz"
-            "https://u-he.com/downloads/TyrellN6/TyrellN6_305_Linux.tar.xz"
+        TYRELL_DYNAMIC_URL=""
+        TYRELL_PY_AVAILABLE=false
+        if command -v python3 >/dev/null 2>&1; then
+            TYRELL_PY_AVAILABLE=true
+            TYRELL_DYNAMIC_URL=$(python3 <<'PY' 2>/dev/null
+import re
+import sys
+import urllib.request
+
+index_urls = [
+    "https://uhe-dl.b-cdn.net/releases/?C=M;O=D",
+    "https://dl.u-he.com/releases/?C=M;O=D",
+]
+pattern = re.compile(r"href=\"(TyrellN6[^\"']*_Linux\.tar\.xz)\"", re.IGNORECASE)
+
+for index_url in index_urls:
+    try:
+        with urllib.request.urlopen(index_url, timeout=20) as resp:
+            html = resp.read().decode("utf-8", "ignore")
+    except Exception:
+        continue
+    match = pattern.search(html)
+    if match:
+        href = match.group(1)
+        if href.startswith("http"):
+            print(href)
+        else:
+            print("https://uhe-dl.b-cdn.net/releases/" + href.lstrip("/"))
+        sys.exit(0)
+PY
+            )
+        fi
+        TYRELL_MIRRORS=()
+        if [[ -n "$TYRELL_DYNAMIC_URL" ]]; then
+            TYRELL_MIRRORS+=("$TYRELL_DYNAMIC_URL")
+            log "[PLUGINS] Resolved latest Tyrell N6 release: $TYRELL_DYNAMIC_URL"
+        else
+            if $TYRELL_PY_AVAILABLE; then
+                log "[WARN] Unable to auto-discover Tyrell N6 release; falling back to static mirrors"
+            else
+                log "[INFO] python3 unavailable; using static Tyrell N6 mirrors"
+            fi
+        fi
+        TYRELL_MIRRORS+=(
+            "https://uhe-dl.b-cdn.net/releases/TyrellN6_300_public_beta_16976_Linux.tar.xz"
+            "https://dl.u-he.com/releases/TyrellN6_300_public_beta_16976_Linux.tar.xz"
             "https://uhe-dl.b-cdn.net/TyrellN6_307_Linux.tar.xz"
+            "https://u-he.com/downloads/TyrellN6/TyrellN6_307_Linux.tar.xz"
             "https://uhe-dl.b-cdn.net/TyrellN6_306_Linux.tar.xz"
+            "https://u-he.com/downloads/TyrellN6/TyrellN6_306_Linux.tar.xz"
             "https://uhe-dl.b-cdn.net/TyrellN6_305_Linux.tar.xz"
+            "https://u-he.com/downloads/TyrellN6/TyrellN6_305_12092_Linux.tar.xz"
         )
         tyrell_installed=false
         for mirror in "${TYRELL_MIRRORS[@]}"; do
             if dl "$mirror" "$TYRELL_ARCHIVE"; then
                 if tar -tJf "$TYRELL_ARCHIVE" >/dev/null 2>&1; then
-                    mkdir -p /usr/lib/vst3
-                    tar -xJf "$TYRELL_ARCHIVE" -C /usr/lib/vst3/
-                    tyrell_installed=true
-                    log "[PLUGINS] Installed Tyrell N6 from $mirror"
-                    break
+                    TYRELL_WORKDIR=$(mktemp -d /tmp/tyrell.XXXXXX)
+                    if tar -xJf "$TYRELL_ARCHIVE" -C "$TYRELL_WORKDIR" >/dev/null 2>&1; then
+                        TYRELL_SRC=$(find "$TYRELL_WORKDIR" -maxdepth 2 -type d -name 'TyrellN6' | head -n 1)
+                        if [[ -n "$TYRELL_SRC" && -f "$TYRELL_SRC/TyrellN6.64.so" ]]; then
+                            install -d -m 755 /opt/u-he
+                            rm -rf /opt/u-he/TyrellN6
+                            cp -a "$TYRELL_SRC" /opt/u-he/TyrellN6
+                            chown -R root:root /opt/u-he/TyrellN6
+
+                            install -d -m 755 /usr/lib/vst
+                            install -m 755 "$TYRELL_SRC/TyrellN6.64.so" /usr/lib/vst/TyrellN6.64.so
+
+                            install -d -m 755 /usr/lib/vst3/TyrellN6.vst3/Contents/x86_64-linux
+                            install -m 755 "$TYRELL_SRC/TyrellN6.64.so" /usr/lib/vst3/TyrellN6.vst3/Contents/x86_64-linux/TyrellN6.so
+                            install -d -m 755 /usr/lib/vst3/TyrellN6.vst3/Contents/Resources/Documentation
+
+                            TYRELL_DOC=$(find "$TYRELL_SRC" -maxdepth 1 -type f -name '*user guide.pdf' | head -n 1)
+                            if [[ -n "$TYRELL_DOC" ]]; then
+                                install -m 644 "$TYRELL_DOC" \
+                                    "/usr/lib/vst3/TyrellN6.vst3/Contents/Resources/Documentation/$(basename "$TYRELL_DOC")"
+                            fi
+                            TYRELL_LICENSE=$(find "$TYRELL_SRC" -maxdepth 1 -type f -name 'license.txt' | head -n 1)
+                            if [[ -n "$TYRELL_LICENSE" ]]; then
+                                install -m 644 "$TYRELL_LICENSE" \
+                                    "/usr/lib/vst3/TyrellN6.vst3/Contents/Resources/Documentation/$(basename "$TYRELL_LICENSE")"
+                            fi
+
+                            install -d -m 755 /usr/lib/clap
+                            install -m 755 "$TYRELL_SRC/TyrellN6.64.so" /usr/lib/clap/TyrellN6.clap
+
+                            as_user "mkdir -p ~/.u-he ~/.vst ~/.vst3 ~/.clap"
+                            as_user "ln -snf /opt/u-he/TyrellN6 ~/.u-he/TyrellN6"
+                            as_user "ln -snf /usr/lib/vst/TyrellN6.64.so ~/.vst/TyrellN6.64.so"
+                            as_user "ln -snf /usr/lib/vst3/TyrellN6.vst3 ~/.vst3/TyrellN6.vst3"
+                            as_user "ln -snf /usr/lib/clap/TyrellN6.clap ~/.clap/TyrellN6.clap"
+
+                            tyrell_installed=true
+                            log "[PLUGINS] Installed Tyrell N6 from $mirror"
+                            rm -rf "$TYRELL_WORKDIR"
+                            break
+                        else
+                            log "[WARN] Tyrell N6 payload from $mirror missing expected content"
+                        fi
+                    else
+                        log "[WARN] Unable to extract Tyrell N6 archive from $mirror"
+                    fi
+                    rm -rf "${TYRELL_WORKDIR:-}"
                 else
                     log "[WARN] Tyrell N6 archive from $mirror is not a valid tarball"
                 fi
