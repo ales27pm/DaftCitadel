@@ -395,6 +395,32 @@ const audioEngineModule = {
   __state: audioEngineState,
 };
 
+type LoggerEntry = {
+  level: string;
+  message: string;
+  metadata?: Record<string, unknown>;
+};
+
+type MockLoggerModule = {
+  logWithLevel: jest.Mock<void, [string, string, Record<string, unknown>?]>;
+  __getLogs: () => LoggerEntry[];
+  __clearLogs: () => void;
+};
+
+const loggerEntries: LoggerEntry[] = [];
+
+const createLoggerModule = (): MockLoggerModule => ({
+  logWithLevel: jest.fn((level: string, message: string, metadata?: Record<string, unknown>) => {
+    loggerEntries.push({ level, message, metadata });
+  }),
+  __getLogs: () => [...loggerEntries],
+  __clearLogs: () => {
+    loggerEntries.splice(0, loggerEntries.length);
+  },
+});
+
+const loggerModule = createLoggerModule();
+
 const pluginHostEmitter = new MockNativeEventEmitter();
 
 const pluginHostModule = {
@@ -477,6 +503,7 @@ export const NativeModules: Record<string, unknown> = {
     getSessionDirectory: async () => '/tmp/daft-citadel',
     getDirectories: async () => ({ sessionDirectory: '/tmp/daft-citadel' }),
   },
+  DaftCitadelLogger: loggerModule,
 };
 
 export class NativeEventEmitter extends MockNativeEventEmitter {
@@ -529,7 +556,7 @@ export const TurboModuleRegistry = {
   getEnforcing: <T>(name: string): T => NativeModules[name] as T,
 };
 
-export const Platform = {
+export const Platform: { OS: 'ios' | 'android' | 'macos'; Version: number } = {
   OS: 'ios',
   Version: 17,
 };
@@ -556,3 +583,4 @@ export const __mockBeginObserving = beginObservingMock;
 export const __mockEndObserving = endObservingMock;
 export const __mockSetPollingInterval = setPollingIntervalMock;
 export const __mockAudioEngineState = audioEngineState;
+export const __mockLogger = loggerModule;
