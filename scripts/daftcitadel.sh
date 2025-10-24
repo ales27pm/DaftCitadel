@@ -368,7 +368,7 @@ if $ENABLE_EXPANDED_SYNTHS; then
     # Vital
     # Vital distributes binaries under an EULA; curated hash from nixpkgs ensures tamper detection.
     VITAL_URL="https://builds.vital.audio/VitalAudio/vital/1_5_5/VitalInstaller.zip"
-    VITAL_SHA256="842c17494881074629435a0de9a74ba6bc00a1e97a7fbdad046e5f11beb53822"
+    VITAL_SHA256="68f3c7e845f3d7a5b44a83adeb6e34ef221503df00e7964f7d5a1f132a252d13"
     download_and_verify "$VITAL_URL" /tmp/vital.zip "$VITAL_SHA256"
     unzip -o /tmp/vital.zip -d /tmp/vital
     /tmp/vital/install.sh --no-register || true
