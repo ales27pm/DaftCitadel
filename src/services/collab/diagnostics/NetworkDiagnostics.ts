@@ -1,6 +1,8 @@
 import { EventEmitter } from 'events';
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 
+import { getAndroidApiLevel } from '../../platform/android';
+
 type NullableNumber = number | null | undefined;
 
 export type NetworkQualityCategory = 'excellent' | 'good' | 'degraded' | 'unusable';
@@ -211,21 +213,6 @@ export function createNetworkDiagnostics(): NetworkDiagnostics {
 }
 
 const ANDROID_API_LEVEL_NEARBY_WIFI_DEVICES = 33;
-
-function getAndroidApiLevel(): number | undefined {
-  const version = Platform.Version;
-
-  if (typeof version === 'number') {
-    return Number.isFinite(version) ? version : undefined;
-  }
-
-  if (typeof version === 'string') {
-    const parsed = Number.parseInt(version, 10);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-
-  return undefined;
-}
 
 export function requiresLocationPermission(): boolean {
   if (Platform.OS !== 'android') {

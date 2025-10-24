@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 
 import { requiresLocationPermission } from '../NetworkDiagnostics';
+import { resetAndroidApiLevelCacheForTesting } from '../../../platform/android';
 
 describe('requiresLocationPermission', () => {
   const originalPlatform = { ...Platform };
@@ -8,6 +9,7 @@ describe('requiresLocationPermission', () => {
   afterEach(() => {
     Platform.OS = originalPlatform.OS;
     Platform.Version = originalPlatform.Version;
+    resetAndroidApiLevelCacheForTesting();
   });
 
   it('returns false for non-Android platforms', () => {
@@ -32,6 +34,13 @@ describe('requiresLocationPermission', () => {
   it('falls back to requesting location permission when API level is unknown', () => {
     Platform.OS = 'android';
     Platform.Version = Number.NaN;
+
+    expect(requiresLocationPermission()).toBe(true);
+  });
+
+  it('falls back to requesting location permission when Platform.Version is non-numeric', () => {
+    Platform.OS = 'android';
+    Platform.Version = 'unknown';
 
     expect(requiresLocationPermission()).toBe(true);
   });
