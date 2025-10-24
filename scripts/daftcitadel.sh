@@ -945,10 +945,14 @@ if $ENABLE_EXPANDED_SYNTHS; then
     fi
     rm -rf /tmp/vital /tmp/vital.zip
 
-    # TAL-Vocoder via DISTRHO Ports (manual install recommended)
-    if [[ ! -d /usr/lib/lv2/TAL-Vocoder-2.lv2 ]]; then
-        log "[INFO] TAL-Vocoder Linux builds are available from DISTRHO Ports"
-        log "[INFO] Download latest TAL Ports bundle: https://github.com/DISTRHO/DISTRHO-Ports"
+    # TAL-Vocoder via DISTRHO Ports (Ubuntu-packaged build)
+    log "[PLUGINS] Installing DISTRHO Ports collection for TAL instruments"
+    apt_install_available dpf-plugins
+    if [[ -d /usr/lib/lv2/TAL-Vocoder-2.lv2 || -d /usr/lib/vst3/TAL-Vocoder-2.vst3 ]]; then
+        log "[PLUGINS] TAL-Vocoder deployed via DISTRHO Ports packages"
+    else
+        log "[WARN] TAL-Vocoder files not detected after DISTRHO Ports install; verify package contents"
+        log "[INFO] Manual download remains available: https://github.com/DISTRHO/DISTRHO-Ports"
     fi
 
     # Tyrell N6
