@@ -1119,7 +1119,22 @@ if $ENABLE_GUI; then
     as_user "python3 -m venv '$VENV'"
     as_user "source '$VENV/bin/activate' && pip install --upgrade pip"
     if $ENABLE_AI; then
-        as_user "source '$VENV/bin/activate' && pip install torch==2.2.1 --extra-index-url https://download.pytorch.org/whl/cu121"
+        TORCH_VERSION="2.4.1+cu121"
+        TORCH_INDEX="https://download.pytorch.org/whl/cu121"
+        TORCH_VARIANT="CUDA 12.1"
+        if $GPU_OFF || $CONTAINER_MODE; then
+            TORCH_VERSION="2.4.1+cpu"
+            TORCH_INDEX="https://download.pytorch.org/whl/cpu"
+            TORCH_VARIANT="CPU"
+        fi
+        log "[AI] Installing PyTorch $TORCH_VERSION ($TORCH_VARIANT build)"
+        if ! as_user "source '$VENV/bin/activate' && pip install --index-url '$TORCH_INDEX' torch==$TORCH_VERSION"; then
+            log "[WARN] PyTorch $TORCH_VERSION unavailable from $TORCH_INDEX; attempting auto-resolve"
+            if ! as_user "source '$VENV/bin/activate' && pip install --index-url '$TORCH_INDEX' torch"; then
+                log "[ERR] Unable to install a compatible PyTorch build"
+                exit 1
+            fi
+        fi
     else
         log "[AI] Skipping Torch deployment for $PROFILE profile"
     fi
