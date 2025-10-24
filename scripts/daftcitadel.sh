@@ -141,7 +141,20 @@ as_user() {
 }
 
 log() {
-    echo "$1" | tee -a "$LOG"
+    local message="$1"
+    printf '%s\n' "$message"
+    if [[ -n "${LOG:-}" ]]; then
+        printf '%s\n' "$message" >>"$LOG"
+    fi
+}
+
+sanitize_filename_component() {
+    local input="$1"
+    if [[ -z "$input" ]]; then
+        echo ""
+        return
+    fi
+    echo "$input" | tr -c 'A-Za-z0-9._-' '_'
 }
 
 sanitize_filename_component() {
