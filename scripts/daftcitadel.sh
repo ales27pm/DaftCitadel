@@ -180,6 +180,30 @@ download_and_verify() {
     verify_sha256 "$dest" "$sha"
 }
 
+json_get_field() {
+    local file="$1"
+    local path="$2"
+    python3 - "$file" "$path" <<'PY'
+import json
+import sys
+
+file_path, key_path = sys.argv[1:3]
+try:
+    with open(file_path, 'r', encoding='utf-8') as handle:
+        data = json.load(handle)
+    for key in key_path.split('.'):
+        if isinstance(data, dict):
+            data = data.get(key)
+        else:
+            data = None
+            break
+    if data is not None:
+        print(data)
+except Exception:
+    pass
+PY
+}
+
 extract_zip_as_user() {
     local archive="$1"
     local dest="$2"
@@ -567,10 +591,65 @@ PY
     fi
 
     # OB-Xd
-    if [[ ! -d /usr/lib/vst3/OB-Xd.vst3 ]]; then
-        dl "https://github.com/reales/OB-Xd/releases/download/v2.11/OB-Xd-2.11-Linux.tar.gz" /tmp/obxd.tar.gz
-        tar -xzf /tmp/obxd.tar.gz -C /usr/lib/vst3/
-        rm -f /tmp/obxd.tar.gz
+    obxd_target_version="2.17.0"
+    obxd_current_version=""
+    if [[ -f /usr/lib/vst3/OB-Xd.vst3/Contents/Resources/moduleinfo.json ]]; then
+        obxd_current_version=$(json_get_field \
+            /usr/lib/vst3/OB-Xd.vst3/Contents/Resources/moduleinfo.json \
+            "Version")
+    fi
+
+    if [[ "$obxd_current_version" != "$obxd_target_version" ]]; then
+        OBXD_ARCHIVE=$(mktemp -t obxd.XXXXXX.zip)
+        OBXD_WORKDIR=$(mktemp -d -t obxd.XXXXXX)
+        download_and_verify \
+            "https://github.com/reales/OB-Xd/releases/download/2.17/Obxd217FreeLinux.zip" \
+            "$OBXD_ARCHIVE" \
+            "c70c01aba78c499e67ccfa1916204a4ddcff9982ec17ca33a95e5ed605cc9472"
+        if unzip -q "$OBXD_ARCHIVE" -d "$OBXD_WORKDIR"; then
+            if [[ -d "$OBXD_WORKDIR/OB-Xd.vst3" && -f "$OBXD_WORKDIR/OB-Xd.so" ]]; then
+                install -d -m 755 /usr/lib/vst3
+                rm -rf /usr/lib/vst3/OB-Xd.vst3
+                cp -a "$OBXD_WORKDIR/OB-Xd.vst3" /usr/lib/vst3/
+                chmod -R go-w /usr/lib/vst3/OB-Xd.vst3
+
+                install -d -m 755 /usr/lib/vst
+                install -m 755 "$OBXD_WORKDIR/OB-Xd.so" /usr/lib/vst/OB-Xd.so
+
+                install -d -m 755 /opt/discoDSP
+                rm -rf /opt/discoDSP/OB-Xd
+                if [[ -d "$OBXD_WORKDIR/discoDSP/OB-Xd" ]]; then
+                    cp -a "$OBXD_WORKDIR/discoDSP/OB-Xd" /opt/discoDSP/
+                    chmod -R go-w /opt/discoDSP/OB-Xd
+                fi
+
+                install -d -m 755 /usr/share/doc/obxd
+                if [[ -f "$OBXD_WORKDIR/OB-Xd Manual.pdf" ]]; then
+                    install -m 644 "$OBXD_WORKDIR/OB-Xd Manual.pdf" \
+                        "/usr/share/doc/obxd/OB-Xd Manual.pdf"
+                fi
+                if [[ -f "$OBXD_WORKDIR/License.txt" ]]; then
+                    install -m 644 "$OBXD_WORKDIR/License.txt" \
+                        /usr/share/doc/obxd/License.txt
+                fi
+
+                as_user "mkdir -p ~/.vst ~/.vst3 ~/Documents ~/Documents/discoDSP"
+                as_user "ln -snf /usr/lib/vst/OB-Xd.so ~/.vst/OB-Xd.so"
+                as_user "ln -snf /usr/lib/vst3/OB-Xd.vst3 ~/.vst3/OB-Xd.vst3"
+                if [[ -d /opt/discoDSP/OB-Xd ]]; then
+                    as_user "ln -snf /opt/discoDSP/OB-Xd ~/Documents/discoDSP/OB-Xd"
+                fi
+
+                obxd_current_version="$obxd_target_version"
+                log "[PLUGINS] Installed OB-Xd Legacy $obxd_target_version"
+            else
+                log "[WARN] OB-Xd payload missing expected plugin binaries"
+            fi
+        else
+            log "[WARN] Failed to extract OB-Xd archive"
+        fi
+        rm -f "${OBXD_ARCHIVE:-}"
+        rm -rf "${OBXD_WORKDIR:-}"
     fi
 
     # Valhalla Supermassive
