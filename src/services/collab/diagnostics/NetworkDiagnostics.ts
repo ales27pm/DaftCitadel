@@ -210,6 +210,33 @@ export function createNetworkDiagnostics(): NetworkDiagnostics {
   return new DefaultNetworkDiagnostics(nativeModule);
 }
 
+const ANDROID_API_LEVEL_NEARBY_WIFI_DEVICES = 33;
+
+function getAndroidApiLevel(): number | undefined {
+  const version = Platform.Version;
+
+  if (typeof version === 'number') {
+    return Number.isFinite(version) ? version : undefined;
+  }
+
+  if (typeof version === 'string') {
+    const parsed = Number.parseInt(version, 10);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  return undefined;
+}
+
 export function requiresLocationPermission(): boolean {
-  return Platform.OS === 'android';
+  if (Platform.OS !== 'android') {
+    return false;
+  }
+
+  const apiLevel = getAndroidApiLevel();
+
+  if (typeof apiLevel !== 'number') {
+    return true;
+  }
+
+  return apiLevel < ANDROID_API_LEVEL_NEARBY_WIFI_DEVICES;
 }
