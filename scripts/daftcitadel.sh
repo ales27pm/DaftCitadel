@@ -210,32 +210,32 @@ search_first_match() {
 
 locate_tal_vocoder() {
     local path
-    path=$(search_first_match d 'TAL-Vocoder-2.lv2' /usr/lib/lv2 /usr/local/lib/lv2)
+    path=$(search_first_match d 'TAL-Vocoder-2.lv2' /usr/lib/lv2 /usr/local/lib/lv2 || true)
     if [[ -n "$path" ]]; then
         printf '%s\n' "$path"
         return 0
     fi
-    path=$(search_first_match d 'tal-vocoder-2.lv2' /usr/lib/lv2 /usr/local/lib/lv2)
+    path=$(search_first_match d 'tal-vocoder-2.lv2' /usr/lib/lv2 /usr/local/lib/lv2 || true)
     if [[ -n "$path" ]]; then
         printf '%s\n' "$path"
         return 0
     fi
-    path=$(search_first_match d 'TAL-Vocoder*.vst3' /usr/lib/vst3 /usr/local/lib/vst3)
+    path=$(search_first_match d 'TAL-Vocoder*.vst3' /usr/lib/vst3 /usr/local/lib/vst3 || true)
     if [[ -n "$path" ]]; then
         printf '%s\n' "$path"
         return 0
     fi
-    path=$(search_first_match d 'tal-vocoder*.vst3' /usr/lib/vst3 /usr/local/lib/vst3)
+    path=$(search_first_match d 'tal-vocoder*.vst3' /usr/lib/vst3 /usr/local/lib/vst3 || true)
     if [[ -n "$path" ]]; then
         printf '%s\n' "$path"
         return 0
     fi
-    path=$(search_first_match f 'TAL-Vocoder*.clap' /usr/lib/clap /usr/local/lib/clap)
+    path=$(search_first_match f 'TAL-Vocoder*.clap' /usr/lib/clap /usr/local/lib/clap || true)
     if [[ -n "$path" ]]; then
         printf '%s\n' "$path"
         return 0
     fi
-    path=$(search_first_match f 'tal-vocoder*.clap' /usr/lib/clap /usr/local/lib/clap)
+    path=$(search_first_match f 'tal-vocoder*.clap' /usr/lib/clap /usr/local/lib/clap || true)
     if [[ -n "$path" ]]; then
         printf '%s\n' "$path"
         return 0
@@ -260,17 +260,17 @@ locate_distrho_reference_plugin() {
     local name
     local path
     for name in "${names[@]}"; do
-        path=$(search_first_match d "${name}.lv2" /usr/lib/lv2 /usr/local/lib/lv2)
+        path=$(search_first_match d "${name}.lv2" /usr/lib/lv2 /usr/local/lib/lv2 || true)
         if [[ -n "$path" ]]; then
             printf '%s\n' "$path"
             return 0
         fi
-        path=$(search_first_match d "${name}.vst3" /usr/lib/vst3 /usr/local/lib/vst3)
+        path=$(search_first_match d "${name}.vst3" /usr/lib/vst3 /usr/local/lib/vst3 || true)
         if [[ -n "$path" ]]; then
             printf '%s\n' "$path"
             return 0
         fi
-        path=$(search_first_match f "${name}.clap" /usr/lib/clap /usr/local/lib/clap)
+        path=$(search_first_match f "${name}.clap" /usr/lib/clap /usr/local/lib/clap || true)
         if [[ -n "$path" ]]; then
             printf '%s\n' "$path"
             return 0
