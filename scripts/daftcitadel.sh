@@ -11,9 +11,14 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ASSETS_DIR="$SCRIPT_DIR/../assets"
+DEPS_DIR="$SCRIPT_DIR/../deps"
 if [[ ! -d "$ASSETS_DIR" ]]; then
     echo "[ERR] Assets directory not found at $ASSETS_DIR" >&2
     exit 1
+fi
+
+if [[ ! -d "$DEPS_DIR" ]]; then
+    mkdir -p "$DEPS_DIR"
 fi
 
 PROFILE="citadel"
@@ -136,7 +141,20 @@ as_user() {
 }
 
 log() {
-    echo "$1" | tee -a "$LOG"
+    local message="$1"
+    printf '%s\n' "$message"
+    if [[ -n "${LOG:-}" ]]; then
+        printf '%s\n' "$message" >>"$LOG"
+    fi
+}
+
+sanitize_filename_component() {
+    local input="$1"
+    if [[ -z "$input" ]]; then
+        echo ""
+        return
+    fi
+    echo "$input" | tr -c 'A-Za-z0-9._-' '_'
 }
 
 apt_install() {
@@ -199,12 +217,40 @@ optional_dl() {
     fi
 }
 
+CHECK_SHA256_MATCH_INDEX=-1
+CHECK_SHA256_ACTUAL=""
+
+check_sha256() {
+    local file="$1"
+    shift
+    local actual
+    local expected
+    local index=0
+
+    if (($# == 0)); then
+        return 2
+    fi
+
+    actual=$(sha256sum "$file" | awk '{print $1}')
+    for expected in "$@"; do
+        expected="${expected,,}"
+        if [[ -n "$expected" && "$actual" == "$expected" ]]; then
+            CHECK_SHA256_MATCH_INDEX=$index
+            CHECK_SHA256_ACTUAL="$actual"
+            return 0
+        fi
+        ((index++))
+    done
+
+    CHECK_SHA256_MATCH_INDEX=-1
+    CHECK_SHA256_ACTUAL="$actual"
+    return 1
+}
+
 verify_sha256() {
     local file="$1"
     shift
     local expected_hashes=()
-    local actual
-    local index=0
 
     if (($# == 0)); then
         log "[ERR] No expected checksums provided for $file"
@@ -215,35 +261,20 @@ verify_sha256() {
         expected_hashes+=("${expected,,}")
     done
 
-    actual=$(sha256sum "$file" | awk '{print $1}')
-    for expected in "${expected_hashes[@]}"; do
-        if [[ -n "$expected" && "$actual" == "$expected" ]]; then
-            if (( index == 0 )); then
-                log "[CHECK] Verified $file"
-            else
-                log "[CHECK] Verified $file (matched alternate checksum #$((index + 1)))"
-            fi
-            return 0
+    if check_sha256 "$file" "${expected_hashes[@]}"; then
+        local match_index=${CHECK_SHA256_MATCH_INDEX:-0}
+        if (( match_index == 0 )); then
+            log "[CHECK] Verified $file"
+        else
+            log "[CHECK] Verified $file (matched alternate checksum #$((match_index + 1)))"
         fi
-        ((index++))
-    done
+        return 0
+    fi
 
     log "[ERR] SHA256 mismatch for $file"
     log "[ERR] Expected one of: ${expected_hashes[*]}"
-    log "[ERR] Actual:   $actual"
+    log "[ERR] Actual:   ${CHECK_SHA256_ACTUAL:-unknown}"
     exit 1
-}
-
-download_and_verify() {
-    local url="$1"
-    local dest="$2"
-    shift 2
-    if (($# == 0)); then
-        log "[ERR] Missing checksum metadata for $url"
-        exit 1
-    fi
-    dl "$url" "$dest"
-    verify_sha256 "$dest" "$@"
 }
 
 verify_md5() {
@@ -260,10 +291,51 @@ verify_md5() {
     log "[CHECK] Verified MD5 for $file"
 }
 
+check_md5() {
+    local file="$1"
+    local expected="$2"
+    local actual
+    actual=$(md5sum "$file" | awk '{print $1}')
+    if [[ "$actual" == "${expected,,}" ]]; then
+        return 0
+    fi
+    return 1
+}
+
+download_and_verify() {
+    local url="$1"
+    local dest="$2"
+    shift 2
+    if (($# == 0)); then
+        log "[ERR] Missing checksum metadata for $url"
+        exit 1
+    fi
+    if [[ -f "$dest" ]]; then
+        if check_sha256 "$dest" "$@"; then
+            log "[CACHE] Using cached $(basename "$dest")"
+            verify_sha256 "$dest" "$@"
+            return 0
+        fi
+        log "[WARN] Cached archive $(basename "$dest") failed checksum verification; re-downloading"
+        rm -f "$dest"
+    fi
+    dl "$url" "$dest"
+    verify_sha256 "$dest" "$@"
+}
+
 download_and_verify_md5() {
     local url="$1"
     local dest="$2"
     local md5="$3"
+    if [[ -f "$dest" ]]; then
+        if check_md5 "$dest" "$md5"; then
+            log "[CACHE] Using cached $(basename "$dest")"
+            verify_md5 "$dest" "$md5"
+            return 0
+        fi
+        log "[WARN] Cached archive $(basename "$dest") failed checksum verification; re-downloading"
+        rm -f "$dest"
+    fi
     dl "$url" "$dest"
     verify_md5 "$dest" "$md5"
 }
@@ -749,16 +821,19 @@ declare -A VITAL_KNOWN_SHAS=(
 
 VITAL_DEFAULT_VERSION="1.5.5"
 
-SURGE_DEB_PATH="/tmp/surge.deb"
 surge_installed=false
+SURGE_ARCHIVE_PATH=""
+surge_version_selected=""
 if command -v python3 >/dev/null 2>&1; then
     if SURGE_DYNAMIC_OUTPUT=$(resolve_latest_surge_release 2>/dev/null); then
         eval "$SURGE_DYNAMIC_OUTPUT"
         if [[ -n "${SURGE_DYNAMIC_URL:-}" && -n "${SURGE_DYNAMIC_MD5:-}" ]]; then
             log "[PLUGINS] Resolved Surge XT ${SURGE_DYNAMIC_VERSION:-latest} from GitHub release metadata"
-            if download_and_verify_md5 "$SURGE_DYNAMIC_URL" "$SURGE_DEB_PATH" "$SURGE_DYNAMIC_MD5"; then
-                apt-get install -y "$SURGE_DEB_PATH" || apt-get -f install -y
-                rm -f "$SURGE_DEB_PATH"
+            surge_version_selected="${SURGE_DYNAMIC_VERSION:-latest}"
+            surge_filename="surge-xt-$(sanitize_filename_component "${surge_version_selected:-latest}").deb"
+            SURGE_ARCHIVE_PATH="$DEPS_DIR/${surge_filename:-surge-xt-latest.deb}"
+            if download_and_verify_md5 "$SURGE_DYNAMIC_URL" "$SURGE_ARCHIVE_PATH" "$SURGE_DYNAMIC_MD5"; then
+                apt-get install -y "$SURGE_ARCHIVE_PATH" || apt-get -f install -y
                 surge_installed=true
             fi
         else
@@ -772,9 +847,11 @@ if ! $surge_installed; then
     SURGE_URL="https://github.com/surge-synthesizer/releases-xt/releases/download/1.3.4/surge-xt-linux-x64-1.3.4.deb"
     SURGE_SHA256="a6e55064487f624147d515b9ae5fc79a568b69746675b2083abde628ca7bb151"
     log "[PLUGINS] Installing Surge XT 1.3.4 from pinned release asset"
-    download_and_verify "$SURGE_URL" "$SURGE_DEB_PATH" "$SURGE_SHA256"
-    apt-get install -y "$SURGE_DEB_PATH" || apt-get -f install -y
-    rm -f "$SURGE_DEB_PATH"
+    surge_version_selected="${surge_version_selected:-1.3.4}"
+    surge_filename="surge-xt-$(sanitize_filename_component "${surge_version_selected:-1.3.4}").deb"
+    SURGE_ARCHIVE_PATH="$DEPS_DIR/${surge_filename:-surge-xt-1.3.4.deb}"
+    download_and_verify "$SURGE_URL" "$SURGE_ARCHIVE_PATH" "$SURGE_SHA256"
+    apt-get install -y "$SURGE_ARCHIVE_PATH" || apt-get -f install -y
 fi
 
 HELM_URL=""
@@ -801,9 +878,11 @@ if [[ -z "${HELM_URL:-}" ]]; then
     HELM_VERSION_DISPLAY="0.9.0"
 fi
 log "[PLUGINS] Installing Helm ${HELM_VERSION_DISPLAY:-0.9.0}"
-download_and_verify "$HELM_URL" /tmp/helm.deb "$HELM_SHA256"
-apt-get install -y /tmp/helm.deb || apt-get -f install -y
-rm -f /tmp/helm.deb
+helm_version_for_name="${HELM_VERSION_DISPLAY:-0.9.0}"
+helm_filename="helm-$(sanitize_filename_component "$helm_version_for_name").deb"
+HELM_ARCHIVE_PATH="$DEPS_DIR/${helm_filename:-helm.deb}"
+download_and_verify "$HELM_URL" "$HELM_ARCHIVE_PATH" "$HELM_SHA256"
+apt-get install -y "$HELM_ARCHIVE_PATH" || apt-get -f install -y
 
 if $ENABLE_EXPANDED_SYNTHS; then
     # Vital
@@ -884,9 +963,40 @@ if $ENABLE_EXPANDED_SYNTHS; then
         exit 1
     fi
     log "[PLUGINS] Installing Vital ${VITAL_VERSION_DISPLAY:-1.5.x}"
-    download_and_verify "$VITAL_URL" /tmp/vital.zip "${VITAL_CHECKSUM_CANDIDATES[@]}"
-    unzip -o /tmp/vital.zip -d /tmp/vital
-    VITAL_ROOT="/tmp/vital"
+    vital_version_for_name="${VITAL_VERSION_DISPLAY:-$VITAL_DEFAULT_VERSION}"
+    vital_sanitized_version=$(sanitize_filename_component "$vital_version_for_name")
+    VITAL_ARCHIVE_CANDIDATES=()
+    if [[ -n "$vital_sanitized_version" ]]; then
+        VITAL_ARCHIVE_CANDIDATES+=("VitalInstaller_${vital_sanitized_version}.zip")
+        VITAL_ARCHIVE_CANDIDATES+=("Vital_${vital_sanitized_version}.zip")
+    fi
+    VITAL_ARCHIVE_CANDIDATES+=("VitalInstaller.zip")
+    VITAL_ARCHIVE_CANDIDATES+=("Vital.zip")
+    VITAL_ARCHIVE_PATH=""
+    for candidate_name in "${VITAL_ARCHIVE_CANDIDATES[@]}"; do
+        cached_path="$DEPS_DIR/$candidate_name"
+        if [[ -f "$cached_path" ]]; then
+            if check_sha256 "$cached_path" "${VITAL_CHECKSUM_CANDIDATES[@]}"; then
+                log "[CACHE] Using cached Vital archive $candidate_name"
+                verify_sha256 "$cached_path" "${VITAL_CHECKSUM_CANDIDATES[@]}"
+                VITAL_ARCHIVE_PATH="$cached_path"
+                break
+            fi
+            log "[WARN] Cached Vital archive $candidate_name failed checksum verification; removing"
+            rm -f "$cached_path"
+        fi
+    done
+    if [[ -z "$VITAL_ARCHIVE_PATH" ]]; then
+        VITAL_ARCHIVE_PRIMARY_NAME="${VITAL_ARCHIVE_CANDIDATES[0]}"
+        if [[ -z "$VITAL_ARCHIVE_PRIMARY_NAME" ]]; then
+            VITAL_ARCHIVE_PRIMARY_NAME="VitalInstaller.zip"
+        fi
+        VITAL_ARCHIVE_PATH="$DEPS_DIR/$VITAL_ARCHIVE_PRIMARY_NAME"
+        download_and_verify "$VITAL_URL" "$VITAL_ARCHIVE_PATH" "${VITAL_CHECKSUM_CANDIDATES[@]}"
+    fi
+    VITAL_WORKDIR=$(mktemp -d /tmp/vital.XXXXXX)
+    unzip -o "$VITAL_ARCHIVE_PATH" -d "$VITAL_WORKDIR"
+    VITAL_ROOT="$VITAL_WORKDIR"
     VITAL_INSTALL_SCRIPT=""
     for candidate in \
         "$VITAL_ROOT/install.sh" \
@@ -943,7 +1053,7 @@ if $ENABLE_EXPANDED_SYNTHS; then
             log "[WARN] Vital payload layout changed; skipping manual install"
         fi
     fi
-    rm -rf /tmp/vital /tmp/vital.zip
+    rm -rf "$VITAL_WORKDIR"
 
     # TAL-Vocoder via DISTRHO Ports (Ubuntu-packaged build)
     log "[PLUGINS] Installing DISTRHO Ports collection for TAL instruments"
