@@ -185,6 +185,20 @@ dl() {
         "$url" -o "$dest"
 }
 
+optional_dl() {
+    local url="$1"
+    local dest="$2"
+    local label="${3:-$url}"
+    if dl "$url" "$dest"; then
+        return 0
+    else
+        local status=$?
+        rm -f "$dest"
+        log "[WARN] Optional download failed for $label (exit $status); continuing without it"
+        return 0
+    fi
+}
+
 verify_sha256() {
     local file="$1"
     shift
@@ -699,11 +713,15 @@ if $WITH_REAPER || { [[ $PROFILE != "apex" ]] && confirm "Install Reaper (evalua
     )
     REAPER_DL="${REAPER_DL:-}"
     if [[ -n "$REAPER_DL" ]]; then
-        dl "$REAPER_DL" /tmp/reaper.tar.xz
-        mkdir -p /opt/reaper
-        tar -xJf /tmp/reaper.tar.xz --strip-components=1 -C /opt/reaper
-        ln -sf /opt/reaper/reaper /usr/local/bin/reaper
-        rm -f /tmp/reaper.tar.xz
+        optional_dl "$REAPER_DL" /tmp/reaper.tar.xz "REAPER Linux archive"
+        if [[ -f /tmp/reaper.tar.xz ]]; then
+            mkdir -p /opt/reaper
+            tar -xJf /tmp/reaper.tar.xz --strip-components=1 -C /opt/reaper
+            ln -sf /opt/reaper/reaper /usr/local/bin/reaper
+            rm -f /tmp/reaper.tar.xz
+        else
+            log "[WARN] Skipping REAPER install; archive unavailable"
+        fi
     else
         log "[WARN] Could not resolve REAPER Linux URL from download page"
     fi
@@ -1087,37 +1105,71 @@ as_user "mkdir -p '$BASE'/Presets/Vital '$BASE'/Presets/Surge '$BASE'/Presets/Da
 if $ENABLE_HEAVY_ASSETS && ((${#SELECTED_SAMPLE_PACKS[@]})); then
     if $ENABLE_EXPANDED_SYNTHS && pack_selected "vital-daft"; then
         log "[INFO] Vital factory content ships with the installer; skipping external preset mirror"
-        dl "https://www.syntorial.com/downloads/presets/daft-punk-da-funk-lead.vital" "$BASE/Presets/Daft/da_funk_lead.vital"
-        dl "https://www.syntorial.com/downloads/presets/daft-punk-derezzed-lead.vital" "$BASE/Presets/Daft/derezzed_lead.vital"
+        if [[ ! -f "$BASE/Presets/Daft/da_funk_lead.vital" ]]; then
+            optional_dl \
+                "https://www.syntorial.com/downloads/presets/daft-punk-da-funk-lead.vital" \
+                "$BASE/Presets/Daft/da_funk_lead.vital" \
+                "Da Funk Vital preset"
+        fi
+        if [[ ! -f "$BASE/Presets/Daft/derezzed_lead.vital" ]]; then
+            optional_dl \
+                "https://www.syntorial.com/downloads/presets/daft-punk-derezzed-lead.vital" \
+                "$BASE/Presets/Daft/derezzed_lead.vital" \
+                "Derezzed Vital preset"
+        fi
         if [[ ! -f "$BASE/Presets/Daft/around_the_world.vitalbank" ]]; then
-            dl "https://static.synthctrl.com/presets/Daft-Punk-Around-The-World.vitalbank" "$BASE/Presets/Daft/around_the_world.vitalbank"
+            optional_dl \
+                "https://static.synthctrl.com/presets/Daft-Punk-Around-The-World.vitalbank" \
+                "$BASE/Presets/Daft/around_the_world.vitalbank" \
+                "Around the World Vital bank"
         fi
     fi
 
     if pack_selected "surge-presets" && [[ ! -d "$BASE/Presets/Surge/surge-sound-data-main" ]]; then
-        dl "https://github.com/surge-synthesizer/surge-sound-data/archive/refs/heads/main.zip" "$BASE/Presets/surge_sound_data.zip"
-        extract_zip_as_user "$BASE/Presets/surge_sound_data.zip" "$BASE/Presets/Surge"
-        rm -f "$BASE/Presets/surge_sound_data.zip"
+        SURGE_ARCHIVE="$BASE/Presets/surge_sound_data.zip"
+        optional_dl \
+            "https://github.com/surge-synthesizer/surge-sound-data/archive/refs/heads/main.zip" \
+            "$SURGE_ARCHIVE" \
+            "Surge XT community presets"
+        if [[ -f "$SURGE_ARCHIVE" ]]; then
+            extract_zip_as_user "$SURGE_ARCHIVE" "$BASE/Presets/Surge"
+            rm -f "$SURGE_ARCHIVE"
+        else
+            log "[WARN] Surge XT preset archive unavailable; skipping extraction"
+        fi
     fi
 
     if pack_selected "bpb909" && [[ ! -d "$BASE/Samples/909/BPB-Cassette-909" ]]; then
-        if dl "https://bedroomproducersblog.com/wp-content/uploads/2014/04/BPB-Cassette-909.zip" "$BASE/Samples/bpb_cassette_909.zip"; then
-            if unzip -q "$BASE/Samples/bpb_cassette_909.zip" -d "$BASE/Samples/909"; then
+        BPB_ARCHIVE="$BASE/Samples/bpb_cassette_909.zip"
+        optional_dl \
+            "https://bedroomproducersblog.com/wp-content/uploads/2014/04/BPB-Cassette-909.zip" \
+            "$BPB_ARCHIVE" \
+            "BPB Cassette 909 sample pack"
+        if [[ -f "$BPB_ARCHIVE" ]]; then
+            if unzip -q "$BPB_ARCHIVE" -d "$BASE/Samples/909"; then
                 mv "$BASE/Samples/909"/BPB* "$BASE/Samples/909/BPB-Cassette-909" 2>/dev/null || true
                 chown -R "$USER_NAME:$USER_NAME" "$BASE/Samples/909"
             else
                 log "[WARN] Unable to extract BPB Cassette 909 archive"
             fi
-            rm -f "$BASE/Samples/bpb_cassette_909.zip"
+            rm -f "$BPB_ARCHIVE"
         else
             log "[WARN] BPB Cassette 909 download gated; see https://bedroomproducersblog.com/2014/04/24/free-909-samples/"
         fi
     fi
 
     if pack_selected "daftpack" && [[ ! -d "$BASE/Samples/Daft/DaftPack" ]]; then
-        dl "https://samplescience.ca/wp-content/uploads/2020/02/samplescience-daftpunk-samples.zip" "$BASE/Samples/daft_samples.zip"
-        extract_zip_as_user "$BASE/Samples/daft_samples.zip" "$BASE/Samples/Daft"
-        rm -f "$BASE/Samples/daft_samples.zip"
+        DAFTPACK_ARCHIVE="$BASE/Samples/daft_samples.zip"
+        optional_dl \
+            "https://samplescience.ca/wp-content/uploads/2020/02/samplescience-daftpunk-samples.zip" \
+            "$DAFTPACK_ARCHIVE" \
+            "DaftPack sample archive"
+        if [[ -f "$DAFTPACK_ARCHIVE" ]]; then
+            extract_zip_as_user "$DAFTPACK_ARCHIVE" "$BASE/Samples/Daft"
+            rm -f "$DAFTPACK_ARCHIVE"
+        else
+            log "[WARN] DaftPack sample archive unavailable; skipping extraction"
+        fi
     fi
 else
     log "[VAULT] Skipping heavy preset/sample downloads for $PROFILE profile"
@@ -1188,8 +1240,18 @@ else
 fi
 
 log "[THEME] Downloading Daft Punk themed assets"
-dl "https://upload.wikimedia.org/wikipedia/commons/d/d5/Daft_Punk_Live_2006.jpg" "$THEME_DIR/background.jpg"
-dl "https://upload.wikimedia.org/wikipedia/commons/7/72/Daft_Punk_logo.svg" "$THEME_DIR/icon.svg"
+if [[ ! -f "$THEME_DIR/background.jpg" ]]; then
+    optional_dl \
+        "https://upload.wikimedia.org/wikipedia/commons/d/d5/Daft_Punk_Live_2006.jpg" \
+        "$THEME_DIR/background.jpg" \
+        "Daft Punk live background"
+fi
+if [[ ! -f "$THEME_DIR/icon.svg" ]]; then
+    optional_dl \
+        "https://upload.wikimedia.org/wikipedia/commons/7/72/Daft_Punk_logo.svg" \
+        "$THEME_DIR/icon.svg" \
+        "Daft Punk logo"
+fi
 # ImageMagick is installed later for GUI-capable profiles; rasterization occurs after install.
 STYLE_SRC="$ASSETS_DIR/theme/style.qss"
 if [[ -f "$STYLE_SRC" ]]; then
@@ -1203,7 +1265,11 @@ if $ENABLE_GUI; then
     log "[PY] Creating Python virtual environment and installing libraries"
     apt_install python3 python3-venv python3-pip python3-dev build-essential libasound2-dev libsndfile1-dev libportmidi-dev imagemagick fonts-orbitron fonts-roboto fonts-jetbrains-mono
     if command -v convert >/dev/null 2>&1; then
-        convert "$THEME_DIR/icon.svg" "$THEME_DIR/icon.png"
+        if [[ -f "$THEME_DIR/icon.svg" ]]; then
+            convert "$THEME_DIR/icon.svg" "$THEME_DIR/icon.png"
+        else
+            log "[WARN] Theme icon SVG unavailable; skipping rasterization"
+        fi
     else
         log "[WARN] ImageMagick convert not available; skipping icon rasterization"
     fi
