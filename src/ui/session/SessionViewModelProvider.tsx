@@ -229,9 +229,10 @@ export const SessionViewModelProvider: React.FC<SessionViewModelProviderProps> =
   }, [pluginAlerts, removePluginAlert]);
 
   useEffect(() => {
+    const timers = recoveryTimers.current;
     return () => {
-      recoveryTimers.current.forEach((timer) => clearTimeout(timer));
-      recoveryTimers.current.clear();
+      timers.forEach((timer) => clearTimeout(timer));
+      timers.clear();
     };
   }, []);
 

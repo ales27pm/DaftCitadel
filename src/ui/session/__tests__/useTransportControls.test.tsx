@@ -1,5 +1,6 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
+import { NativeModules, Platform } from 'react-native';
 
 import {
   InMemorySessionStorageAdapter,
@@ -45,7 +46,58 @@ class MissingRuntimeBridge extends InteractiveBridge {
   }
 }
 
+class SilentBridge extends PassiveAudioEngineBridge {
+  public readonly startSpy = jest.fn();
+  public readonly stopSpy = jest.fn();
+  public readonly locateSpy = jest.fn();
+
+  override async startTransport(): Promise<void> {
+    this.startSpy();
+  }
+
+  override async stopTransport(): Promise<void> {
+    this.stopSpy();
+  }
+
+  override async locateTransport(frame: number): Promise<void> {
+    this.locateSpy(frame);
+  }
+}
+
+class FailingBridge extends PassiveAudioEngineBridge {
+  constructor(private readonly failure: Error) {
+    super();
+  }
+
+  override async startTransport(): Promise<void> {
+    throw this.failure;
+  }
+}
+
+type MockLoggerModule = {
+  logWithLevel: jest.Mock;
+  __getLogs: () => Array<{
+    level: string;
+    message: string;
+    metadata?: Record<string, unknown>;
+  }>;
+  __clearLogs: () => void;
+};
+
+const resolveLogger = (): MockLoggerModule => {
+  const module = (NativeModules as unknown as { DaftCitadelLogger?: MockLoggerModule })
+    .DaftCitadelLogger;
+  if (!module) {
+    throw new Error('DaftCitadelLogger mock not registered');
+  }
+  return module;
+};
+
 describe('useTransportControls', () => {
+  beforeEach(() => {
+    resolveLogger().__clearLogs();
+  });
+
   it('invokes audio bridge transport methods', async () => {
     const storage = new InMemorySessionStorageAdapter();
     await storage.initialize();
@@ -194,5 +246,198 @@ describe('useTransportControls', () => {
 
     renderer?.unmount();
     warnSpy.mockRestore();
+  });
+
+  it('provides optimistic runtime updates when the bridge does not emit state changes', async () => {
+    const storage = new InMemorySessionStorageAdapter();
+    await storage.initialize();
+    const bridge = new SilentBridge();
+    const manager = new SessionManager(storage, bridge);
+    await manager.createSession(demoSession);
+
+    let controls: TransportControlsHandle | null = null;
+
+    const Harness = () => {
+      controls = useTransportControls();
+      return null;
+    };
+
+    let renderer: TestRenderer.ReactTestRenderer | undefined;
+
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <SessionViewModelProvider
+          manager={manager}
+          sessionId={DEMO_SESSION_ID}
+          bootstrapSession={() => demoSession}
+          diagnosticsPollIntervalMs={0}
+          audioBridge={bridge}
+        >
+          <Harness />
+        </SessionViewModelProvider>,
+      );
+      await Promise.resolve();
+    });
+
+    if (!controls) {
+      throw new Error('Transport controls not initialized');
+    }
+
+    const readControls = (): TransportControlsHandle => {
+      if (!controls) {
+        throw new Error('Transport controls not initialized');
+      }
+      return controls as TransportControlsHandle;
+    };
+
+    let activeControls = readControls();
+
+    await act(async () => {
+      await activeControls.play();
+      await Promise.resolve();
+    });
+
+    activeControls = readControls();
+
+    expect(activeControls.isPlaying).toBe(true);
+    expect(activeControls.transportRuntime?.isPlaying).toBe(true);
+    expect(activeControls.transport?.isPlaying).toBe(true);
+
+    await act(async () => {
+      await activeControls.locateFrame(2048);
+      await Promise.resolve();
+    });
+
+    activeControls = readControls();
+
+    expect(activeControls.transportRuntime?.frame).toBe(2048);
+    expect(activeControls.transport?.playheadBeats).toBeGreaterThanOrEqual(0);
+
+    await act(async () => {
+      await activeControls.stop();
+      await Promise.resolve();
+    });
+
+    activeControls = readControls();
+
+    expect(activeControls.transportRuntime?.isPlaying).toBe(false);
+
+    renderer?.unmount();
+  });
+
+  it('logs transport failures via native logger on iOS', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const storage = new InMemorySessionStorageAdapter();
+    await storage.initialize();
+    const failure = new Error('boom');
+    const bridge = new FailingBridge(failure);
+    const manager = new SessionManager(storage, bridge);
+    await manager.createSession(demoSession);
+
+    let controls: TransportControlsHandle | null = null;
+
+    const Harness = () => {
+      controls = useTransportControls();
+      return null;
+    };
+
+    let renderer: TestRenderer.ReactTestRenderer | undefined;
+
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <SessionViewModelProvider
+          manager={manager}
+          sessionId={DEMO_SESSION_ID}
+          bootstrapSession={() => demoSession}
+          diagnosticsPollIntervalMs={0}
+          audioBridge={bridge}
+        >
+          <Harness />
+        </SessionViewModelProvider>,
+      );
+      await Promise.resolve();
+    });
+
+    if (!controls) {
+      throw new Error('Transport controls not initialized');
+    }
+
+    const activeControls = controls as TransportControlsHandle;
+
+    await act(async () => {
+      await expect(activeControls.play()).rejects.toThrow('boom');
+    });
+
+    const logs = resolveLogger().__getLogs();
+    expect(logs).toHaveLength(1);
+    expect(logs[0]?.level).toBe('error');
+    expect(logs[0]?.message).toContain('Failed to start transport');
+    expect(logs[0]?.metadata).toMatchObject({
+      operation: 'start',
+      error: 'boom',
+      subsystem: 'com.daftcitadel.transport',
+      category: 'transport-controls',
+    });
+
+    errorSpy.mockRestore();
+    renderer?.unmount();
+  });
+
+  it('logs transport failures via native logger on Android', async () => {
+    const originalOS = Platform.OS;
+    Platform.OS = 'android' as typeof Platform.OS;
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const storage = new InMemorySessionStorageAdapter();
+    await storage.initialize();
+    const failure = new Error('android failure');
+    const bridge = new FailingBridge(failure);
+    const manager = new SessionManager(storage, bridge);
+    await manager.createSession(demoSession);
+
+    let controls: TransportControlsHandle | null = null;
+
+    const Harness = () => {
+      controls = useTransportControls();
+      return null;
+    };
+
+    let renderer: TestRenderer.ReactTestRenderer | undefined;
+
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <SessionViewModelProvider
+          manager={manager}
+          sessionId={DEMO_SESSION_ID}
+          bootstrapSession={() => demoSession}
+          diagnosticsPollIntervalMs={0}
+          audioBridge={bridge}
+        >
+          <Harness />
+        </SessionViewModelProvider>,
+      );
+      await Promise.resolve();
+    });
+
+    if (!controls) {
+      throw new Error('Transport controls not initialized');
+    }
+
+    const activeControls = controls as TransportControlsHandle;
+
+    await act(async () => {
+      await expect(activeControls.play()).rejects.toThrow('android failure');
+    });
+
+    const logs = resolveLogger().__getLogs();
+    expect(logs).toHaveLength(1);
+    expect(logs[0]?.metadata).toMatchObject({
+      operation: 'start',
+      error: 'android failure',
+      tag: 'DaftCitadelTransport',
+    });
+
+    Platform.OS = originalOS;
+    errorSpy.mockRestore();
+    renderer?.unmount();
   });
 });
