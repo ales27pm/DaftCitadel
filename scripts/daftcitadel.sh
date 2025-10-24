@@ -25,6 +25,10 @@ TARGET_USER=""
 CONTAINER_MODE=false
 WITH_REAPER=false
 SKIP_ASSETS=false
+MODULE_ENABLES=()
+MODULE_DISABLES=()
+SELECTED_SAMPLE_PACKS=()
+PACK_SELECTION_OVERRIDDEN=false
 
 usage() {
     cat <<'EOF'
@@ -39,6 +43,10 @@ Options:
   --container                      Skip host-only tweaks (systemd/cpufreq)
   --with-reaper                    Include Reaper evaluation install
   --skip-assets                    Skip large sample/preset downloads
+  --module=NAME                    Enable an optional module (ai/gui/synths/assets/groove/experimental/reaper)
+  --modules=a,b,c                  Enable multiple modules in a single flag
+  --without-module=NAME            Disable a module selected by the profile
+  --packs=list                     Limit heavy downloads to comma-separated pack identifiers
   -h, --help                       Show this message
 EOF
 }
@@ -57,6 +65,23 @@ for arg in "$@"; do
         --container) CONTAINER_MODE=true ;;
         --with-reaper) WITH_REAPER=true ;;
         --skip-assets) SKIP_ASSETS=true ;;
+        --module=*) MODULE_ENABLES+=("${arg#*=}") ;;
+        --modules=*)
+            IFS=',' read -r -a __modules <<<"${arg#*=}"
+            for module_name in "${__modules[@]}"; do
+                [[ -n "$module_name" ]] && MODULE_ENABLES+=("$module_name")
+            done
+            ;;
+        --without-module=*) MODULE_DISABLES+=("${arg#*=}") ;;
+        --packs=*)
+            PACK_SELECTION_OVERRIDDEN=true
+            IFS=',' read -r -a __packs <<<"${arg#*=}"
+            SELECTED_SAMPLE_PACKS=()
+            for pack in "${__packs[@]}"; do
+                pack="${pack,,}"
+                [[ -n "$pack" ]] && SELECTED_SAMPLE_PACKS+=("$pack")
+            done
+            ;;
         -h|--help) usage; exit 0 ;;
         *) ARGS+=("$arg") ;;
     esac
@@ -155,7 +180,9 @@ dl() {
     local dest="$2"
     log "[DL] $url"
     mkdir -p "$(dirname "$dest")"
-    curl -L --fail --retry 5 --retry-all-errors --progress-bar "$url" -o "$dest"
+    curl -L --fail --retry 5 --retry-all-errors --progress-bar \
+        -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36" \
+        "$url" -o "$dest"
 }
 
 verify_sha256() {
@@ -178,6 +205,249 @@ download_and_verify() {
     local sha="$3"
     dl "$url" "$dest"
     verify_sha256 "$dest" "$sha"
+}
+
+verify_md5() {
+    local file="$1"
+    local expected="$2"
+    local actual
+    actual=$(md5sum "$file" | awk '{print $1}')
+    if [[ "$actual" != "${expected,,}" ]]; then
+        log "[ERR] MD5 mismatch for $file"
+        log "[ERR] Expected: ${expected,,}"
+        log "[ERR] Actual:   $actual"
+        exit 1
+    fi
+    log "[CHECK] Verified MD5 for $file"
+}
+
+download_and_verify_md5() {
+    local url="$1"
+    local dest="$2"
+    local md5="$3"
+    dl "$url" "$dest"
+    verify_md5 "$dest" "$md5"
+}
+
+version_lt() {
+    local current="$1"
+    local required="$2"
+    dpkg --compare-versions "$current" lt "$required"
+}
+
+pack_selected() {
+    local needle="${1,,}"
+    local pack
+    for pack in "${SELECTED_SAMPLE_PACKS[@]}"; do
+        if [[ "$pack" == "$needle" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+normalize_module_name() {
+    local module="${1,,}"
+    module="${module// /}"
+    module="${module//-}"
+    echo "$module"
+}
+
+enable_named_module() {
+    local module
+    module=$(normalize_module_name "$1")
+    case "$module" in
+        ai|ml)
+            ENABLE_AI=true
+            ;;
+        gui|interface)
+            ENABLE_GUI=true
+            ;;
+        synths|expandedsynths|instruments)
+            ENABLE_EXPANDED_SYNTHS=true
+            ;;
+        assets|samples|packs)
+            ENABLE_HEAVY_ASSETS=true
+            ;;
+        groove|grooveboxes|groovetools|midi)
+            ENABLE_GROOVE_TOOLS=true
+            ;;
+        experimental|forsynth|labs)
+            ENABLE_EXPERIMENTAL_SYNTHS=true
+            ;;
+        reaper)
+            WITH_REAPER=true
+            ;;
+        *)
+            log "[WARN] Unknown module '${1}'"
+            ;;
+    esac
+}
+
+disable_named_module() {
+    local module
+    module=$(normalize_module_name "$1")
+    case "$module" in
+        base)
+            log "[WARN] Base module cannot be disabled"
+            ;;
+        ai|ml)
+            ENABLE_AI=false
+            ;;
+        gui|interface)
+            ENABLE_GUI=false
+            ;;
+        synths|expandedsynths|instruments)
+            ENABLE_EXPANDED_SYNTHS=false
+            ;;
+        assets|samples|packs)
+            ENABLE_HEAVY_ASSETS=false
+            ;;
+        groove|grooveboxes|groovetools|midi)
+            ENABLE_GROOVE_TOOLS=false
+            ;;
+        experimental|forsynth|labs)
+            ENABLE_EXPERIMENTAL_SYNTHS=false
+            ;;
+        reaper)
+            WITH_REAPER=false
+            ;;
+        *)
+            log "[WARN] Unknown module '${1}'"
+            ;;
+    esac
+}
+
+resolve_latest_surge_release() {
+    python3 <<'PY'
+import json
+import re
+import shlex
+import sys
+import urllib.request
+
+headers = {
+    "Accept": "application/vnd.github+json",
+    "User-Agent": "DaftCitadelInstaller/1.0",
+}
+try:
+    req = urllib.request.Request(
+        "https://api.github.com/repos/surge-synthesizer/releases-xt/releases/latest",
+        headers=headers,
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        release = json.load(resp)
+except Exception:
+    sys.exit(1)
+
+assets = release.get("assets", [])
+deb_asset = None
+md5_asset = None
+pattern = re.compile(r"surge-xt-linux-x64-.*\\.deb$")
+for asset in assets:
+    name = asset.get("name", "")
+    if deb_asset is None and pattern.search(name):
+        deb_asset = asset
+    if asset.get("name") == "md5sum.txt":
+        md5_asset = asset
+
+if deb_asset is None or md5_asset is None:
+    sys.exit(1)
+
+try:
+    md5_req = urllib.request.Request(md5_asset["browser_download_url"], headers=headers)
+    with urllib.request.urlopen(md5_req, timeout=20) as resp:
+        md5_body = resp.read().decode("utf-8", "ignore")
+except Exception:
+    sys.exit(1)
+
+md5_value = ""
+for line in md5_body.splitlines():
+    parts = line.strip().split()
+    if len(parts) >= 2 and parts[1].strip('*') == deb_asset["name"]:
+        md5_value = parts[0].lower()
+        break
+
+if not md5_value:
+    sys.exit(1)
+
+print("SURGE_DYNAMIC_URL=" + shlex.quote(deb_asset["browser_download_url"]))
+print("SURGE_DYNAMIC_MD5=" + shlex.quote(md5_value))
+print("SURGE_DYNAMIC_VERSION=" + shlex.quote(release.get("tag_name", "")))
+PY
+}
+
+resolve_helm_manifest() {
+    python3 <<'PY'
+import re
+import shlex
+import sys
+import urllib.parse
+import urllib.request
+
+headers = {
+    "User-Agent": "DaftCitadelInstaller/1.0",
+}
+try:
+    req = urllib.request.Request("https://tytel.org/static/js/helm_download.js", headers=headers)
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        body = resp.read().decode("utf-8", "ignore")
+except Exception:
+    sys.exit(1)
+
+match = re.search(r'download_lookup\.linux64_r\s*=\s*"([^"]+)"', body)
+if not match:
+    sys.exit(1)
+
+relative = match.group(1)
+version_match = re.search(r'helm_([0-9_]+)_amd64', relative)
+version = version_match.group(1).replace('_', '.') if version_match else ""
+full_url = urllib.parse.urljoin("https://tytel.org", relative)
+
+print("HELM_DYNAMIC_URL=" + shlex.quote(full_url))
+print("HELM_DYNAMIC_VERSION=" + shlex.quote(version))
+PY
+}
+
+resolve_vital_manifest() {
+    python3 <<'PY'
+import base64
+import re
+import shlex
+import sys
+import urllib.request
+
+headers = {
+    "User-Agent": "DaftCitadelInstaller/1.0",
+}
+channels = ["nixos-24.05", "nixos-unstable"]
+for channel in channels:
+    url = f"https://raw.githubusercontent.com/NixOS/nixpkgs/{channel}/pkgs/applications/audio/vital/default.nix"
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            body = resp.read().decode("utf-8", "ignore")
+    except Exception:
+        continue
+    version_match = re.search(r'version\s*=\s*"([0-9.]+)";', body)
+    hash_match = re.search(r'hash\s*=\s*"sha256-([A-Za-z0-9+/=]+)";', body)
+    if not version_match or not hash_match:
+        continue
+    version = version_match.group(1)
+    b64_hash = hash_match.group(1)
+    padding = '=' * (-len(b64_hash) % 4)
+    try:
+        sha256_hex = base64.b64decode(b64_hash + padding).hex()
+    except Exception:
+        continue
+    underscored = version.replace('.', '_')
+    vital_url = f"https://builds.vital.audio/VitalAudio/vital/{underscored}/VitalInstaller.zip"
+    print("VITAL_DYNAMIC_URL=" + shlex.quote(vital_url))
+    print("VITAL_DYNAMIC_VERSION=" + shlex.quote(version))
+    print("VITAL_DYNAMIC_SHA256=" + shlex.quote(sha256_hex))
+    sys.exit(0)
+sys.exit(1)
+PY
 }
 
 json_get_field() {
@@ -220,13 +490,16 @@ if ! $DAW_PATH_OVERRIDE; then
 fi
 
 PROFILE="${PROFILE,,}"
+ENABLE_AI=false
+ENABLE_GUI=false
+ENABLE_HEAVY_ASSETS=false
+ENABLE_EXPANDED_SYNTHS=false
+ENABLE_GROOVE_TOOLS=false
+ENABLE_EXPERIMENTAL_SYNTHS=false
 case "$PROFILE" in
     apex)
         PROFILE_NAME="Daft Apex"
-        ENABLE_AI=false
         ENABLE_GUI=true
-        ENABLE_HEAVY_ASSETS=false
-        ENABLE_EXPANDED_SYNTHS=false
         ;;
     hybrid)
         PROFILE_NAME="Daft Apex Citadel"
@@ -241,6 +514,8 @@ case "$PROFILE" in
         ENABLE_GUI=true
         ENABLE_HEAVY_ASSETS=true
         ENABLE_EXPANDED_SYNTHS=true
+        ENABLE_GROOVE_TOOLS=true
+        ENABLE_EXPERIMENTAL_SYNTHS=true
         ;;
     *)
         echo "[ERR] Unknown profile: $PROFILE" >&2
@@ -249,8 +524,34 @@ case "$PROFILE" in
         ;;
 esac
 
+if ((${#MODULE_ENABLES[@]})); then
+    for module_name in "${MODULE_ENABLES[@]}"; do
+        enable_named_module "$module_name"
+    done
+fi
+
+if ((${#MODULE_DISABLES[@]})); then
+    for module_name in "${MODULE_DISABLES[@]}"; do
+        disable_named_module "$module_name"
+    done
+fi
+
 if $SKIP_ASSETS; then
     ENABLE_HEAVY_ASSETS=false
+fi
+
+if $PACK_SELECTION_OVERRIDDEN && ! $ENABLE_HEAVY_ASSETS; then
+    log "[INFO] Enabling sample pack module to honor --packs selection"
+    ENABLE_HEAVY_ASSETS=true
+fi
+
+if ! $PACK_SELECTION_OVERRIDDEN && $ENABLE_HEAVY_ASSETS && ((${#SELECTED_SAMPLE_PACKS[@]} == 0)); then
+    SELECTED_SAMPLE_PACKS=(
+        bpb909
+        daftpack
+        surge-presets
+        vital-daft
+    )
 fi
 
 BASE="$USER_HOME/DaftCitadel"
@@ -266,6 +567,8 @@ log "[IGNITION] $PROFILE_NAME deployment - $(date)"
 [[ $ENABLE_GUI == true ]] && JSON_GUI=true || JSON_GUI=false
 [[ $ENABLE_EXPANDED_SYNTHS == true ]] && JSON_SYNTHS=true || JSON_SYNTHS=false
 [[ $ENABLE_HEAVY_ASSETS == true ]] && JSON_ASSETS=true || JSON_ASSETS=false
+[[ $ENABLE_GROOVE_TOOLS == true ]] && JSON_GROOVE=true || JSON_GROOVE=false
+[[ $ENABLE_EXPERIMENTAL_SYNTHS == true ]] && JSON_EXPERIMENTAL=true || JSON_EXPERIMENTAL=false
 [[ $CONTAINER_MODE == true ]] && JSON_CONTAINER=true || JSON_CONTAINER=false
 
 cat >"$BASE/citadel_profile.json" <<EOF_PROFILE_META
@@ -276,6 +579,8 @@ cat >"$BASE/citadel_profile.json" <<EOF_PROFILE_META
     "gui": $JSON_GUI,
     "expandedSynths": $JSON_SYNTHS,
     "heavyAssets": $JSON_ASSETS,
+    "grooveTools": $JSON_GROOVE,
+    "experimentalSynths": $JSON_EXPERIMENTAL,
     "container": $JSON_CONTAINER
   }
 }
@@ -361,11 +666,18 @@ fi
 apt_install "${CORE_DAWS[@]}"
 
 if $WITH_REAPER || { [[ $PROFILE != "apex" ]] && confirm "Install Reaper (evaluation) as an additional DAW?"; }; then
-    dl "https://www.reaper.fm/files/7.x/reaper712_linux_x86_64.tar.xz" /tmp/reaper.tar.xz
-    mkdir -p /opt/reaper
-    tar -xJf /tmp/reaper.tar.xz --strip-components=1 -C /opt/reaper
-    ln -sf /opt/reaper/reaper /usr/local/bin/reaper
-    rm -f /tmp/reaper.tar.xz
+    REAPER_DL=$(curl -Ls -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36" https://www.reaper.fm/download.php \
+        | grep -Eo 'https://www\.reaper\.fm/files/7\.x/reaper[0-9]+_linux_x86_64\.tar\.xz' \
+        | head -n1)
+    if [[ -n "$REAPER_DL" ]]; then
+        dl "$REAPER_DL" /tmp/reaper.tar.xz
+        mkdir -p /opt/reaper
+        tar -xJf /tmp/reaper.tar.xz --strip-components=1 -C /opt/reaper
+        ln -sf /opt/reaper/reaper /usr/local/bin/reaper
+        rm -f /tmp/reaper.tar.xz
+    else
+        log "[WARN] Could not resolve REAPER Linux URL from download page"
+    fi
 fi
 
 log "[PLUGINS] Installing LV2/VST3 instruments and effects"
@@ -374,25 +686,95 @@ if $ENABLE_EXPANDED_SYNTHS; then
     CORE_PLUGINS+=(yoshimi zynaddsubfx)
 fi
 apt_install "${CORE_PLUGINS[@]}"
+apt_install_available zam-plugins avldrums.lv2 drumgizmo
 
-SURGE_URL="https://github.com/surge-synthesizer/releases-xt/releases/download/1.3.4/surge-xt-linux-x64-1.3.4.deb"
-SURGE_SHA256="a6e55064487f624147d515b9ae5fc79a568b69746675b2083abde628ca7bb151"
-HELM_URL="https://tytel.org/static/dist/helm_0.9.0_amd64_r.deb"
-HELM_SHA256="aedf8b676657f72782513e5ad5f9c61a6bc21fe9357b23052928adafa8215eca"
+declare -A HELM_KNOWN_SHAS=(
+    ["0.9.0"]="aedf8b676657f72782513e5ad5f9c61a6bc21fe9357b23052928adafa8215eca"
+)
 
-download_and_verify "$SURGE_URL" /tmp/surge.deb "$SURGE_SHA256"
-apt-get install -y /tmp/surge.deb || apt-get -f install -y
-rm -f /tmp/surge.deb
+SURGE_DEB_PATH="/tmp/surge.deb"
+surge_installed=false
+if command -v python3 >/dev/null 2>&1; then
+    if SURGE_DYNAMIC_OUTPUT=$(resolve_latest_surge_release 2>/dev/null); then
+        eval "$SURGE_DYNAMIC_OUTPUT"
+        if [[ -n "${SURGE_DYNAMIC_URL:-}" && -n "${SURGE_DYNAMIC_MD5:-}" ]]; then
+            log "[PLUGINS] Resolved Surge XT ${SURGE_DYNAMIC_VERSION:-latest} from GitHub release metadata"
+            if download_and_verify_md5 "$SURGE_DYNAMIC_URL" "$SURGE_DEB_PATH" "$SURGE_DYNAMIC_MD5"; then
+                apt-get install -y "$SURGE_DEB_PATH" || apt-get -f install -y
+                rm -f "$SURGE_DEB_PATH"
+                surge_installed=true
+            fi
+        else
+            log "[WARN] Surge XT release metadata incomplete; falling back to pinned build"
+        fi
+    fi
+else
+    log "[INFO] python3 unavailable; using static Surge XT mirror"
+fi
+if ! $surge_installed; then
+    SURGE_URL="https://github.com/surge-synthesizer/releases-xt/releases/download/1.3.4/surge-xt-linux-x64-1.3.4.deb"
+    SURGE_SHA256="a6e55064487f624147d515b9ae5fc79a568b69746675b2083abde628ca7bb151"
+    log "[PLUGINS] Installing Surge XT 1.3.4 from pinned release asset"
+    download_and_verify "$SURGE_URL" "$SURGE_DEB_PATH" "$SURGE_SHA256"
+    apt-get install -y "$SURGE_DEB_PATH" || apt-get -f install -y
+    rm -f "$SURGE_DEB_PATH"
+fi
 
+HELM_URL=""
+HELM_SHA256=""
+HELM_VERSION_DISPLAY=""
+if command -v python3 >/dev/null 2>&1; then
+    if HELM_DYNAMIC_OUTPUT=$(resolve_helm_manifest 2>/dev/null); then
+        eval "$HELM_DYNAMIC_OUTPUT"
+        if [[ -n "${HELM_DYNAMIC_VERSION:-}" && -n "${HELM_KNOWN_SHAS[$HELM_DYNAMIC_VERSION]:-}" ]]; then
+            HELM_URL="$HELM_DYNAMIC_URL"
+            HELM_SHA256="${HELM_KNOWN_SHAS[$HELM_DYNAMIC_VERSION]}"
+            HELM_VERSION_DISPLAY="$HELM_DYNAMIC_VERSION"
+            log "[PLUGINS] Resolved Helm $HELM_DYNAMIC_VERSION via official manifest"
+        elif [[ -n "${HELM_DYNAMIC_VERSION:-}" ]]; then
+            log "[WARN] Helm version $HELM_DYNAMIC_VERSION missing checksum mapping; using curated fallback"
+        fi
+    fi
+else
+    log "[INFO] python3 unavailable; using static Helm manifest fallback"
+fi
+if [[ -z "${HELM_URL:-}" ]]; then
+    HELM_URL="https://tytel.org/static/dist/helm_0.9.0_amd64_r.deb"
+    HELM_SHA256="${HELM_KNOWN_SHAS["0.9.0"]}"
+    HELM_VERSION_DISPLAY="0.9.0"
+fi
+log "[PLUGINS] Installing Helm ${HELM_VERSION_DISPLAY:-0.9.0}"
 download_and_verify "$HELM_URL" /tmp/helm.deb "$HELM_SHA256"
 apt-get install -y /tmp/helm.deb || apt-get -f install -y
 rm -f /tmp/helm.deb
 
 if $ENABLE_EXPANDED_SYNTHS; then
     # Vital
-    # Vital distributes binaries under an EULA; curated hash from nixpkgs ensures tamper detection.
-    VITAL_URL="https://builds.vital.audio/VitalAudio/vital/1_5_5/VitalInstaller.zip"
-    VITAL_SHA256="68f3c7e845f3d7a5b44a83adeb6e34ef221503df00e7964f7d5a1f132a252d13"
+    # Vital distributes binaries under an EULA; prefer nixpkgs metadata to resolve the latest Linux build.
+    VITAL_URL=""
+    VITAL_SHA256=""
+    VITAL_VERSION_DISPLAY=""
+    if command -v python3 >/dev/null 2>&1; then
+        if VITAL_DYNAMIC_OUTPUT=$(resolve_vital_manifest 2>/dev/null); then
+            eval "$VITAL_DYNAMIC_OUTPUT"
+            if [[ -n "${VITAL_DYNAMIC_URL:-}" && -n "${VITAL_DYNAMIC_SHA256:-}" ]]; then
+                VITAL_URL="$VITAL_DYNAMIC_URL"
+                VITAL_SHA256="$VITAL_DYNAMIC_SHA256"
+                VITAL_VERSION_DISPLAY="${VITAL_DYNAMIC_VERSION:-latest}"
+                log "[PLUGINS] Resolved Vital ${VITAL_VERSION_DISPLAY} via nixpkgs manifest"
+            fi
+        else
+            log "[WARN] Unable to fetch Vital metadata from nixpkgs; using curated fallback"
+        fi
+    else
+        log "[INFO] python3 unavailable; using static Vital manifest fallback"
+    fi
+    if [[ -z "${VITAL_URL:-}" ]]; then
+        VITAL_URL="https://builds.vital.audio/VitalAudio/vital/1_5_5/VitalInstaller.zip"
+        VITAL_SHA256="68f3c7e845f3d7a5b44a83adeb6e34ef221503df00e7964f7d5a1f132a252d13"
+        VITAL_VERSION_DISPLAY="1.5.5"
+    fi
+    log "[PLUGINS] Installing Vital ${VITAL_VERSION_DISPLAY:-1.5.x}"
     download_and_verify "$VITAL_URL" /tmp/vital.zip "$VITAL_SHA256"
     unzip -o /tmp/vital.zip -d /tmp/vital
     VITAL_ROOT="/tmp/vital"
@@ -454,79 +836,27 @@ if $ENABLE_EXPANDED_SYNTHS; then
     fi
     rm -rf /tmp/vital /tmp/vital.zip
 
-    # TAL-Vocoder
+    # TAL-Vocoder via DISTRHO Ports (manual install recommended)
     if [[ ! -d /usr/lib/lv2/TAL-Vocoder-2.lv2 ]]; then
-        if dl "https://tal-software.com/downloads/plugins/TAL-Vocoder-64bit-linux-v3.0.4.zip" /tmp/tal-vocoder.zip; then
-            if unzip -t /tmp/tal-vocoder.zip >/dev/null 2>&1; then
-                unzip -o /tmp/tal-vocoder.zip -d /usr/lib/lv2/
-            else
-                log "[WARN] Unexpected TAL-Vocoder download content; skipping automated install"
-            fi
-            rm -f /tmp/tal-vocoder.zip
-        else
-            log "[WARN] Failed to download TAL-Vocoder archive"
-        fi
+        log "[INFO] TAL-Vocoder Linux builds are available from DISTRHO Ports"
+        log "[INFO] Download latest TAL Ports bundle: https://github.com/DISTRHO/DISTRHO-Ports"
     fi
 
     # Tyrell N6
     if [[ ! -d /usr/lib/vst3/TyrellN6.vst3 ]]; then
-        TYRELL_ARCHIVE="/tmp/tyrell.tar.xz"
-        rm -f "$TYRELL_ARCHIVE"
-        TYRELL_DYNAMIC_URL=""
-        TYRELL_PY_AVAILABLE=false
-        if command -v python3 >/dev/null 2>&1; then
-            TYRELL_PY_AVAILABLE=true
-            TYRELL_DYNAMIC_URL=$(python3 <<'PY' 2>/dev/null
-import re
-import sys
-import urllib.request
-
-index_urls = [
-    "https://uhe-dl.b-cdn.net/releases/?C=M;O=D",
-    "https://dl.u-he.com/releases/?C=M;O=D",
-]
-pattern = re.compile(r"href=\"(TyrellN6[^\"']*_Linux\.tar\.xz)\"", re.IGNORECASE)
-
-for index_url in index_urls:
-    try:
-        with urllib.request.urlopen(index_url, timeout=20) as resp:
-            html = resp.read().decode("utf-8", "ignore")
-    except Exception:
-        continue
-    match = pattern.search(html)
-    if match:
-        href = match.group(1)
-        if href.startswith("http"):
-            print(href)
-        else:
-            print("https://uhe-dl.b-cdn.net/releases/" + href.lstrip("/"))
-        sys.exit(0)
-PY
-            )
-        fi
-        TYRELL_MIRRORS=()
-        if [[ -n "$TYRELL_DYNAMIC_URL" ]]; then
-            TYRELL_MIRRORS+=("$TYRELL_DYNAMIC_URL")
-            log "[PLUGINS] Resolved latest Tyrell N6 release: $TYRELL_DYNAMIC_URL"
-        else
-            if $TYRELL_PY_AVAILABLE; then
-                log "[WARN] Unable to auto-discover Tyrell N6 release; falling back to static mirrors"
-            else
-                log "[INFO] python3 unavailable; using static Tyrell N6 mirrors"
-            fi
-        fi
-        TYRELL_MIRRORS+=(
-            "https://uhe-dl.b-cdn.net/releases/TyrellN6_300_public_beta_16976_Linux.tar.xz"
-            "https://dl.u-he.com/releases/TyrellN6_300_public_beta_16976_Linux.tar.xz"
+        TYRELL_PRIMARY_URL="https://u-he.com/downloads/TyrellN6/TyrellN6_Linux.tar.xz"
+        TYRELL_MIRRORS=(
+            "https://dl.u-he.com/downloads/TyrellN6/TyrellN6_Linux.tar.xz"
             "https://uhe-dl.b-cdn.net/TyrellN6_307_Linux.tar.xz"
-            "https://u-he.com/downloads/TyrellN6/TyrellN6_307_Linux.tar.xz"
-            "https://uhe-dl.b-cdn.net/TyrellN6_306_Linux.tar.xz"
-            "https://u-he.com/downloads/TyrellN6/TyrellN6_306_Linux.tar.xz"
-            "https://uhe-dl.b-cdn.net/TyrellN6_305_Linux.tar.xz"
-            "https://u-he.com/downloads/TyrellN6/TyrellN6_305_12092_Linux.tar.xz"
         )
+        TYRELL_ARCHIVE=$(mktemp /tmp/tyrell.XXXXXX.tar.xz)
+        glibc_version=$(ldd --version | head -n 1 | awk '{print $NF}')
+        if version_lt "$glibc_version" "2.28"; then
+            log "[WARN] Tyrell N6 requires glibc 2.28+, detected $glibc_version"
+        fi
         tyrell_installed=false
-        for mirror in "${TYRELL_MIRRORS[@]}"; do
+        TYRELL_SOURCES=("$TYRELL_PRIMARY_URL" "${TYRELL_MIRRORS[@]}")
+        for mirror in "${TYRELL_SOURCES[@]}"; do
             if dl "$mirror" "$TYRELL_ARCHIVE"; then
                 if tar -tJf "$TYRELL_ARCHIVE" >/dev/null 2>&1; then
                     TYRELL_WORKDIR=$(mktemp -d /tmp/tyrell.XXXXXX)
@@ -545,12 +875,12 @@ PY
                             install -m 755 "$TYRELL_SRC/TyrellN6.64.so" /usr/lib/vst3/TyrellN6.vst3/Contents/x86_64-linux/TyrellN6.so
                             install -d -m 755 /usr/lib/vst3/TyrellN6.vst3/Contents/Resources/Documentation
 
-                            TYRELL_DOC=$(find "$TYRELL_SRC" -maxdepth 1 -type f -name '*user guide.pdf' | head -n 1)
+                            TYRELL_DOC=$(find "$TYRELL_SRC" -maxdepth 1 -type f -iname '*user guide.pdf' | head -n 1)
                             if [[ -n "$TYRELL_DOC" ]]; then
                                 install -m 644 "$TYRELL_DOC" \
                                     "/usr/lib/vst3/TyrellN6.vst3/Contents/Resources/Documentation/$(basename "$TYRELL_DOC")"
                             fi
-                            TYRELL_LICENSE=$(find "$TYRELL_SRC" -maxdepth 1 -type f -name 'license.txt' | head -n 1)
+                            TYRELL_LICENSE=$(find "$TYRELL_SRC" -maxdepth 1 -type f -iname 'license.txt' | head -n 1)
                             if [[ -n "$TYRELL_LICENSE" ]]; then
                                 install -m 644 "$TYRELL_LICENSE" \
                                     "/usr/lib/vst3/TyrellN6.vst3/Contents/Resources/Documentation/$(basename "$TYRELL_LICENSE")"
@@ -587,6 +917,7 @@ PY
         rm -f "$TYRELL_ARCHIVE"
         if ! $tyrell_installed; then
             log "[WARN] Tyrell N6 download unavailable; skipping automated install"
+            log "[INFO] Manual download available from https://u-he.com/products/tyrelln6/"
         fi
     fi
 
@@ -652,27 +983,8 @@ PY
         rm -rf "${OBXD_WORKDIR:-}"
     fi
 
-    # Valhalla Supermassive
-    if [[ ! -d /usr/lib/vst3/ValhallaSupermassive.vst3 ]]; then
-        dl "https://valhalladsp.com/wp-content/uploads/2023/05/ValhallaSupermassive_linux_2.5.0.zip" /tmp/valhalla.zip
-        unzip -o /tmp/valhalla.zip -d /usr/lib/vst3/
-        rm -f /tmp/valhalla.zip
-    fi
-
-    # MT Power Drumkit 2
-    if [[ ! -d "$USER_HOME/.vst/MTPowerDrumKit2" ]]; then
-        dl "https://www.powerdrumkit.com/downloads/MTPowerDrumKit2_Linux_VST3.zip" /tmp/mtpdk.zip
-        as_user "mkdir -p ~/.vst"
-        as_user "unzip -o /tmp/mtpdk.zip -d ~/.vst/"
-        rm -f /tmp/mtpdk.zip
-    fi
-
-    # Kilohearts Essentials
-    if [[ ! -d /usr/lib/vst3/Kilohearts ]]; then
-        dl "https://kilohearts.com/downloads/files/Kilohearts_Essentials.zip" /tmp/kilohearts.zip
-        unzip -o /tmp/kilohearts.zip -d /usr/lib/vst3/
-        rm -f /tmp/kilohearts.zip
-    fi
+    log "[INFO] Consider installing Dragonfly Reverb, LSP, Calf, x42, Zam, and DISTRHO Ports for a comprehensive Linux-native toolchain"
+    log "[INFO] MT Power Drumkit 2 requires a manual download; native alternatives like AVLDrums or DrumGizmo are installed automatically"
 fi
 
 log "[MIDI] Installing FluidSynth and soundfonts"
@@ -681,13 +993,9 @@ as_user "grep -q 'alias fsynth=' ~/.bashrc || echo \"alias fsynth='fluidsynth -a
 
 log "[VAULT] Creating library directories and downloading presets/samples"
 as_user "mkdir -p '$BASE'/Presets/Vital '$BASE'/Presets/Surge '$BASE'/Presets/Daft '$BASE'/Samples/909 '$BASE'/Samples/Daft '$BASE'/Projects '$BASE'/MIDIs '$BASE'/Models '$BASE'/Templates '$BASE'/Scripts '$BASE'/Theme"
-if $ENABLE_HEAVY_ASSETS; then
-    if $ENABLE_EXPANDED_SYNTHS; then
-        if [[ ! -d "$BASE/Presets/Vital/Vital" ]]; then
-            dl "https://storage.googleapis.com/vitalpublic/VitalPresets/vital_factory_presets.zip" "$BASE/Presets/vital_factory_presets.zip"
-            extract_zip_as_user "$BASE/Presets/vital_factory_presets.zip" "$BASE/Presets/Vital"
-            rm -f "$BASE/Presets/vital_factory_presets.zip"
-        fi
+if $ENABLE_HEAVY_ASSETS && ((${#SELECTED_SAMPLE_PACKS[@]})); then
+    if $ENABLE_EXPANDED_SYNTHS && pack_selected "vital-daft"; then
+        log "[INFO] Vital factory content ships with the installer; skipping external preset mirror"
         dl "https://www.syntorial.com/downloads/presets/daft-punk-da-funk-lead.vital" "$BASE/Presets/Daft/da_funk_lead.vital"
         dl "https://www.syntorial.com/downloads/presets/daft-punk-derezzed-lead.vital" "$BASE/Presets/Daft/derezzed_lead.vital"
         if [[ ! -f "$BASE/Presets/Daft/around_the_world.vitalbank" ]]; then
@@ -695,25 +1003,97 @@ if $ENABLE_HEAVY_ASSETS; then
         fi
     fi
 
-    if [[ ! -d "$BASE/Presets/Surge/surge-sound-data-main" ]]; then
+    if pack_selected "surge-presets" && [[ ! -d "$BASE/Presets/Surge/surge-sound-data-main" ]]; then
         dl "https://github.com/surge-synthesizer/surge-sound-data/archive/refs/heads/main.zip" "$BASE/Presets/surge_sound_data.zip"
         extract_zip_as_user "$BASE/Presets/surge_sound_data.zip" "$BASE/Presets/Surge"
         rm -f "$BASE/Presets/surge_sound_data.zip"
     fi
 
-    if [[ ! -d "$BASE/Samples/909/909_full" ]]; then
-        dl "https://archive.org/download/Roland_TR-909_Samples/909_full.zip" "$BASE/Samples/909_full.zip"
-        extract_zip_as_user "$BASE/Samples/909_full.zip" "$BASE/Samples/909"
-        rm -f "$BASE/Samples/909_full.zip"
+    if pack_selected "bpb909" && [[ ! -d "$BASE/Samples/909/BPB-Cassette-909" ]]; then
+        if dl "https://bedroomproducersblog.com/wp-content/uploads/2014/04/BPB-Cassette-909.zip" "$BASE/Samples/bpb_cassette_909.zip"; then
+            if unzip -q "$BASE/Samples/bpb_cassette_909.zip" -d "$BASE/Samples/909"; then
+                mv "$BASE/Samples/909"/BPB* "$BASE/Samples/909/BPB-Cassette-909" 2>/dev/null || true
+                chown -R "$USER_NAME:$USER_NAME" "$BASE/Samples/909"
+            else
+                log "[WARN] Unable to extract BPB Cassette 909 archive"
+            fi
+            rm -f "$BASE/Samples/bpb_cassette_909.zip"
+        else
+            log "[WARN] BPB Cassette 909 download gated; see https://bedroomproducersblog.com/2014/04/24/free-909-samples/"
+        fi
     fi
 
-    if [[ ! -d "$BASE/Samples/Daft/DaftPack" ]]; then
+    if pack_selected "daftpack" && [[ ! -d "$BASE/Samples/Daft/DaftPack" ]]; then
         dl "https://samplescience.ca/wp-content/uploads/2020/02/samplescience-daftpunk-samples.zip" "$BASE/Samples/daft_samples.zip"
         extract_zip_as_user "$BASE/Samples/daft_samples.zip" "$BASE/Samples/Daft"
         rm -f "$BASE/Samples/daft_samples.zip"
     fi
 else
     log "[VAULT] Skipping heavy preset/sample downloads for $PROFILE profile"
+fi
+
+if $ENABLE_GROOVE_TOOLS; then
+    log "[GROOVE] Deploying open-source groove generators and MIDI packs"
+    apt_install git
+    GROOVE_DIR="$BASE/Grooves"
+    MIDI_TARGET="$BASE/MIDIs"
+    as_user "mkdir -p '$GROOVE_DIR/Extensions' '$GROOVE_DIR/MIDI'"
+
+    BITWIG_DIR="$GROOVE_DIR/Extensions/BitwigBuddy"
+    if ! as_user "rm -rf '$BITWIG_DIR' && git clone --depth 1 'https://github.com/centomila/BitwigBuddy-Bitwig-Extension.git' '$BITWIG_DIR'"; then
+        log "[WARN] Unable to clone BitwigBuddy extension; repository may be unavailable"
+    else
+        log "[GROOVE] BitwigBuddy extension synced to $BITWIG_DIR"
+    fi
+
+    MIDI_REPO="$GROOVE_DIR/MIDI/DaftPunkMidiTester"
+    if ! as_user "rm -rf '$MIDI_REPO' && git clone --depth 1 'https://github.com/hackrockcity/DaftPunkMidiTester.git' '$MIDI_REPO'"; then
+        log "[WARN] Unable to retrieve Daft Punk MIDI tester pack"
+    else
+        as_user "find '$MIDI_REPO' -type f -iname '*.mid' -exec cp -n {} '$MIDI_TARGET/' \;"
+        log "[GROOVE] Imported Daft Punk MIDI sketches into $MIDI_TARGET"
+    fi
+else
+    log "[GROOVE] Groove toolkit disabled for $PROFILE profile"
+fi
+
+if $ENABLE_EXPERIMENTAL_SYNTHS; then
+    log "[LAB] Installing ForSynth experimental suite"
+    apt_install git gfortran make
+    EXPERIMENTAL_DIR="$BASE/Experimental"
+    FORSYNTH_DIR="$EXPERIMENTAL_DIR/ForSynth"
+    as_user "mkdir -p '$EXPERIMENTAL_DIR'"
+    if as_user "rm -rf '$FORSYNTH_DIR' && git clone --depth 1 'https://github.com/vmagnin/ForSynth.git' '$FORSYNTH_DIR'"; then
+        if as_user "cd '$FORSYNTH_DIR' && set -o pipefail && ./build.sh | tee build.log"; then
+            log "[LAB] ForSynth examples compiled successfully"
+            cat >/usr/local/bin/forsynth-demo <<'EOF_FORSYNTH'
+#!/usr/bin/env bash
+set -euo pipefail
+FORSYNTH_ROOT="$HOME/DaftCitadel/Experimental/ForSynth/build"
+if [[ $# -lt 1 ]]; then
+    echo "Usage: forsynth-demo <example> [args...]" >&2
+    echo "Available demos:" >&2
+    ls "$FORSYNTH_ROOT" | sed -e 's/\.out$//' >&2
+    exit 1
+fi
+target="$FORSYNTH_ROOT/$1.out"
+if [[ ! -x "$target" ]]; then
+    echo "ForSynth demo '$1' not found in $FORSYNTH_ROOT" >&2
+    exit 2
+fi
+shift
+"$target" "$@"
+EOF_FORSYNTH
+            chmod 755 /usr/local/bin/forsynth-demo
+        else
+            log "[WARN] ForSynth build failed; see $FORSYNTH_DIR/build.log for diagnostics"
+            rm -f /usr/local/bin/forsynth-demo
+        fi
+    else
+        log "[WARN] Unable to clone ForSynth repository"
+    fi
+else
+    log "[LAB] Experimental synth lab disabled for $PROFILE profile"
 fi
 
 log "[THEME] Downloading Daft Punk themed assets"

@@ -10,7 +10,7 @@
     </Route>
     <Route name="Surge Bass" default-type="audio" remote-control-id="6">
       <Processor id="0" name="Surge XT" type="vst3"/>
-      <Processor id="1" name="ValhallaSupermassive" type="vst3"/>
+      <Processor id="1" name="Dragonfly Hall Reverb" type="lv2"/>
     </Route>
     <Route name="Vocoder Pads" default-type="audio" remote-control-id="7">
       <Processor id="0" name="TAL-Vocoder" type="lv2"/>
