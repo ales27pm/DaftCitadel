@@ -8,6 +8,7 @@
 # Usage: sudo bash scripts/daftcitadel.sh [--profile=citadel] [--auto] [--gpu-off]
 
 set -euo pipefail
+set -o errtrace
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ASSETS_DIR="$SCRIPT_DIR/../assets"
@@ -34,6 +35,17 @@ MODULE_ENABLES=()
 MODULE_DISABLES=()
 SELECTED_SAMPLE_PACKS=()
 PACK_SELECTION_OVERRIDDEN=false
+LOG_DIR_OVERRIDE=""
+LOG_FILE_OVERRIDE=""
+LOG_LEVEL_OVERRIDE=""
+DAFTCITADEL_LOG_FILE=""
+DAFTCITADEL_LOG_LEVEL="INFO"
+DAFTCITADEL_LOG_LEVEL_RANK=2
+DAFTCITADEL_WARNINGS=()
+DAFTCITADEL_ERRORS=()
+DAFTCITADEL_PHASE="bootstrap"
+DAFTCITADEL_STDOUT_IS_TTY=false
+DAFTCITADEL_STRICT_ERRORS=false
 
 usage() {
     cat <<'EOF'
@@ -52,6 +64,10 @@ Options:
   --modules=a,b,c                  Enable multiple modules in a single flag
   --without-module=NAME            Disable a module selected by the profile
   --packs=list                     Limit heavy downloads to comma-separated pack identifiers
+  --log-dir=PATH                   Write installer logs to a specific directory
+  --log-file=PATH                  Write installer logs to a specific file path
+  --log-level=LEVEL                Override log verbosity (trace|debug|info|notice|warn|error|critical)
+  --strict-errors                  Abort immediately on step failure (legacy behavior)
   -h, --help                       Show this message
 EOF
 }
@@ -87,11 +103,17 @@ for arg in "$@"; do
                 [[ -n "$pack" ]] && SELECTED_SAMPLE_PACKS+=("$pack")
             done
             ;;
+        --log-dir=*) LOG_DIR_OVERRIDE="${arg#*=}" ;;
+        --log-file=*) LOG_FILE_OVERRIDE="${arg#*=}" ;;
+        --log-level=*) LOG_LEVEL_OVERRIDE="${arg#*=}" ;;
+        --strict-errors) DAFTCITADEL_STRICT_ERRORS=true ;;
         -h|--help) usage; exit 0 ;;
         *) ARGS+=("$arg") ;;
     esac
 done
 set -- "${ARGS[@]}"
+
+trap 'daftcitadel_handle_error $? "$BASH_COMMAND" ${BASH_LINENO[0]}' ERR
 
 confirm() {
     if $AUTO; then
@@ -141,10 +163,138 @@ as_user() {
 }
 
 log() {
-    local message="$1"
-    printf '%s\n' "$message"
-    if [[ -n "${LOG:-}" ]]; then
-        printf '%s\n' "$message" >>"$LOG"
+    local raw="${1:-}"
+    local explicit="${2:-}"
+    local level=""
+    local message="$raw"
+
+    if [[ -n "$explicit" ]]; then
+        level=$(daftcitadel_normalize_level "$explicit")
+    elif [[ "$raw" =~ ^\[([A-Za-z0-9_-]+)\][[:space:]]*(.*)$ ]]; then
+        local tag="${BASH_REMATCH[1]}"
+        local rest="${BASH_REMATCH[2]}"
+        level=$(daftcitadel_normalize_level "$tag")
+        if [[ -n "$level" ]]; then
+            message="$rest"
+        else
+            level="INFO"
+            message="[$tag] $rest"
+        fi
+    fi
+
+    if [[ -z "$level" ]]; then
+        level="INFO"
+    fi
+
+    daftcitadel_log_internal "$level" "$message"
+}
+
+daftcitadel_normalize_level() {
+    local value="${1^^}"
+    case "$value" in
+        TRACE|DEBUG|INFO|NOTICE|WARN|WARNING|ERROR|CRITICAL)
+            case "$value" in
+                WARNING) echo "WARN" ;;
+                *) echo "$value" ;;
+            esac
+            ;;
+        ERR|FATAL)
+            echo "ERROR"
+            ;;
+        *)
+            echo ""
+            ;;
+    esac
+}
+
+daftcitadel_set_log_level() {
+    local requested="${1:-$DAFTCITADEL_LOG_LEVEL}"
+    local normalized=$(daftcitadel_normalize_level "$requested")
+    if [[ -z "$normalized" ]]; then
+        normalized="INFO"
+    fi
+    DAFTCITADEL_LOG_LEVEL="$normalized"
+    case "$normalized" in
+        TRACE) DAFTCITADEL_LOG_LEVEL_RANK=0 ;;
+        DEBUG) DAFTCITADEL_LOG_LEVEL_RANK=1 ;;
+        INFO) DAFTCITADEL_LOG_LEVEL_RANK=2 ;;
+        NOTICE) DAFTCITADEL_LOG_LEVEL_RANK=3 ;;
+        WARN) DAFTCITADEL_LOG_LEVEL_RANK=4 ;;
+        ERROR) DAFTCITADEL_LOG_LEVEL_RANK=5 ;;
+        CRITICAL) DAFTCITADEL_LOG_LEVEL_RANK=6 ;;
+        *) DAFTCITADEL_LOG_LEVEL_RANK=2 ;;
+    esac
+}
+
+daftcitadel_level_rank() {
+    case "${1:-INFO}" in
+        TRACE) echo 0 ;;
+        DEBUG) echo 1 ;;
+        INFO) echo 2 ;;
+        NOTICE) echo 3 ;;
+        WARN) echo 4 ;;
+        ERROR) echo 5 ;;
+        CRITICAL) echo 6 ;;
+        *) echo 2 ;;
+    esac
+}
+
+daftcitadel_should_emit() {
+    local rank
+    rank=$(daftcitadel_level_rank "$1")
+    if (( rank < DAFTCITADEL_LOG_LEVEL_RANK )); then
+        return 1
+    fi
+    return 0
+}
+
+daftcitadel_emit_console() {
+    local level="$1"
+    local message="$2"
+    local timestamp="$3"
+    local prefix=""
+    local reset=""
+
+    if $DAFTCITADEL_STDOUT_IS_TTY; then
+        case "$level" in
+            TRACE) prefix="\033[90m" ;;
+            DEBUG) prefix="\033[36m" ;;
+            INFO) prefix="\033[32m" ;;
+            NOTICE) prefix="\033[34m" ;;
+            WARN) prefix="\033[33m" ;;
+            ERROR) prefix="\033[31m" ;;
+            CRITICAL) prefix="\033[1;31m" ;;
+        esac
+        if [[ -n "$prefix" ]]; then
+            reset="\033[0m"
+        fi
+    fi
+
+    if [[ -n "$prefix" ]]; then
+        printf '%b[%s] [%s] %s%b\n' "$prefix" "$timestamp" "$level" "$message" "$reset"
+    else
+        printf '[%s] [%s] %s\n' "$timestamp" "$level" "$message"
+    fi
+}
+
+daftcitadel_log_internal() {
+    local level="$1"
+    local message="$2"
+    local timestamp
+    timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+    if [[ "$level" == "WARN" ]]; then
+        DAFTCITADEL_WARNINGS+=("$message")
+    elif [[ "$level" == "ERROR" || "$level" == "CRITICAL" ]]; then
+        DAFTCITADEL_ERRORS+=("$message")
+    fi
+
+    if daftcitadel_should_emit "$level"; then
+        daftcitadel_emit_console "$level" "$message" "$timestamp"
+    fi
+
+    if [[ -n "$DAFTCITADEL_LOG_FILE" ]]; then
+        printf '[%s] [%s] [%s] %s\n' "$timestamp" "$level" "$DAFTCITADEL_PHASE" "$message" >>"$DAFTCITADEL_LOG_FILE" 2>/dev/null || true
     fi
 }
 
@@ -157,13 +307,116 @@ sanitize_filename_component() {
     echo "$input" | tr -c 'A-Za-z0-9._-' '_'
 }
 
-sanitize_filename_component() {
-    local input="$1"
-    if [[ -z "$input" ]]; then
-        echo ""
+daftcitadel_init_logging() {
+    if [[ -t 1 ]]; then
+        DAFTCITADEL_STDOUT_IS_TTY=true
+    fi
+
+    if [[ -n "$LOG_LEVEL_OVERRIDE" ]]; then
+        daftcitadel_set_log_level "$LOG_LEVEL_OVERRIDE"
+    else
+        daftcitadel_set_log_level "$DAFTCITADEL_LOG_LEVEL"
+    fi
+
+    local base_dir="${LOG_DIR_OVERRIDE:-/var/log/daftcitadel}"
+    local fallback_dir="$SCRIPT_DIR/../logs"
+    local target="$LOG_FILE_OVERRIDE"
+
+    if [[ -n "$target" ]]; then
+        mkdir -p "$(dirname "$target")" 2>/dev/null || true
+        DAFTCITADEL_LOG_FILE="$target"
+    else
+        if ! mkdir -p "$base_dir" 2>/dev/null; then
+            base_dir="$fallback_dir"
+            mkdir -p "$base_dir" 2>/dev/null || true
+        fi
+        local stamp
+        stamp=$(date -u '+%Y%m%d-%H%M%S')
+        local profile_safe
+        profile_safe=$(sanitize_filename_component "$PROFILE")
+        DAFTCITADEL_LOG_FILE="$base_dir/daftcitadel-${profile_safe:-profile}-$stamp.log"
+    fi
+
+    if [[ -n "$DAFTCITADEL_LOG_FILE" ]]; then
+        if touch "$DAFTCITADEL_LOG_FILE" 2>/dev/null; then
+            chmod 600 "$DAFTCITADEL_LOG_FILE" 2>/dev/null || true
+        else
+            DAFTCITADEL_LOG_FILE=""
+        fi
+    fi
+}
+
+set_phase() {
+    DAFTCITADEL_PHASE="${1:-runtime}"
+    log "Transitioning to phase: $DAFTCITADEL_PHASE" NOTICE
+}
+
+run_step() {
+    local description="$1"
+    shift
+    if (($# == 0)); then
+        log "No command provided for step '$description'" WARN
+        return 0
+    fi
+    local command=("$@")
+    local status
+
+    log "Starting: $description" NOTICE
+    set +e
+    "${command[@]}"
+    status=$?
+    set -e
+
+    if ((status == 0)); then
+        log "Completed: $description" INFO
+        return 0
+    fi
+
+    log "Step failed ($status): $description" ERROR
+    DAFTCITADEL_ERRORS+=("$description")
+    if $DAFTCITADEL_STRICT_ERRORS; then
+        log "Strict error handling enabled; aborting" CRITICAL
+        exit "$status"
+    fi
+    return 0
+}
+
+daftcitadel_handle_error() {
+    local status="$1"
+    local command="$2"
+    local line="$3"
+    if ((status == 0)); then
         return
     fi
-    echo "$input" | tr -c 'A-Za-z0-9._-' '_'
+    log "Command '$command' failed with exit $status at line $line" ERROR
+    DAFTCITADEL_ERRORS+=("${command} (line $line)")
+    if $DAFTCITADEL_STRICT_ERRORS; then
+        exit "$status"
+    fi
+}
+
+daftcitadel_print_summary() {
+    local warn_count=${#DAFTCITADEL_WARNINGS[@]}
+    local error_count=${#DAFTCITADEL_ERRORS[@]}
+    log "Deployment summary:" NOTICE
+    log "  Warnings: $warn_count" NOTICE
+    log "  Errors:   $error_count" NOTICE
+    if ((warn_count > 0)); then
+        for item in "${DAFTCITADEL_WARNINGS[@]}"; do
+            log "warning: $item" DEBUG
+        done
+    fi
+    if ((error_count > 0)); then
+        for item in "${DAFTCITADEL_ERRORS[@]}"; do
+            log "error: $item" DEBUG
+        done
+        if ! $DAFTCITADEL_STRICT_ERRORS; then
+            log "One or more steps failed; review $DAFTCITADEL_LOG_FILE for details." WARN
+        fi
+    fi
+    if [[ -n "$DAFTCITADEL_LOG_FILE" ]]; then
+        log "Installer log saved to $DAFTCITADEL_LOG_FILE" NOTICE
+    fi
 }
 
 apt_install() {
@@ -187,6 +440,542 @@ apt_install_available() {
     if ((${#missing[@]})); then
         log "[WARN] Skipping unavailable packages: ${missing[*]}"
     fi
+}
+
+ensure_group_exists() {
+    local name="$1"
+    shift || true
+    if getent group "$name" >/dev/null 2>&1; then
+        return 0
+    fi
+    if (($#)); then
+        groupadd "$@" "$name"
+    else
+        groupadd "$name"
+    fi
+}
+
+write_audio_limits_config() {
+    cat >/etc/security/limits.d/daftcitadel-audio.conf <<'EOF_LIMITS'
+@audio    -  rtprio     95
+@audio    -  memlock    unlimited
+@realtime -  rtprio     98
+@realtime -  memlock    unlimited
+EOF_LIMITS
+}
+
+deploy_first_login_assets() {
+    local first_login="$1"
+    (
+        set -euo pipefail
+        as_user "mkdir -p ~/.config/daftcitadel ~/.config/autostart"
+        cat >"$first_login" <<'EOF_FIRST_LOGIN'
+#!/usr/bin/env bash
+set -euo pipefail
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user enable --now pipewire pipewire-pulse wireplumber || true
+else
+    echo "[WARN] systemctl not available; ensure PipeWire services are started manually" >&2
+fi
+if command -v pw-metadata >/dev/null 2>&1; then
+    pw-metadata -n settings 0 clock.force-quantum 32 || true
+fi
+rm -f "$HOME/.config/autostart/daftcitadel-first-login.desktop" "$HOME/.config/daftcitadel/first-login.sh"
+EOF_FIRST_LOGIN
+        chmod +x "$first_login"
+        cat >"$USER_HOME/.config/autostart/daftcitadel-first-login.desktop" <<'EOF_DESKTOP'
+[Desktop Entry]
+Type=Application
+Exec=/bin/bash -lc "$HOME/.config/daftcitadel/first-login.sh"
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
+Name=Daft Citadel PipeWire Init
+Comment=Enable PipeWire with Daft Citadel tuning on first login
+EOF_DESKTOP
+        chown -R "$USER_NAME:$USER_NAME" "$USER_HOME/.config/daftcitadel" "$USER_HOME/.config/autostart"
+    )
+}
+
+install_reaper_archive() {
+    local archive="$1"
+    if [[ ! -f "$archive" ]]; then
+        log "[WARN] REAPER archive $archive missing"
+        return 1
+    fi
+    mkdir -p /opt/reaper
+    if ! tar -xJf "$archive" --strip-components=1 -C /opt/reaper; then
+        log "[ERR] Failed to extract REAPER archive"
+        return 1
+    fi
+    ln -sf /opt/reaper/reaper /usr/local/bin/reaper
+    rm -f "$archive"
+}
+
+install_deb_file() {
+    local package_path="$1"
+    if [[ ! -f "$package_path" ]]; then
+        log "[ERR] Deb package $package_path not found"
+        return 1
+    fi
+    if ! apt-get install -y "$package_path"; then
+        apt-get -f install -y
+    fi
+}
+
+install_vital_suite() {
+    local VITAL_URL=""
+    local VITAL_VERSION_DISPLAY=""
+    local VITAL_DYNAMIC_SHA256=""
+    local VITAL_CHECKSUM_CANDIDATES=()
+    local __vital_known_shas=()
+
+    if command -v python3 >/dev/null 2>&1; then
+        if VITAL_DYNAMIC_OUTPUT=$(resolve_vital_manifest 2>/dev/null); then
+            eval "$VITAL_DYNAMIC_OUTPUT"
+            if [[ -n "${VITAL_DYNAMIC_URL:-}" && -n "${VITAL_DYNAMIC_SHA256:-}" ]]; then
+                VITAL_URL="$VITAL_DYNAMIC_URL"
+                VITAL_VERSION_DISPLAY="${VITAL_DYNAMIC_VERSION:-latest}"
+                log "[PLUGINS] Resolved Vital ${VITAL_VERSION_DISPLAY} via nixpkgs manifest"
+            fi
+        else
+            log "[WARN] Unable to fetch Vital metadata from nixpkgs; using curated fallback"
+        fi
+    else
+        log "[INFO] python3 unavailable; using static Vital manifest fallback"
+    fi
+
+    if [[ -n "${VITAL_DYNAMIC_SHA256:-}" ]]; then
+        VITAL_CHECKSUM_CANDIDATES+=("${VITAL_DYNAMIC_SHA256,,}")
+    fi
+
+    if [[ -z "${VITAL_URL:-}" ]]; then
+        if [[ -n "${VITAL_FALLBACK_URLS[$VITAL_DEFAULT_VERSION]:-}" ]]; then
+            VITAL_VERSION_DISPLAY="$VITAL_DEFAULT_VERSION"
+            VITAL_URL="${VITAL_FALLBACK_URLS[$VITAL_VERSION_DISPLAY]}"
+            if [[ -z "$VITAL_URL" ]]; then
+                log "[ERR] Vital fallback URL resolution failed for $VITAL_VERSION_DISPLAY"
+                return 1
+            fi
+        else
+            log "[ERR] Vital fallback URL metadata missing for $VITAL_DEFAULT_VERSION"
+            return 1
+        fi
+    fi
+
+    if [[ -n "${VITAL_VERSION_DISPLAY:-}" && -n "${VITAL_KNOWN_SHAS[$VITAL_VERSION_DISPLAY]:-}" ]]; then
+        read -r -a __vital_known_shas <<<"${VITAL_KNOWN_SHAS[$VITAL_VERSION_DISPLAY]}"
+        for candidate in "${__vital_known_shas[@]}"; do
+            candidate="${candidate,,}"
+            [[ -z "$candidate" ]] && continue
+            local duplicate=false
+            for existing in "${VITAL_CHECKSUM_CANDIDATES[@]}"; do
+                if [[ "$existing" == "$candidate" ]]; then
+                    duplicate=true
+                    break
+                fi
+            done
+            if ! $duplicate; then
+                VITAL_CHECKSUM_CANDIDATES+=("$candidate")
+            fi
+        done
+    fi
+
+    if ((${#VITAL_CHECKSUM_CANDIDATES[@]} == 0)); then
+        if [[ "${VITAL_VERSION_DISPLAY:-}" != "$VITAL_DEFAULT_VERSION" ]]; then
+            log "[WARN] Missing checksum metadata for Vital ${VITAL_VERSION_DISPLAY:-unknown}; falling back to $VITAL_DEFAULT_VERSION"
+            VITAL_VERSION_DISPLAY="$VITAL_DEFAULT_VERSION"
+            VITAL_URL="${VITAL_FALLBACK_URLS[$VITAL_VERSION_DISPLAY]}"
+            if [[ -z "$VITAL_URL" ]]; then
+                log "[ERR] Vital fallback URL resolution failed for $VITAL_VERSION_DISPLAY"
+                return 1
+            fi
+            VITAL_CHECKSUM_CANDIDATES=()
+            if [[ -n "${VITAL_KNOWN_SHAS[$VITAL_VERSION_DISPLAY]:-}" ]]; then
+                read -r -a __vital_known_shas <<<"${VITAL_KNOWN_SHAS[$VITAL_VERSION_DISPLAY]}"
+                for candidate in "${__vital_known_shas[@]}"; do
+                    candidate="${candidate,,}"
+                    [[ -z "$candidate" ]] && continue
+                    VITAL_CHECKSUM_CANDIDATES+=("$candidate")
+                done
+            fi
+        fi
+    fi
+
+    if ((${#VITAL_CHECKSUM_CANDIDATES[@]} == 0)); then
+        log "[ERR] No checksum metadata available for Vital ${VITAL_VERSION_DISPLAY:-unknown}"
+        return 1
+    fi
+
+    log "[PLUGINS] Installing Vital ${VITAL_VERSION_DISPLAY:-1.5.x}"
+    local vital_version_for_name="${VITAL_VERSION_DISPLAY:-$VITAL_DEFAULT_VERSION}"
+    local vital_sanitized_version
+    vital_sanitized_version=$(sanitize_filename_component "$vital_version_for_name")
+    local VITAL_ARCHIVE_CANDIDATES=()
+    if [[ -n "$vital_sanitized_version" ]]; then
+        VITAL_ARCHIVE_CANDIDATES+=("VitalInstaller_${vital_sanitized_version}.zip")
+        VITAL_ARCHIVE_CANDIDATES+=("Vital_${vital_sanitized_version}.zip")
+    fi
+    VITAL_ARCHIVE_CANDIDATES+=("VitalInstaller.zip")
+    VITAL_ARCHIVE_CANDIDATES+=("Vital.zip")
+    local VITAL_ARCHIVE_PATH=""
+    local candidate_name=""
+    for candidate_name in "${VITAL_ARCHIVE_CANDIDATES[@]}"; do
+        local cached_path="$DEPS_DIR/$candidate_name"
+        if [[ -f "$cached_path" ]]; then
+            if check_sha256 "$cached_path" "${VITAL_CHECKSUM_CANDIDATES[@]}"; then
+                log "[CACHE] Using cached Vital archive $candidate_name"
+                if ! verify_sha256 "$cached_path" "${VITAL_CHECKSUM_CANDIDATES[@]}"; then
+                    return 1
+                fi
+                VITAL_ARCHIVE_PATH="$cached_path"
+                break
+            fi
+            log "[WARN] Cached Vital archive $candidate_name failed checksum verification; removing"
+            rm -f "$cached_path"
+        fi
+    done
+
+    if [[ -z "$VITAL_ARCHIVE_PATH" ]]; then
+        local VITAL_ARCHIVE_PRIMARY_NAME="${VITAL_ARCHIVE_CANDIDATES[0]}"
+        if [[ -z "$VITAL_ARCHIVE_PRIMARY_NAME" ]]; then
+            VITAL_ARCHIVE_PRIMARY_NAME="VitalInstaller.zip"
+        fi
+        VITAL_ARCHIVE_PATH="$DEPS_DIR/$VITAL_ARCHIVE_PRIMARY_NAME"
+        if ! download_and_verify "$VITAL_URL" "$VITAL_ARCHIVE_PATH" "${VITAL_CHECKSUM_CANDIDATES[@]}"; then
+            return 1
+        fi
+    fi
+
+    local VITAL_WORKDIR
+    VITAL_WORKDIR=$(mktemp -d /tmp/vital.XXXXXX)
+    if ! unzip -o "$VITAL_ARCHIVE_PATH" -d "$VITAL_WORKDIR" >/dev/null; then
+        log "[ERR] Failed to extract Vital archive"
+        rm -rf "$VITAL_WORKDIR"
+        return 1
+    fi
+
+    local VITAL_ROOT="$VITAL_WORKDIR"
+    local VITAL_INSTALL_SCRIPT=""
+    local candidate=""
+    for candidate in \
+        "$VITAL_ROOT/install.sh" \
+        "$VITAL_ROOT/install" \
+        "$VITAL_ROOT"/VitalInstaller/install.sh \
+        "$VITAL_ROOT"/VitalInstaller/install
+    do
+        if [[ -f "$candidate" ]]; then
+            chmod +x "$candidate" || true
+            if [[ -x "$candidate" ]]; then
+                VITAL_INSTALL_SCRIPT="$candidate"
+                break
+            fi
+        fi
+    done
+
+    if [[ -n "$VITAL_INSTALL_SCRIPT" ]]; then
+        "$VITAL_INSTALL_SCRIPT" --no-register || true
+    else
+        local VITAL_PAYLOAD
+        VITAL_PAYLOAD=$(find "$VITAL_ROOT" -maxdepth 1 -type d -name 'VitalInstaller*' -print -quit)
+        if [[ -n "$VITAL_PAYLOAD" && -d "$VITAL_PAYLOAD" ]]; then
+            log "[PLUGINS] Vital installer script missing; performing manual deployment"
+            install -d /usr/lib/vst /usr/lib/vst3 /usr/lib/clap /opt/vital
+            local missing_components=()
+            local VITAL_VST="$VITAL_PAYLOAD/lib/vst/Vital.so"
+            local VITAL_VST3_DIR="$VITAL_PAYLOAD/lib/vst3/Vital.vst3"
+            local VITAL_CLAP="$VITAL_PAYLOAD/lib/clap/Vital.clap"
+            local VITAL_BIN="$VITAL_PAYLOAD/bin/Vital"
+            if [[ -f "$VITAL_VST" ]]; then
+                install -m 644 "$VITAL_VST" /usr/lib/vst/Vital.so
+            else
+                missing_components+=("VST plugin")
+            fi
+            if [[ -d "$VITAL_VST3_DIR" ]]; then
+                rm -rf /usr/lib/vst3/Vital.vst3
+                cp -r "$VITAL_VST3_DIR" /usr/lib/vst3/
+            else
+                missing_components+=("VST3 plugin")
+            fi
+            if [[ -f "$VITAL_CLAP" ]]; then
+                install -m 755 "$VITAL_CLAP" /usr/lib/clap/Vital.clap
+            else
+                missing_components+=("CLAP plugin")
+            fi
+            if [[ -f "$VITAL_BIN" ]]; then
+                install -m 755 "$VITAL_BIN" /opt/vital/Vital
+                ln -sf /opt/vital/Vital /usr/local/bin/Vital
+            else
+                missing_components+=("standalone binary")
+            fi
+            if ((${#missing_components[@]})); then
+                log "[WARN] Vital manual install missing: ${missing_components[*]}"
+            fi
+        else
+            log "[WARN] Vital payload layout changed; skipping manual install"
+        fi
+    fi
+
+    rm -rf "$VITAL_WORKDIR"
+}
+
+install_tyrell_n6() {
+    if [[ -d /usr/lib/vst3/TyrellN6.vst3 ]]; then
+        log "[PLUGINS] Tyrell N6 already present"
+        return 0
+    fi
+
+    local TYRELL_PRIMARY_URL="https://u-he.com/downloads/TyrellN6/TyrellN6_Linux.tar.xz"
+    local TYRELL_MIRRORS=(
+        "https://dl.u-he.com/downloads/TyrellN6/TyrellN6_Linux.tar.xz"
+        "https://uhe-dl.b-cdn.net/TyrellN6_307_Linux.tar.xz"
+    )
+    local TYRELL_ARCHIVE
+    TYRELL_ARCHIVE=$(mktemp /tmp/tyrell.XXXXXX.tar.xz)
+    local glibc_version
+    glibc_version=$(ldd --version | head -n 1 | awk '{print $NF}')
+    if version_lt "$glibc_version" "2.28"; then
+        log "[WARN] Tyrell N6 requires glibc 2.28+, detected $glibc_version"
+    fi
+
+    local tyrell_installed=false
+    local TYRELL_SOURCES=("$TYRELL_PRIMARY_URL" "${TYRELL_MIRRORS[@]}")
+    local mirror
+    for mirror in "${TYRELL_SOURCES[@]}"; do
+        if dl "$mirror" "$TYRELL_ARCHIVE"; then
+            if tar -tJf "$TYRELL_ARCHIVE" >/dev/null 2>&1; then
+                local TYRELL_WORKDIR
+                TYRELL_WORKDIR=$(mktemp -d /tmp/tyrell.XXXXXX)
+                if tar -xJf "$TYRELL_ARCHIVE" -C "$TYRELL_WORKDIR" >/dev/null 2>&1; then
+                    local TYRELL_SRC
+                    TYRELL_SRC=$(find "$TYRELL_WORKDIR" -maxdepth 2 -type d -name 'TyrellN6' | head -n 1)
+                    if [[ -n "$TYRELL_SRC" && -f "$TYRELL_SRC/TyrellN6.64.so" ]]; then
+                        install -d -m 755 /opt/u-he
+                        rm -rf /opt/u-he/TyrellN6
+                        cp -a "$TYRELL_SRC" /opt/u-he/TyrellN6
+                        chown -R root:root /opt/u-he/TyrellN6
+
+                        install -d -m 755 /usr/lib/vst
+                        install -m 755 "$TYRELL_SRC/TyrellN6.64.so" /usr/lib/vst/TyrellN6.64.so
+
+                        install -d -m 755 /usr/lib/vst3/TyrellN6.vst3/Contents/x86_64-linux
+                        install -m 755 "$TYRELL_SRC/TyrellN6.64.so" /usr/lib/vst3/TyrellN6.vst3/Contents/x86_64-linux/TyrellN6.so
+                        install -d -m 755 /usr/lib/vst3/TyrellN6.vst3/Contents/Resources/Documentation
+
+                        local TYRELL_DOC
+                        TYRELL_DOC=$(find "$TYRELL_SRC" -maxdepth 1 -type f -iname '*user guide.pdf' | head -n 1)
+                        if [[ -n "$TYRELL_DOC" ]]; then
+                            install -m 644 "$TYRELL_DOC" \
+                                "/usr/lib/vst3/TyrellN6.vst3/Contents/Resources/Documentation/$(basename "$TYRELL_DOC")"
+                        fi
+                        local TYRELL_LICENSE
+                        TYRELL_LICENSE=$(find "$TYRELL_SRC" -maxdepth 1 -type f -iname 'license.txt' | head -n 1)
+                        if [[ -n "$TYRELL_LICENSE" ]]; then
+                            install -m 644 "$TYRELL_LICENSE" \
+                                "/usr/lib/vst3/TyrellN6.vst3/Contents/Resources/Documentation/$(basename "$TYRELL_LICENSE")"
+                        fi
+
+                        install -d -m 755 /usr/lib/clap
+                        install -m 755 "$TYRELL_SRC/TyrellN6.64.so" /usr/lib/clap/TyrellN6.clap
+
+                        as_user "mkdir -p ~/.u-he ~/.vst ~/.vst3 ~/.clap"
+                        as_user "ln -snf /opt/u-he/TyrellN6 ~/.u-he/TyrellN6"
+                        as_user "ln -snf /usr/lib/vst/TyrellN6.64.so ~/.vst/TyrellN6.64.so"
+                        as_user "ln -snf /usr/lib/vst3/TyrellN6.vst3 ~/.vst3/TyrellN6.vst3"
+                        as_user "ln -snf /usr/lib/clap/TyrellN6.clap ~/.clap/TyrellN6.clap"
+
+                        tyrell_installed=true
+                        log "[PLUGINS] Installed Tyrell N6 from $mirror"
+                        rm -rf "$TYRELL_WORKDIR"
+                        break
+                    else
+                        log "[WARN] Tyrell N6 payload from $mirror missing expected content"
+                    fi
+                else
+                    log "[WARN] Unable to extract Tyrell N6 archive from $mirror"
+                fi
+                rm -rf "${TYRELL_WORKDIR:-}"
+            else
+                log "[WARN] Tyrell N6 archive from $mirror is not a valid tarball"
+            fi
+        else
+            log "[WARN] Failed to download Tyrell N6 from $mirror"
+        fi
+        rm -f "$TYRELL_ARCHIVE"
+    done
+    rm -f "$TYRELL_ARCHIVE"
+
+    if ! $tyrell_installed; then
+        log "[WARN] Tyrell N6 download unavailable; skipping automated install"
+        log "[INFO] Manual download available from https://u-he.com/products/tyrelln6/"
+        return 1
+    fi
+}
+
+install_obxd() {
+    local obxd_target_version="2.17.0"
+    local obxd_current_version=""
+    if [[ -f /usr/lib/vst3/OB-Xd.vst3/Contents/Resources/moduleinfo.json ]]; then
+        obxd_current_version=$(json_get_field \
+            /usr/lib/vst3/OB-Xd.vst3/Contents/Resources/moduleinfo.json \
+            "Version")
+    fi
+
+    if [[ "$obxd_current_version" == "$obxd_target_version" ]]; then
+        log "[PLUGINS] OB-Xd ${obxd_target_version} already installed"
+        return 0
+    fi
+
+    local OBXD_ARCHIVE
+    OBXD_ARCHIVE=$(mktemp -t obxd.XXXXXX.zip)
+    local OBXD_WORKDIR
+    OBXD_WORKDIR=$(mktemp -d -t obxd.XXXXXX)
+    if ! download_and_verify \
+        "https://github.com/reales/OB-Xd/releases/download/2.17/Obxd217FreeLinux.zip" \
+        "$OBXD_ARCHIVE" \
+        "c70c01aba78c499e67ccfa1916204a4ddcff9982ec17ca33a95e5ed605cc9472"; then
+        rm -f "$OBXD_ARCHIVE"
+        rm -rf "$OBXD_WORKDIR"
+        return 1
+    fi
+
+    local success=false
+    if unzip -q "$OBXD_ARCHIVE" -d "$OBXD_WORKDIR"; then
+        if [[ -d "$OBXD_WORKDIR/OB-Xd.vst3" && -f "$OBXD_WORKDIR/OB-Xd.so" ]]; then
+            install -d -m 755 /usr/lib/vst3
+            rm -rf /usr/lib/vst3/OB-Xd.vst3
+            cp -a "$OBXD_WORKDIR/OB-Xd.vst3" /usr/lib/vst3/
+            chmod -R go-w /usr/lib/vst3/OB-Xd.vst3
+
+            install -d -m 755 /usr/lib/vst
+            install -m 755 "$OBXD_WORKDIR/OB-Xd.so" /usr/lib/vst/OB-Xd.so
+
+            install -d -m 755 /opt/discoDSP
+            rm -rf /opt/discoDSP/OB-Xd
+            if [[ -d "$OBXD_WORKDIR/discoDSP/OB-Xd" ]]; then
+                cp -a "$OBXD_WORKDIR/discoDSP/OB-Xd" /opt/discoDSP/
+                chmod -R go-w /opt/discoDSP/OB-Xd
+            fi
+
+            install -d -m 755 /usr/share/doc/obxd
+            if [[ -f "$OBXD_WORKDIR/OB-Xd Manual.pdf" ]]; then
+                install -m 644 "$OBXD_WORKDIR/OB-Xd Manual.pdf" \
+                    "/usr/share/doc/obxd/OB-Xd Manual.pdf"
+            fi
+            if [[ -f "$OBXD_WORKDIR/License.txt" ]]; then
+                install -m 644 "$OBXD_WORKDIR/License.txt" \
+                    /usr/share/doc/obxd/License.txt
+            fi
+
+            as_user "mkdir -p ~/.vst ~/.vst3 ~/Documents ~/Documents/discoDSP"
+            as_user "ln -snf /usr/lib/vst/OB-Xd.so ~/.vst/OB-Xd.so"
+            as_user "ln -snf /usr/lib/vst3/OB-Xd.vst3 ~/.vst3/OB-Xd.vst3"
+
+            success=true
+            log "[PLUGINS] Installed OB-Xd ${obxd_target_version}"
+        else
+            log "[WARN] OB-Xd archive missing expected files"
+        fi
+    else
+        log "[WARN] Failed to extract OB-Xd archive"
+    fi
+
+    rm -f "$OBXD_ARCHIVE"
+    rm -rf "$OBXD_WORKDIR"
+
+    if ! $success; then
+        return 1
+    fi
+}
+
+create_python_virtualenv() {
+    as_user "python3 -m venv '$VENV'"
+}
+
+upgrade_python_pip() {
+    as_user "source '$VENV/bin/activate' && pip install --upgrade pip"
+}
+
+install_pytorch_packages() {
+    local torch_version="$1"
+    local torch_index="$2"
+    if as_user "source '$VENV/bin/activate' && pip install --index-url '$torch_index' torch==$torch_version"; then
+        return 0
+    fi
+    log "[WARN] PyTorch $torch_version unavailable from $torch_index; attempting fallback"
+    if as_user "source '$VENV/bin/activate' && pip install --index-url '$torch_index' torch"; then
+        return 0
+    fi
+    log "[ERR] Unable to install a compatible PyTorch build"
+    return 1
+}
+
+install_python_libraries() {
+    as_user "source '$VENV/bin/activate' && pip install mido midiutil music21 pygame PySide6 isobar numpy"
+}
+
+deploy_trainer_assets() {
+    local trainer_src="$ASSETS_DIR/python/daft_midi_trainer.py"
+    local trainer_stub_src="$ASSETS_DIR/python/daft_midi_trainer_stub.py"
+    if $ENABLE_AI; then
+        log "[AI] Deploying Daft MIDI trainer"
+        if [[ -f "$trainer_src" ]]; then
+            install -D -m 755 "$trainer_src" "$BASE/daft_midi_trainer.py"
+        else
+            log "[ERR] Missing trainer asset at $trainer_src"
+            return 1
+        fi
+    else
+        if [[ -f "$trainer_stub_src" ]]; then
+            install -D -m 755 "$trainer_stub_src" "$BASE/daft_midi_trainer.py"
+        else
+            log "[ERR] Missing trainer stub asset at $trainer_stub_src"
+            return 1
+        fi
+    fi
+    chown "$USER_NAME:$USER_NAME" "$BASE/daft_midi_trainer.py"
+}
+
+write_ardour_templates() {
+    local template_src_dir="$ASSETS_DIR/templates"
+    if [[ ! -d "$template_src_dir" ]]; then
+        log "[ERR] Template asset directory missing at $template_src_dir"
+        return 1
+    fi
+    if $ENABLE_EXPANDED_SYNTHS; then
+        install -D -m 644 "$template_src_dir/da_funk.ardour" "$BASE/Templates/da_funk.ardour"
+        install -D -m 644 "$template_src_dir/around_world.ardour" "$BASE/Templates/around_world.ardour"
+    else
+        install -D -m 644 "$template_src_dir/daft_apex.ardour" "$BASE/Templates/daft_apex.ardour"
+    fi
+    chown -R "$USER_NAME:$USER_NAME" "$BASE/Templates"
+}
+
+deploy_gui_controller() {
+    local gui_src="$ASSETS_DIR/python/citadel_gui.py"
+    if [[ -f "$gui_src" ]]; then
+        install -D -m 755 "$gui_src" "$BASE/citadel_gui.py"
+        chown "$USER_NAME:$USER_NAME" "$BASE/citadel_gui.py"
+        return 0
+    fi
+    log "[ERR] GUI asset missing at $gui_src"
+    return 1
+}
+
+create_desktop_entry() {
+    as_user "mkdir -p ~/.local/share/applications"
+    cat >"$USER_HOME/.local/share/applications/daft-citadel.desktop" <<EOF_SHORTCUT
+[Desktop Entry]
+Name=Daft Citadel
+Comment=Launch the Daft Citadel controller
+Exec=$VENV/bin/python $BASE/citadel_gui.py
+Icon=$THEME_DIR/icon.png
+Terminal=false
+Type=Application
+Categories=AudioVideo;Music;
+StartupWMClass=DaftCitadel
+EOF_SHORTCUT
+    chown "$USER_NAME:$USER_NAME" "$USER_HOME/.local/share/applications/daft-citadel.desktop"
 }
 
 search_first_match() {
@@ -353,7 +1142,7 @@ verify_sha256() {
 
     if (($# == 0)); then
         log "[ERR] No expected checksums provided for $file"
-        exit 1
+        return 1
     fi
 
     for expected in "$@"; do
@@ -373,7 +1162,7 @@ verify_sha256() {
     log "[ERR] SHA256 mismatch for $file"
     log "[ERR] Expected one of: ${expected_hashes[*]}"
     log "[ERR] Actual:   ${CHECK_SHA256_ACTUAL:-unknown}"
-    exit 1
+    return 1
 }
 
 verify_md5() {
@@ -385,7 +1174,7 @@ verify_md5() {
         log "[ERR] MD5 mismatch for $file"
         log "[ERR] Expected: ${expected,,}"
         log "[ERR] Actual:   $actual"
-        exit 1
+        return 1
     fi
     log "[CHECK] Verified MD5 for $file"
 }
@@ -407,7 +1196,7 @@ download_and_verify() {
     shift 2
     if (($# == 0)); then
         log "[ERR] Missing checksum metadata for $url"
-        exit 1
+        return 1
     fi
     if [[ -f "$dest" ]]; then
         if check_sha256 "$dest" "$@"; then
@@ -418,7 +1207,9 @@ download_and_verify() {
         log "[WARN] Cached archive $(basename "$dest") failed checksum verification; re-downloading"
         rm -f "$dest"
     fi
-    dl "$url" "$dest"
+    if ! dl "$url" "$dest"; then
+        return 1
+    fi
     verify_sha256 "$dest" "$@"
 }
 
@@ -435,7 +1226,9 @@ download_and_verify_md5() {
         log "[WARN] Cached archive $(basename "$dest") failed checksum verification; re-downloading"
         rm -f "$dest"
     fi
-    dl "$url" "$dest"
+    if ! dl "$url" "$dest"; then
+        return 1
+    fi
     verify_md5 "$dest" "$md5"
 }
 
@@ -695,6 +1488,9 @@ require_root
 require_distro
 resolve_user
 
+daftcitadel_init_logging
+log "Daft Citadel deployment started (profile=$PROFILE, strict_errors=$DAFTCITADEL_STRICT_ERRORS)" NOTICE
+
 if ! $DAW_PATH_OVERRIDE; then
     DAW_PATH="/usr/lib/lv2:/usr/lib/vst3:/usr/lib/ladspa:$USER_HOME/.lv2:$USER_HOME/.vst3:$USER_HOME/.vst"
 fi
@@ -728,9 +1524,15 @@ case "$PROFILE" in
         ENABLE_EXPERIMENTAL_SYNTHS=true
         ;;
     *)
-        echo "[ERR] Unknown profile: $PROFILE" >&2
-        usage
-        exit 1
+        log "[WARN] Unknown profile: $PROFILE -- defaulting to citadel baseline"
+        PROFILE="citadel"
+        PROFILE_NAME="Daft Citadel"
+        ENABLE_AI=true
+        ENABLE_GUI=true
+        ENABLE_HEAVY_ASSETS=true
+        ENABLE_EXPANDED_SYNTHS=true
+        ENABLE_GROOVE_TOOLS=true
+        ENABLE_EXPERIMENTAL_SYNTHS=true
         ;;
 esac
 
@@ -768,9 +1570,9 @@ BASE="$USER_HOME/DaftCitadel"
 LOG="$USER_HOME/daft_citadel.log"
 VENV="$BASE/.venv"
 THEME_DIR="$BASE/Theme"
-mkdir -p "$BASE" "$THEME_DIR"
-touch "$LOG"
-chown -R "$USER_NAME:$USER_NAME" "$BASE" "$LOG"
+run_step "Ensure base directories exist" mkdir -p "$BASE" "$THEME_DIR"
+run_step "Initialize deployment log" touch "$LOG"
+run_step "Set ownership for base directories" chown -R "$USER_NAME:$USER_NAME" "$BASE" "$LOG"
 log "[IGNITION] $PROFILE_NAME deployment - $(date)"
 
 [[ $ENABLE_AI == true ]] && JSON_AI=true || JSON_AI=false
@@ -797,83 +1599,53 @@ cat >"$BASE/citadel_profile.json" <<EOF_PROFILE_META
 EOF_PROFILE_META
 chown "$USER_NAME:$USER_NAME" "$BASE/citadel_profile.json"
 
-log "[SYS] Updating system packages"
-apt-get update -y
-apt-get upgrade -y
+set_phase "system-prep"
+run_step "Update apt package cache" apt-get update -y
+run_step "Upgrade installed packages" apt-get upgrade -y
 if ! command -v add-apt-repository >/dev/null 2>&1; then
-    apt_install software-properties-common
+    run_step "Install add-apt-repository support" apt_install software-properties-common
 fi
 for component in universe multiverse restricted; do
-    add-apt-repository -y "$component"
+    run_step "Enable apt component: $component" add-apt-repository -y "$component"
 done
-apt-get update -y
+run_step "Refresh apt package cache" apt-get update -y
 
-log "[AUDIO] Installing PipeWire/JACK and configuring realtime"
-apt_install_available pipewire pipewire-jack pipewire-pulse wireplumber jackd2 rtirq-init alsa-utils libasound2-plugins ubuntustudio-pipewire-config dbus-user-session pw-top
-getent group realtime >/dev/null || groupadd -r realtime
-usermod -a -G audio,realtime "$USER_NAME" || log "[WARN] Could not update groups for $USER_NAME"
-mkdir -p /etc/security/limits.d
-cat >/etc/security/limits.d/daftcitadel-audio.conf <<'EOF_LIMITS'
-@audio    -  rtprio     95
-@audio    -  memlock    unlimited
-@realtime -  rtprio     98
-@realtime -  memlock    unlimited
-EOF_LIMITS
+set_phase "audio-stack"
+run_step "Install PipeWire/JACK stack" apt_install_available pipewire pipewire-jack pipewire-pulse wireplumber jackd2 rtirq-init alsa-utils libasound2-plugins ubuntustudio-pipewire-config dbus-user-session pw-top
+run_step "Ensure realtime group exists" ensure_group_exists realtime -r
+run_step "Add $USER_NAME to audio/realtime groups" usermod -a -G audio,realtime "$USER_NAME"
+run_step "Write realtime audio limits" write_audio_limits_config
 if ! $CONTAINER_MODE && command -v loginctl >/dev/null 2>&1; then
-    loginctl enable-linger "$USER_NAME" || log "[WARN] Unable to enable linger for $USER_NAME"
+    run_step "Enable linger for $USER_NAME" loginctl enable-linger "$USER_NAME"
 else
     log "[SKIP] loginctl linger (container or unavailable)"
 fi
 
 FIRST_LOGIN="$USER_HOME/.config/daftcitadel/first-login.sh"
-as_user "mkdir -p ~/.config/daftcitadel ~/.config/autostart"
-cat >"$FIRST_LOGIN" <<'EOF_FIRST_LOGIN'
-#!/usr/bin/env bash
-set -euo pipefail
-if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user enable --now pipewire pipewire-pulse wireplumber || true
-else
-    echo "[WARN] systemctl not available; ensure PipeWire services are started manually" >&2
-fi
-if command -v pw-metadata >/dev/null 2>&1; then
-    pw-metadata -n settings 0 clock.force-quantum 32 || true
-fi
-rm -f "$HOME/.config/autostart/daftcitadel-first-login.desktop" "$HOME/.config/daftcitadel/first-login.sh"
-EOF_FIRST_LOGIN
-chmod +x "$FIRST_LOGIN"
-cat >"$USER_HOME/.config/autostart/daftcitadel-first-login.desktop" <<'EOF_DESKTOP'
-[Desktop Entry]
-Type=Application
-Exec=/bin/bash -lc "$HOME/.config/daftcitadel/first-login.sh"
-Hidden=false
-NoDisplay=false
-X-GNOME-Autostart-enabled=true
-Name=Daft Citadel PipeWire Init
-Comment=Enable PipeWire with Daft Citadel tuning on first login
-EOF_DESKTOP
-chown -R "$USER_NAME:$USER_NAME" "$USER_HOME/.config/daftcitadel" "$USER_HOME/.config/autostart"
+run_step "Deploy PipeWire autostart scripts" deploy_first_login_assets "$FIRST_LOGIN"
 
 sysctl_set vm.swappiness 1
 
+set_phase "gpu-tooling"
 if ! $GPU_OFF && command -v lspci >/dev/null 2>&1 && lspci | grep -qi nvidia; then
-    log "[GPU] Installing NVIDIA CUDA toolkit"
+    log "NVIDIA hardware detected; provisioning CUDA toolkit" INFO
     if ! $CONTAINER_MODE; then
-        apt_install nvidia-driver-535
+        run_step "Install NVIDIA driver" apt_install nvidia-driver-535
     else
-        log "[SKIP] NVIDIA driver install (container mode)"
+        log "Skipping NVIDIA driver install (container mode)" WARN
     fi
-    apt_install nvidia-cuda-toolkit
-    as_user "grep -q CUDA_VISIBLE_DEVICES ~/.bashrc || echo 'export CUDA_VISIBLE_DEVICES=0' >> ~/.bashrc"
+    run_step "Install NVIDIA CUDA toolkit" apt_install nvidia-cuda-toolkit
+    run_step "Persist CUDA_VISIBLE_DEVICES" as_user "grep -q CUDA_VISIBLE_DEVICES ~/.bashrc || echo 'export CUDA_VISIBLE_DEVICES=0' >> ~/.bashrc"
 else
-    log "[GPU] GPU acceleration disabled or NVIDIA hardware not detected"
+    log "GPU acceleration disabled or NVIDIA hardware not detected" NOTICE
 fi
 
-log "[DAW] Installing core DAWs and utilities"
+set_phase "daw-stack"
 CORE_DAWS=(ardour carla carla-lv2 carla-vst qjackctl pulseaudio-utils p7zip-full unzip zip wget curl git pv inxi neofetch)
 if [[ $PROFILE != "apex" ]]; then
     CORE_DAWS+=(lmms)
 fi
-apt_install "${CORE_DAWS[@]}"
+run_step "Install core DAW packages" apt_install "${CORE_DAWS[@]}"
 
 if $WITH_REAPER || { [[ $PROFILE != "apex" ]] && confirm "Install Reaper (evaluation) as an additional DAW?"; }; then
     REAPER_DL=$(\
@@ -884,12 +1656,9 @@ if $WITH_REAPER || { [[ $PROFILE != "apex" ]] && confirm "Install Reaper (evalua
     )
     REAPER_DL="${REAPER_DL:-}"
     if [[ -n "$REAPER_DL" ]]; then
-        optional_dl "$REAPER_DL" /tmp/reaper.tar.xz "REAPER Linux archive"
+        run_step "Download REAPER evaluation archive" optional_dl "$REAPER_DL" /tmp/reaper.tar.xz "REAPER Linux archive"
         if [[ -f /tmp/reaper.tar.xz ]]; then
-            mkdir -p /opt/reaper
-            tar -xJf /tmp/reaper.tar.xz --strip-components=1 -C /opt/reaper
-            ln -sf /opt/reaper/reaper /usr/local/bin/reaper
-            rm -f /tmp/reaper.tar.xz
+            run_step "Install REAPER evaluation" install_reaper_archive /tmp/reaper.tar.xz
         else
             log "[WARN] Skipping REAPER install; archive unavailable"
         fi
@@ -898,13 +1667,13 @@ if $WITH_REAPER || { [[ $PROFILE != "apex" ]] && confirm "Install Reaper (evalua
     fi
 fi
 
-log "[PLUGINS] Installing LV2/VST3 instruments and effects"
+set_phase "plugin-stack"
 CORE_PLUGINS=(calf-plugins lsp-plugins mda-lv2 x42-plugins dragonfly-reverb hydrogen)
 if $ENABLE_EXPANDED_SYNTHS; then
     CORE_PLUGINS+=(yoshimi zynaddsubfx)
 fi
-apt_install "${CORE_PLUGINS[@]}"
-apt_install_available zam-plugins avldrums.lv2 drumgizmo
+run_step "Install core plugin packages" apt_install "${CORE_PLUGINS[@]}"
+run_step "Install optional plugin packages" apt_install_available zam-plugins avldrums.lv2 drumgizmo
 
 declare -A HELM_KNOWN_SHAS=(
     ["0.9.0"]="aedf8b676657f72782513e5ad5f9c61a6bc21fe9357b23052928adafa8215eca"
@@ -932,7 +1701,7 @@ if command -v python3 >/dev/null 2>&1; then
             surge_filename="surge-xt-$(sanitize_filename_component "${surge_version_selected:-latest}").deb"
             SURGE_ARCHIVE_PATH="$DEPS_DIR/${surge_filename:-surge-xt-latest.deb}"
             if download_and_verify_md5 "$SURGE_DYNAMIC_URL" "$SURGE_ARCHIVE_PATH" "$SURGE_DYNAMIC_MD5"; then
-                apt-get install -y "$SURGE_ARCHIVE_PATH" || apt-get -f install -y
+                run_step "Install Surge XT ${surge_version_selected}" install_deb_file "$SURGE_ARCHIVE_PATH"
                 surge_installed=true
             fi
         else
@@ -949,8 +1718,8 @@ if ! $surge_installed; then
     surge_version_selected="${surge_version_selected:-1.3.4}"
     surge_filename="surge-xt-$(sanitize_filename_component "${surge_version_selected:-1.3.4}").deb"
     SURGE_ARCHIVE_PATH="$DEPS_DIR/${surge_filename:-surge-xt-1.3.4.deb}"
-    download_and_verify "$SURGE_URL" "$SURGE_ARCHIVE_PATH" "$SURGE_SHA256"
-    apt-get install -y "$SURGE_ARCHIVE_PATH" || apt-get -f install -y
+    run_step "Download Surge XT ${surge_version_selected}" download_and_verify "$SURGE_URL" "$SURGE_ARCHIVE_PATH" "$SURGE_SHA256"
+    run_step "Install Surge XT ${surge_version_selected}" install_deb_file "$SURGE_ARCHIVE_PATH"
 fi
 
 HELM_URL=""
@@ -980,183 +1749,15 @@ log "[PLUGINS] Installing Helm ${HELM_VERSION_DISPLAY:-0.9.0}"
 helm_version_for_name="${HELM_VERSION_DISPLAY:-0.9.0}"
 helm_filename="helm-$(sanitize_filename_component "$helm_version_for_name").deb"
 HELM_ARCHIVE_PATH="$DEPS_DIR/${helm_filename:-helm.deb}"
-download_and_verify "$HELM_URL" "$HELM_ARCHIVE_PATH" "$HELM_SHA256"
-apt-get install -y "$HELM_ARCHIVE_PATH" || apt-get -f install -y
+run_step "Download Helm ${HELM_VERSION_DISPLAY:-0.9.0}" download_and_verify "$HELM_URL" "$HELM_ARCHIVE_PATH" "$HELM_SHA256"
+run_step "Install Helm ${HELM_VERSION_DISPLAY:-0.9.0}" install_deb_file "$HELM_ARCHIVE_PATH"
 
 if $ENABLE_EXPANDED_SYNTHS; then
-    # Vital
-    # Vital distributes binaries under an EULA; prefer nixpkgs metadata to resolve the latest Linux build.
-    VITAL_URL=""
-    VITAL_VERSION_DISPLAY=""
-    VITAL_DYNAMIC_SHA256=""
-    VITAL_CHECKSUM_CANDIDATES=()
-    if command -v python3 >/dev/null 2>&1; then
-        if VITAL_DYNAMIC_OUTPUT=$(resolve_vital_manifest 2>/dev/null); then
-            eval "$VITAL_DYNAMIC_OUTPUT"
-            if [[ -n "${VITAL_DYNAMIC_URL:-}" && -n "${VITAL_DYNAMIC_SHA256:-}" ]]; then
-                VITAL_URL="$VITAL_DYNAMIC_URL"
-                VITAL_VERSION_DISPLAY="${VITAL_DYNAMIC_VERSION:-latest}"
-                log "[PLUGINS] Resolved Vital ${VITAL_VERSION_DISPLAY} via nixpkgs manifest"
-            fi
-        else
-            log "[WARN] Unable to fetch Vital metadata from nixpkgs; using curated fallback"
-        fi
-    else
-        log "[INFO] python3 unavailable; using static Vital manifest fallback"
-    fi
-    if [[ -n "${VITAL_DYNAMIC_SHA256:-}" ]]; then
-        VITAL_CHECKSUM_CANDIDATES+=("${VITAL_DYNAMIC_SHA256,,}")
-    fi
-    if [[ -z "${VITAL_URL:-}" ]]; then
-        if [[ -n "${VITAL_FALLBACK_URLS[$VITAL_DEFAULT_VERSION]:-}" ]]; then
-            VITAL_VERSION_DISPLAY="$VITAL_DEFAULT_VERSION"
-            VITAL_URL="${VITAL_FALLBACK_URLS[$VITAL_VERSION_DISPLAY]}"
-            if [[ -z "$VITAL_URL" ]]; then
-                log "[ERR] Vital fallback URL resolution failed for $VITAL_VERSION_DISPLAY"
-                exit 1
-            fi
-        else
-            log "[ERR] Vital fallback URL metadata missing for $VITAL_DEFAULT_VERSION"
-            exit 1
-        fi
-    fi
-    if [[ -n "${VITAL_VERSION_DISPLAY:-}" && -n "${VITAL_KNOWN_SHAS[$VITAL_VERSION_DISPLAY]:-}" ]]; then
-        read -r -a __vital_known_shas <<<"${VITAL_KNOWN_SHAS[$VITAL_VERSION_DISPLAY]}"
-        for candidate in "${__vital_known_shas[@]}"; do
-            candidate="${candidate,,}"
-            [[ -z "$candidate" ]] && continue
-            duplicate=false
-            for existing in "${VITAL_CHECKSUM_CANDIDATES[@]}"; do
-                if [[ "$existing" == "$candidate" ]]; then
-                    duplicate=true
-                    break
-                fi
-            done
-            if ! $duplicate; then
-                VITAL_CHECKSUM_CANDIDATES+=("$candidate")
-            fi
-        done
-    fi
-    if ((${#VITAL_CHECKSUM_CANDIDATES[@]} == 0)); then
-        if [[ "${VITAL_VERSION_DISPLAY:-}" != "$VITAL_DEFAULT_VERSION" ]]; then
-            log "[WARN] Missing checksum metadata for Vital ${VITAL_VERSION_DISPLAY:-unknown}; falling back to $VITAL_DEFAULT_VERSION"
-            VITAL_VERSION_DISPLAY="$VITAL_DEFAULT_VERSION"
-            VITAL_URL="${VITAL_FALLBACK_URLS[$VITAL_VERSION_DISPLAY]}"
-            if [[ -z "$VITAL_URL" ]]; then
-                log "[ERR] Vital fallback URL resolution failed for $VITAL_VERSION_DISPLAY"
-                exit 1
-            fi
-            VITAL_CHECKSUM_CANDIDATES=()
-            if [[ -n "${VITAL_KNOWN_SHAS[$VITAL_VERSION_DISPLAY]:-}" ]]; then
-                read -r -a __vital_known_shas <<<"${VITAL_KNOWN_SHAS[$VITAL_VERSION_DISPLAY]}"
-                for candidate in "${__vital_known_shas[@]}"; do
-                    candidate="${candidate,,}"
-                    [[ -z "$candidate" ]] && continue
-                    VITAL_CHECKSUM_CANDIDATES+=("$candidate")
-                done
-            fi
-        fi
-    fi
-    if ((${#VITAL_CHECKSUM_CANDIDATES[@]} == 0)); then
-        log "[ERR] No checksum metadata available for Vital ${VITAL_VERSION_DISPLAY:-unknown}"
-        exit 1
-    fi
-    log "[PLUGINS] Installing Vital ${VITAL_VERSION_DISPLAY:-1.5.x}"
-    vital_version_for_name="${VITAL_VERSION_DISPLAY:-$VITAL_DEFAULT_VERSION}"
-    vital_sanitized_version=$(sanitize_filename_component "$vital_version_for_name")
-    VITAL_ARCHIVE_CANDIDATES=()
-    if [[ -n "$vital_sanitized_version" ]]; then
-        VITAL_ARCHIVE_CANDIDATES+=("VitalInstaller_${vital_sanitized_version}.zip")
-        VITAL_ARCHIVE_CANDIDATES+=("Vital_${vital_sanitized_version}.zip")
-    fi
-    VITAL_ARCHIVE_CANDIDATES+=("VitalInstaller.zip")
-    VITAL_ARCHIVE_CANDIDATES+=("Vital.zip")
-    VITAL_ARCHIVE_PATH=""
-    for candidate_name in "${VITAL_ARCHIVE_CANDIDATES[@]}"; do
-        cached_path="$DEPS_DIR/$candidate_name"
-        if [[ -f "$cached_path" ]]; then
-            if check_sha256 "$cached_path" "${VITAL_CHECKSUM_CANDIDATES[@]}"; then
-                log "[CACHE] Using cached Vital archive $candidate_name"
-                verify_sha256 "$cached_path" "${VITAL_CHECKSUM_CANDIDATES[@]}"
-                VITAL_ARCHIVE_PATH="$cached_path"
-                break
-            fi
-            log "[WARN] Cached Vital archive $candidate_name failed checksum verification; removing"
-            rm -f "$cached_path"
-        fi
-    done
-    if [[ -z "$VITAL_ARCHIVE_PATH" ]]; then
-        VITAL_ARCHIVE_PRIMARY_NAME="${VITAL_ARCHIVE_CANDIDATES[0]}"
-        if [[ -z "$VITAL_ARCHIVE_PRIMARY_NAME" ]]; then
-            VITAL_ARCHIVE_PRIMARY_NAME="VitalInstaller.zip"
-        fi
-        VITAL_ARCHIVE_PATH="$DEPS_DIR/$VITAL_ARCHIVE_PRIMARY_NAME"
-        download_and_verify "$VITAL_URL" "$VITAL_ARCHIVE_PATH" "${VITAL_CHECKSUM_CANDIDATES[@]}"
-    fi
-    VITAL_WORKDIR=$(mktemp -d /tmp/vital.XXXXXX)
-    unzip -o "$VITAL_ARCHIVE_PATH" -d "$VITAL_WORKDIR"
-    VITAL_ROOT="$VITAL_WORKDIR"
-    VITAL_INSTALL_SCRIPT=""
-    for candidate in \
-        "$VITAL_ROOT/install.sh" \
-        "$VITAL_ROOT/install" \
-        "$VITAL_ROOT"/VitalInstaller/install.sh \
-        "$VITAL_ROOT"/VitalInstaller/install
-    do
-        if [[ -f "$candidate" ]]; then
-            chmod +x "$candidate" || true
-            if [[ -x "$candidate" ]]; then
-                VITAL_INSTALL_SCRIPT="$candidate"
-                break
-            fi
-        fi
-    done
-    if [[ -n "$VITAL_INSTALL_SCRIPT" ]]; then
-        "$VITAL_INSTALL_SCRIPT" --no-register || true
-    else
-        VITAL_PAYLOAD=$(find "$VITAL_ROOT" -maxdepth 1 -type d -name 'VitalInstaller*' -print -quit)
-        if [[ -n "$VITAL_PAYLOAD" && -d "$VITAL_PAYLOAD" ]]; then
-            log "[PLUGINS] Vital installer script missing; performing manual deployment"
-            install -d /usr/lib/vst /usr/lib/vst3 /usr/lib/clap /opt/vital
-            missing_components=()
-            VITAL_VST="$VITAL_PAYLOAD/lib/vst/Vital.so"
-            VITAL_VST3_DIR="$VITAL_PAYLOAD/lib/vst3/Vital.vst3"
-            VITAL_CLAP="$VITAL_PAYLOAD/lib/clap/Vital.clap"
-            VITAL_BIN="$VITAL_PAYLOAD/bin/Vital"
-            if [[ -f "$VITAL_VST" ]]; then
-                install -m 644 "$VITAL_VST" /usr/lib/vst/Vital.so
-            else
-                missing_components+=("VST plugin")
-            fi
-            if [[ -d "$VITAL_VST3_DIR" ]]; then
-                rm -rf /usr/lib/vst3/Vital.vst3
-                cp -r "$VITAL_VST3_DIR" /usr/lib/vst3/
-            else
-                missing_components+=("VST3 plugin")
-            fi
-            if [[ -f "$VITAL_CLAP" ]]; then
-                install -m 755 "$VITAL_CLAP" /usr/lib/clap/Vital.clap
-            else
-                missing_components+=("CLAP plugin")
-            fi
-            if [[ -f "$VITAL_BIN" ]]; then
-                install -m 755 "$VITAL_BIN" /opt/vital/Vital
-                ln -sf /opt/vital/Vital /usr/local/bin/Vital
-            else
-                missing_components+=("standalone binary")
-            fi
-            if ((${#missing_components[@]})); then
-                log "[WARN] Vital manual install missing: ${missing_components[*]}"
-            fi
-        else
-            log "[WARN] Vital payload layout changed; skipping manual install"
-        fi
-    fi
-    rm -rf "$VITAL_WORKDIR"
+    run_step "Install Vital suite" install_vital_suite
 
     # TAL-Vocoder via DISTRHO Ports (Ubuntu-packaged build)
     log "[PLUGINS] Installing DISTRHO Ports collection for TAL instruments"
-    apt_install_available dpf-plugins
+    run_step "Install DISTRHO Ports packages" apt_install_available dpf-plugins
     local tal_vocoder_path
     tal_vocoder_path=$(locate_tal_vocoder || true)
     if [[ -n "$tal_vocoder_path" ]]; then
@@ -1173,153 +1774,16 @@ if $ENABLE_EXPANDED_SYNTHS; then
         fi
     fi
 
-    # Tyrell N6
-    if [[ ! -d /usr/lib/vst3/TyrellN6.vst3 ]]; then
-        TYRELL_PRIMARY_URL="https://u-he.com/downloads/TyrellN6/TyrellN6_Linux.tar.xz"
-        TYRELL_MIRRORS=(
-            "https://dl.u-he.com/downloads/TyrellN6/TyrellN6_Linux.tar.xz"
-            "https://uhe-dl.b-cdn.net/TyrellN6_307_Linux.tar.xz"
-        )
-        TYRELL_ARCHIVE=$(mktemp /tmp/tyrell.XXXXXX.tar.xz)
-        glibc_version=$(ldd --version | head -n 1 | awk '{print $NF}')
-        if version_lt "$glibc_version" "2.28"; then
-            log "[WARN] Tyrell N6 requires glibc 2.28+, detected $glibc_version"
-        fi
-        tyrell_installed=false
-        TYRELL_SOURCES=("$TYRELL_PRIMARY_URL" "${TYRELL_MIRRORS[@]}")
-        for mirror in "${TYRELL_SOURCES[@]}"; do
-            if dl "$mirror" "$TYRELL_ARCHIVE"; then
-                if tar -tJf "$TYRELL_ARCHIVE" >/dev/null 2>&1; then
-                    TYRELL_WORKDIR=$(mktemp -d /tmp/tyrell.XXXXXX)
-                    if tar -xJf "$TYRELL_ARCHIVE" -C "$TYRELL_WORKDIR" >/dev/null 2>&1; then
-                        TYRELL_SRC=$(find "$TYRELL_WORKDIR" -maxdepth 2 -type d -name 'TyrellN6' | head -n 1)
-                        if [[ -n "$TYRELL_SRC" && -f "$TYRELL_SRC/TyrellN6.64.so" ]]; then
-                            install -d -m 755 /opt/u-he
-                            rm -rf /opt/u-he/TyrellN6
-                            cp -a "$TYRELL_SRC" /opt/u-he/TyrellN6
-                            chown -R root:root /opt/u-he/TyrellN6
+    run_step "Install Tyrell N6" install_tyrell_n6
 
-                            install -d -m 755 /usr/lib/vst
-                            install -m 755 "$TYRELL_SRC/TyrellN6.64.so" /usr/lib/vst/TyrellN6.64.so
-
-                            install -d -m 755 /usr/lib/vst3/TyrellN6.vst3/Contents/x86_64-linux
-                            install -m 755 "$TYRELL_SRC/TyrellN6.64.so" /usr/lib/vst3/TyrellN6.vst3/Contents/x86_64-linux/TyrellN6.so
-                            install -d -m 755 /usr/lib/vst3/TyrellN6.vst3/Contents/Resources/Documentation
-
-                            TYRELL_DOC=$(find "$TYRELL_SRC" -maxdepth 1 -type f -iname '*user guide.pdf' | head -n 1)
-                            if [[ -n "$TYRELL_DOC" ]]; then
-                                install -m 644 "$TYRELL_DOC" \
-                                    "/usr/lib/vst3/TyrellN6.vst3/Contents/Resources/Documentation/$(basename "$TYRELL_DOC")"
-                            fi
-                            TYRELL_LICENSE=$(find "$TYRELL_SRC" -maxdepth 1 -type f -iname 'license.txt' | head -n 1)
-                            if [[ -n "$TYRELL_LICENSE" ]]; then
-                                install -m 644 "$TYRELL_LICENSE" \
-                                    "/usr/lib/vst3/TyrellN6.vst3/Contents/Resources/Documentation/$(basename "$TYRELL_LICENSE")"
-                            fi
-
-                            install -d -m 755 /usr/lib/clap
-                            install -m 755 "$TYRELL_SRC/TyrellN6.64.so" /usr/lib/clap/TyrellN6.clap
-
-                            as_user "mkdir -p ~/.u-he ~/.vst ~/.vst3 ~/.clap"
-                            as_user "ln -snf /opt/u-he/TyrellN6 ~/.u-he/TyrellN6"
-                            as_user "ln -snf /usr/lib/vst/TyrellN6.64.so ~/.vst/TyrellN6.64.so"
-                            as_user "ln -snf /usr/lib/vst3/TyrellN6.vst3 ~/.vst3/TyrellN6.vst3"
-                            as_user "ln -snf /usr/lib/clap/TyrellN6.clap ~/.clap/TyrellN6.clap"
-
-                            tyrell_installed=true
-                            log "[PLUGINS] Installed Tyrell N6 from $mirror"
-                            rm -rf "$TYRELL_WORKDIR"
-                            break
-                        else
-                            log "[WARN] Tyrell N6 payload from $mirror missing expected content"
-                        fi
-                    else
-                        log "[WARN] Unable to extract Tyrell N6 archive from $mirror"
-                    fi
-                    rm -rf "${TYRELL_WORKDIR:-}"
-                else
-                    log "[WARN] Tyrell N6 archive from $mirror is not a valid tarball"
-                fi
-            else
-                log "[WARN] Failed to download Tyrell N6 from $mirror"
-            fi
-            rm -f "$TYRELL_ARCHIVE"
-        done
-        rm -f "$TYRELL_ARCHIVE"
-        if ! $tyrell_installed; then
-            log "[WARN] Tyrell N6 download unavailable; skipping automated install"
-            log "[INFO] Manual download available from https://u-he.com/products/tyrelln6/"
-        fi
-    fi
-
-    # OB-Xd
-    obxd_target_version="2.17.0"
-    obxd_current_version=""
-    if [[ -f /usr/lib/vst3/OB-Xd.vst3/Contents/Resources/moduleinfo.json ]]; then
-        obxd_current_version=$(json_get_field \
-            /usr/lib/vst3/OB-Xd.vst3/Contents/Resources/moduleinfo.json \
-            "Version")
-    fi
-
-    if [[ "$obxd_current_version" != "$obxd_target_version" ]]; then
-        OBXD_ARCHIVE=$(mktemp -t obxd.XXXXXX.zip)
-        OBXD_WORKDIR=$(mktemp -d -t obxd.XXXXXX)
-        download_and_verify \
-            "https://github.com/reales/OB-Xd/releases/download/2.17/Obxd217FreeLinux.zip" \
-            "$OBXD_ARCHIVE" \
-            "c70c01aba78c499e67ccfa1916204a4ddcff9982ec17ca33a95e5ed605cc9472"
-        if unzip -q "$OBXD_ARCHIVE" -d "$OBXD_WORKDIR"; then
-            if [[ -d "$OBXD_WORKDIR/OB-Xd.vst3" && -f "$OBXD_WORKDIR/OB-Xd.so" ]]; then
-                install -d -m 755 /usr/lib/vst3
-                rm -rf /usr/lib/vst3/OB-Xd.vst3
-                cp -a "$OBXD_WORKDIR/OB-Xd.vst3" /usr/lib/vst3/
-                chmod -R go-w /usr/lib/vst3/OB-Xd.vst3
-
-                install -d -m 755 /usr/lib/vst
-                install -m 755 "$OBXD_WORKDIR/OB-Xd.so" /usr/lib/vst/OB-Xd.so
-
-                install -d -m 755 /opt/discoDSP
-                rm -rf /opt/discoDSP/OB-Xd
-                if [[ -d "$OBXD_WORKDIR/discoDSP/OB-Xd" ]]; then
-                    cp -a "$OBXD_WORKDIR/discoDSP/OB-Xd" /opt/discoDSP/
-                    chmod -R go-w /opt/discoDSP/OB-Xd
-                fi
-
-                install -d -m 755 /usr/share/doc/obxd
-                if [[ -f "$OBXD_WORKDIR/OB-Xd Manual.pdf" ]]; then
-                    install -m 644 "$OBXD_WORKDIR/OB-Xd Manual.pdf" \
-                        "/usr/share/doc/obxd/OB-Xd Manual.pdf"
-                fi
-                if [[ -f "$OBXD_WORKDIR/License.txt" ]]; then
-                    install -m 644 "$OBXD_WORKDIR/License.txt" \
-                        /usr/share/doc/obxd/License.txt
-                fi
-
-                as_user "mkdir -p ~/.vst ~/.vst3 ~/Documents ~/Documents/discoDSP"
-                as_user "ln -snf /usr/lib/vst/OB-Xd.so ~/.vst/OB-Xd.so"
-                as_user "ln -snf /usr/lib/vst3/OB-Xd.vst3 ~/.vst3/OB-Xd.vst3"
-                if [[ -d /opt/discoDSP/OB-Xd ]]; then
-                    as_user "ln -snf /opt/discoDSP/OB-Xd ~/Documents/discoDSP/OB-Xd"
-                fi
-
-                obxd_current_version="$obxd_target_version"
-                log "[PLUGINS] Installed OB-Xd Legacy $obxd_target_version"
-            else
-                log "[WARN] OB-Xd payload missing expected plugin binaries"
-            fi
-        else
-            log "[WARN] Failed to extract OB-Xd archive"
-        fi
-        rm -f "${OBXD_ARCHIVE:-}"
-        rm -rf "${OBXD_WORKDIR:-}"
-    fi
+    run_step "Install OB-Xd" install_obxd
 
     log "[INFO] Consider installing Dragonfly Reverb, LSP, Calf, x42, Zam, and DISTRHO Ports for a comprehensive Linux-native toolchain"
     log "[INFO] MT Power Drumkit 2 requires a manual download; native alternatives like AVLDrums or DrumGizmo are installed automatically"
 fi
 
 log "[MIDI] Installing FluidSynth and soundfonts"
-apt_install fluidsynth fluid-soundfont-gm fluid-soundfont-gs
+run_step "Install FluidSynth and soundfonts" apt_install fluidsynth fluid-soundfont-gm fluid-soundfont-gs
 as_user "grep -q 'alias fsynth=' ~/.bashrc || echo \"alias fsynth='fluidsynth -a pulseaudio /usr/share/sounds/sf2/FluidR3_GM.sf2'\" >> ~/.bashrc"
 
 log "[VAULT] Creating library directories and downloading presets/samples"
@@ -1399,7 +1863,7 @@ fi
 
 if $ENABLE_GROOVE_TOOLS; then
     log "[GROOVE] Deploying open-source groove generators and MIDI packs"
-    apt_install git
+    run_step "Install git for groove tools" apt_install git
     GROOVE_DIR="$BASE/Grooves"
     MIDI_TARGET="$BASE/MIDIs"
     as_user "mkdir -p '$GROOVE_DIR/Extensions' '$GROOVE_DIR/MIDI'"
@@ -1424,7 +1888,7 @@ fi
 
 if $ENABLE_EXPERIMENTAL_SYNTHS; then
     log "[LAB] Installing ForSynth experimental suite"
-    apt_install git gfortran make
+    run_step "Install ForSynth build dependencies" apt_install git gfortran make
     EXPERIMENTAL_DIR="$BASE/Experimental"
     FORSYNTH_DIR="$EXPERIMENTAL_DIR/ForSynth"
     as_user "mkdir -p '$EXPERIMENTAL_DIR'"
@@ -1485,7 +1949,7 @@ chown -R "$USER_NAME:$USER_NAME" "$THEME_DIR"
 
 if $ENABLE_GUI; then
     log "[PY] Creating Python virtual environment and installing libraries"
-    apt_install python3 python3-venv python3-pip python3-dev build-essential libasound2-dev libsndfile1-dev libportmidi-dev imagemagick fonts-orbitron fonts-roboto fonts-jetbrains-mono
+    run_step "Install Python build dependencies" apt_install python3 python3-venv python3-pip python3-dev build-essential libasound2-dev libsndfile1-dev libportmidi-dev imagemagick fonts-orbitron fonts-roboto fonts-jetbrains-mono
     if command -v convert >/dev/null 2>&1; then
         if [[ -f "$THEME_DIR/icon.svg" ]]; then
             convert "$THEME_DIR/icon.svg" "$THEME_DIR/icon.png"
@@ -1495,8 +1959,10 @@ if $ENABLE_GUI; then
     else
         log "[WARN] ImageMagick convert not available; skipping icon rasterization"
     fi
-    as_user "python3 -m venv '$VENV'"
-    as_user "source '$VENV/bin/activate' && pip install --upgrade pip"
+
+    run_step "Create Python virtual environment" create_python_virtualenv
+    run_step "Upgrade pip inside virtual environment" upgrade_python_pip
+
     if $ENABLE_AI; then
         TORCH_VERSION="2.4.1+cu121"
         TORCH_INDEX="https://download.pytorch.org/whl/cu121"
@@ -1507,76 +1973,16 @@ if $ENABLE_GUI; then
             TORCH_VARIANT="CPU"
         fi
         log "[AI] Installing PyTorch $TORCH_VERSION ($TORCH_VARIANT build)"
-        if ! as_user "source '$VENV/bin/activate' && pip install --index-url '$TORCH_INDEX' torch==$TORCH_VERSION"; then
-            log "[WARN] PyTorch $TORCH_VERSION unavailable from $TORCH_INDEX; attempting auto-resolve"
-            if ! as_user "source '$VENV/bin/activate' && pip install --index-url '$TORCH_INDEX' torch"; then
-                log "[ERR] Unable to install a compatible PyTorch build"
-                exit 1
-            fi
-        fi
+        run_step "Install PyTorch $TORCH_VARIANT build" install_pytorch_packages "$TORCH_VERSION" "$TORCH_INDEX"
     else
         log "[AI] Skipping Torch deployment for $PROFILE profile"
     fi
-    as_user "source '$VENV/bin/activate' && pip install mido midiutil music21 pygame PySide6 isobar numpy"
 
-    TRAINER_SRC="$ASSETS_DIR/python/daft_midi_trainer.py"
-    TRAINER_STUB_SRC="$ASSETS_DIR/python/daft_midi_trainer_stub.py"
-    if $ENABLE_AI; then
-        log "[AI] Deploying Daft MIDI trainer"
-        if [[ -f "$TRAINER_SRC" ]]; then
-            install -D -m 755 "$TRAINER_SRC" "$BASE/daft_midi_trainer.py"
-        else
-            log "[ERR] Missing trainer asset at $TRAINER_SRC"
-            exit 1
-        fi
-    else
-        if [[ -f "$TRAINER_STUB_SRC" ]]; then
-            install -D -m 755 "$TRAINER_STUB_SRC" "$BASE/daft_midi_trainer.py"
-        else
-            log "[ERR] Missing trainer stub asset at $TRAINER_STUB_SRC"
-            exit 1
-        fi
-    fi
-    chown "$USER_NAME:$USER_NAME" "$BASE/daft_midi_trainer.py"
-
-    log "[TEMPLATES] Writing Ardour templates"
-    TEMPLATE_SRC_DIR="$ASSETS_DIR/templates"
-    if [[ ! -d "$TEMPLATE_SRC_DIR" ]]; then
-        log "[ERR] Template asset directory missing at $TEMPLATE_SRC_DIR"
-        exit 1
-    fi
-    if $ENABLE_EXPANDED_SYNTHS; then
-        install -D -m 644 "$TEMPLATE_SRC_DIR/da_funk.ardour" "$BASE/Templates/da_funk.ardour"
-        install -D -m 644 "$TEMPLATE_SRC_DIR/around_world.ardour" "$BASE/Templates/around_world.ardour"
-    else
-        install -D -m 644 "$TEMPLATE_SRC_DIR/daft_apex.ardour" "$BASE/Templates/daft_apex.ardour"
-    fi
-    chown -R "$USER_NAME:$USER_NAME" "$BASE/Templates"
-
-    log "[GUI] Creating PySide6 control surface"
-    GUI_SRC="$ASSETS_DIR/python/citadel_gui.py"
-    if [[ -f "$GUI_SRC" ]]; then
-        install -D -m 755 "$GUI_SRC" "$BASE/citadel_gui.py"
-    else
-        log "[ERR] GUI asset missing at $GUI_SRC"
-        exit 1
-    fi
-    chown "$USER_NAME:$USER_NAME" "$BASE/citadel_gui.py"
-
-    log "[DESKTOP] Creating desktop entry"
-    as_user "mkdir -p ~/.local/share/applications"
-    cat >"$USER_HOME/.local/share/applications/daft-citadel.desktop" <<EOF_SHORTCUT
-[Desktop Entry]
-Name=Daft Citadel
-Comment=Launch the Daft Citadel controller
-Exec=$VENV/bin/python $BASE/citadel_gui.py
-Icon=$THEME_DIR/icon.png
-Terminal=false
-Type=Application
-Categories=AudioVideo;Music;
-StartupWMClass=DaftCitadel
-EOF_SHORTCUT
-    chown "$USER_NAME:$USER_NAME" "$USER_HOME/.local/share/applications/daft-citadel.desktop"
+    run_step "Install Python support libraries" install_python_libraries
+    run_step "Deploy MIDI trainer assets" deploy_trainer_assets
+    run_step "Write Ardour templates" write_ardour_templates
+    run_step "Deploy PySide6 control surface" deploy_gui_controller
+    run_step "Create desktop launcher" create_desktop_entry
 else
     log "[PY] GUI stack disabled for this profile"
 fi
@@ -1615,6 +2021,8 @@ if $ENABLE_AI; then
 fi
 log "Ardour template directory: $BASE/Templates"
 log "NOTE: Log out/in to finalize audio group membership."
+
+daftcitadel_print_summary
 
 if $CONTAINER_MODE; then
     log "[FINAL] Deployment complete (reboot not applicable in container)"
