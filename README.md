@@ -49,7 +49,13 @@ The build step runs the installer inside the image with container-safe settings 
 docker compose up
 ```
 
-The compose stack exposes X11, PulseAudio, and ALSA devices so the GUI and audio pipeline can run inside the container. Adjust the mounted paths for `XDG_RUNTIME_DIR` or `PULSE_SERVER` if your host uses different sockets.
+The base stack exposes X11 and PulseAudio so the GUI can run inside the container. Add ALSA passthrough when your host provides `/dev/snd` by layering the optional override file:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.audio.yml up
+```
+
+If the override is omitted, the container will still launch—perfect for headless hosts or CI runners that lack an ALSA device. Adjust the mounted paths for `XDG_RUNTIME_DIR` or `PULSE_SERVER` if your host uses different sockets.
 
 ### Customising the container
 

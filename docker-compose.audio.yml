@@ -1,0 +1,4 @@
+services:
+  citadel:
+    devices:
+      - /dev/snd:/dev/snd
