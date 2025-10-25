@@ -1758,12 +1758,10 @@ if $ENABLE_EXPANDED_SYNTHS; then
     # TAL-Vocoder via DISTRHO Ports (Ubuntu-packaged build)
     log "[PLUGINS] Installing DISTRHO Ports collection for TAL instruments"
     run_step "Install DISTRHO Ports packages" apt_install_available dpf-plugins
-    local tal_vocoder_path
     tal_vocoder_path=$(locate_tal_vocoder || true)
     if [[ -n "$tal_vocoder_path" ]]; then
         log "[PLUGINS] TAL-Vocoder deployed via DISTRHO Ports packages (${tal_vocoder_path})"
     else
-        local distrho_reference
         distrho_reference=$(locate_distrho_reference_plugin || true)
         if [[ -n "$distrho_reference" ]]; then
             log "[INFO] DISTRHO Ports plugins detected (e.g. ${distrho_reference}); TAL-Vocoder is not bundled in this release."
