@@ -44,6 +44,10 @@ This playbook captures the baseline rules for every directory in the repository.
 - Surface actionable errors with `console` (JS) or `os_log` (Swift) and ensure logs include context identifiers (session IDs, connection state) for diagnostics.
 - When adding telemetry, respect platform privacy policies and gate experimental probes behind feature flags stored under `src/session`.
 
+## Session Shutdown Protocol
+- Run the complete end-session system whenever a session concludes so audio bridges, plugin hosts, and persistence layers are consistently released.
+- Back this policy with automated tests that exercise the teardown trigger and confirm the shutdown pipeline executes every time.
+
 ## Notes
 - Keep secrets, API keys, and private certificates out of the repository.
 - Prefer small, focused commits so automation and reviewers can trace intent quickly.
