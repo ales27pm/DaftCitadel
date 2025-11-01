@@ -104,6 +104,6 @@ describe('useSessionEnvironmentLifecycle', () => {
     const cleanupCalls = disposeSpy.mock.calls.filter(
       ([env, context]) => env === environment && context === 'lifecycle test context',
     );
-    expect(cleanupCalls.length).toBeGreaterThanOrEqual(1);
+    expect(cleanupCalls.length).toBe(1);
   });
 });
