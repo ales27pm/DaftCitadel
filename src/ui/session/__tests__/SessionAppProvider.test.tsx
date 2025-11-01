@@ -178,7 +178,7 @@ describe('SessionAppProvider', () => {
     const deferred = createDeferred<SessionEnvironment>();
     const disposeSpy = jest
       .spyOn(environmentModule, 'disposeSessionEnvironment')
-      .mockResolvedValue(undefined);
+      .mockImplementation(() => new Promise(resolve => setTimeout(resolve, 0)));
     const passiveSpy = jest
       .spyOn(environmentModule, 'createPassiveSessionEnvironment')
       .mockReturnValue(deferred.promise);
