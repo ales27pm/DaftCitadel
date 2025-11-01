@@ -70,7 +70,7 @@ This roadmap captures the near-term delivery goals for Daft Citadel as we bring 
 
 - 2025-10-12 — Confirmed `SessionAudioBridge` as the single source of truth for routing diffs to simplify plugin lifecycle management.
 - 2025-10-27 — Adopted `SessionAppProvider` as the entry point for all session-bound UI to avoid duplicating bootstrap code across screens.
-- 2025-11-02 — Prioritised collaboration stability over new diagnostics widgets to keep remote editing unblocked.
+- 2025-11-01 — Prioritised collaboration stability over new diagnostics widgets to keep remote editing unblocked.
 
 ## Dependencies
 
@@ -87,4 +87,4 @@ This roadmap captures the near-term delivery goals for Daft Citadel as we bring 
 
 ## Changelog
 
-- 2025-11-02 • Refocused the roadmap on session-connected UI, plugin resilience, collaboration streaming, and installer readiness with module-specific deliverables.
+- 2025-11-01 • Refocused the roadmap on session-connected UI, plugin resilience, collaboration streaming, and installer readiness with module-specific deliverables.

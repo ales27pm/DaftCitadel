@@ -229,16 +229,15 @@ def parse_managed_from_agents_md() -> List[str]:
     return norm
 
 
-def desired_agents_md(managed_paths: List[str], existing_text: Optional[str]) -> str:
-    """Return the AGENTS.md content we should keep or create.
+def desired_agents_md(existing_text: Optional[str]) -> str:
+    """Return the validated AGENTS.md content we should preserve.
 
     Historically this repository maintained AGENTS.md manually through
     `scripts/manageAgents.js`. When synchronising we do *not* want to
-    overwrite that guidance – the goal is only to ensure the file exists for
+    overwrite that guidance - the goal is only to ensure the file exists for
     parsing. Therefore we keep the existing prose verbatim whenever present
     and only normalise trailing newlines. When the file is missing entirely we
-    create a lightweight default that documents how to declare managed files
-    without disturbing maintainers' content on subsequent runs.
+    halt so maintainers can regenerate it via the primary automation pipeline.
     """
 
     if existing_text:
@@ -247,22 +246,11 @@ def desired_agents_md(managed_paths: List[str], existing_text: Optional[str]) ->
             text += "\n"
         return text
 
-    default = textwrap.dedent(
-        """\
-        # Agents Playbook
-
-        <!-- managed-by: agents_sync.py v1 -->
-        ```agents.managed
-        # Declare files this script may manage, e.g.
-        # - docs/ROADMAP.md
-        ```
-
-        Describe repository-wide automation or agent instructions here. Existing
-        content will be preserved on future runs; update `agents.config.json` if
-        you rely on the legacy manageAgents pipeline.
-        """
-    ).strip()
-    return default + "\n"
+    print(
+        "ERROR: AGENTS.md is missing. Regenerate it with `npm run manage:agents` before running agents_sync.py.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 def compute_hash_and_size(path: Path) -> Tuple[str, int]:
     h = hashlib.sha256()
@@ -318,7 +306,7 @@ def gather_existing_generated_docs(managed_paths: List[str]) -> Dict[str, str]:
     return harvested
 
 def synthesize_desired_content(
-    relpath: str, existing_text: Optional[str], consulted_corpus: Dict[str, str]
+    relpath: str, existing_text: Optional[str]
 ) -> str:
     """Generate content for a managed artifact.
 
@@ -380,7 +368,7 @@ def build_plan() -> Plan:
         notes.append("No managed artifacts declared in AGENTS.md; using defaults.")
 
     # Consult existing docs to inform generation (context pack)
-    consulted = gather_existing_generated_docs(managed_paths)
+    gather_existing_generated_docs(managed_paths)
 
     artifacts: List[Artifact] = []
 
@@ -388,49 +376,35 @@ def build_plan() -> Plan:
     existing_agents_md_text = (
         AGENTS_MD.read_text(encoding="utf-8", errors="ignore") if AGENTS_MD.exists() else None
     )
-    desired_agents = desired_agents_md(managed_paths, existing_agents_md_text)
-    if not AGENTS_MD.exists():
+    desired_agents = desired_agents_md(existing_agents_md_text)
+    if sha256_text(existing_agents_md_text or "") != sha256_text(desired_agents):
+        h, sz = compute_hash_and_size(AGENTS_MD)
         artifacts.append(
             Artifact(
                 path=AGENTS_MD,
-                exists=False,
+                exists=True,
                 managed=False,
-                current_hash=None,
-                current_size=None,
+                current_hash=h,
+                current_size=sz,
                 suggested_content=desired_agents,
-                decision="create",
-                rationale="AGENTS.md missing; create default instructions explaining agents.managed usage.",
+                decision="modify",
+                rationale="Normalize AGENTS.md newline/managed header without rewriting maintainer guidance.",
             )
         )
     else:
-        if sha256_text(existing_agents_md_text or "") != sha256_text(desired_agents):
-            h, sz = compute_hash_and_size(AGENTS_MD)
-            artifacts.append(
-                Artifact(
-                    path=AGENTS_MD,
-                    exists=True,
-                    managed=False,
-                    current_hash=h,
-                    current_size=sz,
-                    suggested_content=desired_agents,
-                    decision="modify",
-                    rationale="Normalize AGENTS.md newline/managed header without rewriting maintainer guidance.",
-                )
+        h, sz = compute_hash_and_size(AGENTS_MD)
+        artifacts.append(
+            Artifact(
+                path=AGENTS_MD,
+                exists=True,
+                managed=False,
+                current_hash=h,
+                current_size=sz,
+                suggested_content=None,
+                decision="keep",
+                rationale="AGENTS.md already up to date.",
             )
-        else:
-            h, sz = compute_hash_and_size(AGENTS_MD)
-            artifacts.append(
-                Artifact(
-                    path=AGENTS_MD,
-                    exists=True,
-                    managed=False,
-                    current_hash=h,
-                    current_size=sz,
-                    suggested_content=None,
-                    decision="keep",
-                    rationale="AGENTS.md already up to date.",
-                )
-            )
+        )
 
     for rel in managed_paths:
         p = ROOT / rel
@@ -443,7 +417,7 @@ def build_plan() -> Plan:
             current_text = p.read_text(encoding="utf-8", errors="ignore")
             current_hash, current_size = compute_hash_and_size(p)
 
-        desired = synthesize_desired_content(rel, current_text, consulted)
+        desired = synthesize_desired_content(rel, current_text)
 
         art = Artifact(
             path=p, exists=exists, managed=managed,
