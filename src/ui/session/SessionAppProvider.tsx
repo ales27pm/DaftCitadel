@@ -23,8 +23,6 @@ export const SessionAppProvider: React.FC<PropsWithChildren> = ({ children }) =>
 
   useEffect(() => {
     let cancelled = false;
-    let active: SessionEnvironment | null = null;
-    let committed = false;
     const shouldUseProduction =
       !__DEV__ && (Platform.OS === 'ios' || Platform.OS === 'android');
 
@@ -35,8 +33,6 @@ export const SessionAppProvider: React.FC<PropsWithChildren> = ({ children }) =>
           await disposeSessionEnvironment(created, APP_ENVIRONMENT_CONTEXT);
           return;
         }
-        active = created;
-        committed = true;
         setEnvironment(created);
       } catch (bootstrapError) {
         if (cancelled) {
@@ -50,9 +46,6 @@ export const SessionAppProvider: React.FC<PropsWithChildren> = ({ children }) =>
 
     return () => {
       cancelled = true;
-      if (!committed && active) {
-        disposeSessionEnvironment(active, APP_ENVIRONMENT_CONTEXT).catch(() => undefined);
-      }
     };
   }, []);
 
