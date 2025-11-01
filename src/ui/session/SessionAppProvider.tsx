@@ -50,7 +50,10 @@ export const SessionAppProvider: React.FC<PropsWithChildren> = ({ children }) =>
   }, []);
 
   if (error) {
-    throw error;
+    // In a real app, you'd render a proper error screen with a retry button.
+    // For now, we can just display the error message.
+    // return <ErrorDisplayComponent error={error} onRetry={...} />;
+    throw error; // Or keep throwing if an Error Boundary is guaranteed.
   }
 
   if (!environment) {
