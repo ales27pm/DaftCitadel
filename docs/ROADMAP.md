@@ -12,7 +12,7 @@ This roadmap captures the near-term delivery goals for Daft Citadel as we bring 
 
 - **Objective**: Replace demo fixtures with live session state across Arrangement, Mixer, and Performance screens.
 - **Scope**:
-  - Wire [`SessionAppProvider`](../src/ui/session/SessionAppProvider.tsx) to construct a real [`SessionManager`](../src/session/sessionManager.ts) using the correct storage adapter per platform.
+  - ✅ Wire [`SessionAppProvider`](../src/ui/session/SessionAppProvider.tsx) to construct a real [`SessionManager`](../src/session/sessionManager.ts) using the correct storage adapter per platform. Fallback logic now automatically selects the passive bridge when native audio is unavailable.
   - Finalise the `SessionAudioBridge` diff so session routing updates reach [`AudioEngine`](../src/audio/AudioEngine.ts) and plugin sandboxes.
   - Extend selectors in [`src/ui/session/selectors.ts`](../src/ui/session/selectors.ts) so screens consume real transport, diagnostics, and track data without relying on placeholder fixtures.
 - **Done when**: Launching the app with an existing session shows accurate track layouts, transport state, and diagnostics without manual refreshes.

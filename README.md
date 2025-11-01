@@ -95,4 +95,14 @@ All generated assets live under `~/DaftCitadel` on the target system, including 
 - The GUI reads `citadel_profile.json` to determine which buttons/features to enable. Update the manifest if you add new capabilities.
 - Docker builds run the installer during `docker build`; keep the script non-interactive when `--auto` is provided.
 
+## React Native session bootstrap
+
+The React Native shell mounts `SessionAppProvider` (`src/ui/session/SessionAppProvider.tsx`) as the root session boundary. The provider selects the correct environment at runtime:
+
+- **Production (iOS/Android release builds)** &mdash; Initializes the native `AudioEngine`, loads the persisted session via the platform storage adapter, provisions the plugin host, and streams updates through `SessionAudioBridge`.
+- **Passive fallback (development, simulators, web)** &mdash; Uses the in-memory audio bridge so transport and editor flows remain testable when native audio is unavailable.
+- **Native audio fallback** &mdash; Automatically falls back to the passive environment if the native engine cannot be initialised (e.g., missing entitlements) while logging the failure for diagnostics.
+
+`SessionViewModelProvider` consumes the environment and loads the active session, seeding the demo project on first launch. When the React tree unmounts, both the audio bridge and plugin host dispose cleanly so rerenders or fast-refresh cycles do not leak native resources.
+
 Enjoy the groove!

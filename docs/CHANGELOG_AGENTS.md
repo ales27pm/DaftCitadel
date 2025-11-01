@@ -9,6 +9,7 @@ Chronological log of notable automation and documentation updates related to Daf
 ## Entries
 
 - 2025-11-01 — Rebuilt agent documentation to replace placeholder templates with actionable workflows covering roadmap, architecture, and contribution processes. Follow-up: ensure future automation runs preserve curated sections.
+- 2025-11-02 — Documented SessionAppProvider runtime selection and fallback behaviour across README, ROADMAP, and architecture guides after landing the live session bootstrap. Follow-up: verify SessionAudioBridge diff workstreams update docs when completed.
 - 2025-11-01 — Corrected architecture/roadmap guidance to match current TypeScript modules and updated the agent workflow documentation for `plan --json`. Follow-up: audit remaining docs for stale references during the next automation sweep.
 - 2025-10-22 — Added diagnostics best practices to repository-wide AGENTS.md to clarify ethical packet capture expectations. Follow-up: notify security review board of the new guidance.
 - 2025-10-05 — Introduced mandatory `npm run manage:agents` check in CI after recurring drift incidents. Follow-up: retroactively update onboarding docs with the new requirement.
