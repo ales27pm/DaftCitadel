@@ -25,6 +25,20 @@ describe('SessionAppProvider', () => {
   const originalDev = Boolean((globalThis as { __DEV__?: boolean }).__DEV__);
   const originalPlatform = Platform.OS;
 
+  const createDeferred = <T,>() => {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return {
+      promise,
+      resolve,
+      reject,
+    };
+  };
+
   const createTestEnvironment = async (
     sessionId: string,
   ): Promise<SessionEnvironment> => {
@@ -155,5 +169,44 @@ describe('SessionAppProvider', () => {
     });
 
     expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs the end-session system when bootstrap resolves after unmount', async () => {
+    setDevFlag(true);
+    Platform.OS = 'ios';
+    const environment = await createTestEnvironment('cancelled-session');
+    const deferred = createDeferred<SessionEnvironment>();
+    const disposeSpy = jest
+      .spyOn(environmentModule, 'disposeSessionEnvironment')
+      .mockResolvedValue(undefined);
+    const passiveSpy = jest
+      .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+      .mockReturnValue(deferred.promise);
+    const productionSpy = jest
+      .spyOn(environmentModule, 'createProductionSessionEnvironment')
+      .mockImplementation(() => {
+        throw new Error('Production environment should not be initialised');
+      });
+
+    let renderer: TestRenderer.ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = TestRenderer.create(React.createElement(SessionAppProvider, null, null));
+      await Promise.resolve();
+    });
+
+    expect(renderer).not.toBeNull();
+
+    await act(async () => {
+      renderer!.unmount();
+    });
+
+    await act(async () => {
+      deferred.resolve(environment);
+      await Promise.resolve();
+    });
+
+    expect(productionSpy).not.toHaveBeenCalled();
+    expect(passiveSpy).toHaveBeenCalledTimes(1);
+    expect(disposeSpy).toHaveBeenCalledWith(environment, 'app session environment');
   });
 });
