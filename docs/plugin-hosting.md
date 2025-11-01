@@ -80,11 +80,12 @@ Plugin instances are represented in the session model as `RoutingNode` entries w
 ### Session audio bridge integration
 
 - [`SessionAudioBridge`](../src/audio/SessionAudioBridge.ts) now provisions plugin sandboxes and instantiates plugins through the shared `PluginHost` whenever a `PluginRoutingNode` is detected in the routing graph.
+- Descriptor resolution failures no longer drop audio; the bridge preserves the previous binding and retries hot swaps before falling back to the last working descriptor to keep sessions audible.
 - Each plugin node is configured with a `hostInstanceId` option, plus per-signal booleans (`acceptsAudio`, `acceptsMidi`, `acceptsSidechain`, and their `emits` counterparts). Native engines must accept these options when wiring audio and MIDI busses.
 - The C++ audio engine exposes a dedicated [`PluginNode`](../audio-engine/include/audio_engine/PluginNode.h) that forwards render buffers to the platform host through [`PluginHostBridge`](../audio-engine/include/audio_engine/PluginHost.h). Hosts should call `PluginHostBridge::SetRenderCallback` when the sandbox process is ready so audio render callbacks can be proxied by `hostInstanceId`.
 - Plugin automation targets defined on routing nodes are translated into `PluginHost.scheduleAutomation` calls. Automation signatures embed the session revision to guarantee rescheduling when the timeline changes.
 - Stale plugin instances are released after the routing diff executes so native resources are reclaimed promptly.
-- Crash recovery triggers a `SessionAudioBridge` rebind that updates node options with the refreshed `hostInstanceId` and replays cached automation lanes through the shared `AutomationPublisher` helper.
+- Crash recovery triggers a `SessionAudioBridge` rebind that updates node options with the refreshed `hostInstanceId` and replays cached automation lanes through the shared `AutomationPublisher` helper. The recovery manager now rehydrates automation state after a manual or automatic retry succeeds.
 
 ### UI surfacing
 
