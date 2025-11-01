@@ -228,6 +228,30 @@ def parse_managed_from_agents_md() -> List[str]:
             norm.append(sp)
     return norm
 
+
+def desired_agents_md(existing_text: Optional[str]) -> str:
+    """Return the validated AGENTS.md content we should preserve.
+
+    Historically this repository maintained AGENTS.md manually through
+    `scripts/manageAgents.js`. When synchronising we do *not* want to
+    overwrite that guidance - the goal is only to ensure the file exists for
+    parsing. Therefore we keep the existing prose verbatim whenever present
+    and only normalise trailing newlines. When the file is missing entirely we
+    halt so maintainers can regenerate it via the primary automation pipeline.
+    """
+
+    if existing_text:
+        text = existing_text
+        if not text.endswith("\n"):
+            text += "\n"
+        return text
+
+    print(
+        "ERROR: AGENTS.md is missing. Regenerate it with `npm run manage:agents` before running agents_sync.py.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
 def compute_hash_and_size(path: Path) -> Tuple[str, int]:
     h = hashlib.sha256()
     size = 0
@@ -281,61 +305,53 @@ def gather_existing_generated_docs(managed_paths: List[str]) -> Dict[str, str]:
     atomic_write(CONTEXT_DIR / "context_pack.json", json.dumps(context_pack, indent=2))
     return harvested
 
-def synthesize_desired_content(relpath: str, existing_text: Optional[str], consulted_corpus: Dict[str, str]) -> str:
+def synthesize_desired_content(
+    relpath: str, existing_text: Optional[str]
+) -> str:
+    """Generate content for a managed artifact.
+
+    To respect prior human-authored documentation we simply retain the current
+    text when a file already exists, only ensuring that the managed header is
+    present so provenance checks continue to work. For new files we create a
+    concise scaffold that maintainers can expand.
     """
-    Deterministic content synthesis stub:
-      - We do not call external LLMs here (repo-safe).
-      - We create a structured, well-formed baseline that agents can then refine.
-    Strategy:
-      - If existing_text exists: keep header, add managed-by tag, normalize sections, preserve useful headings.
-      - Else: create a minimal but high-quality scaffold with TODO anchors for the agent system.
-    """
-    title = Path(relpath).stem.replace("_", " ").replace("-", " ").title()
-    header = f"# {title}\n\n{MANAGED_HEADER}"
-
-    # Light heuristic reuse: extract first level-2 sections from consulted corpus for hints
-    hints = []
-    for src, txt in consulted_corpus.items():
-        for m in re.finditer(r"(?m)^##\s+([^\n]+)", txt):
-            sec = m.group(1).strip()
-            if sec and sec not in hints and len(hints) < 12:
-                hints.append(sec)
-
-    reuse_block = ""
-    if hints:
-        reuse_block = "## Candidate Sections (from previous docs)\n" + "\n".join(f"- {h}" for h in hints) + "\n\n"
-
-    baseline_sections = textwrap.dedent(f"""
-    ## Overview
-    Provide a concise narrative of the current state, scope, and intent of this artifact.
-
-    ## Decisions
-    Record key decisions, dates, and rationale. Keep immutable history; add new entries rather than rewriting.
-
-    ## Tasks
-    - [ ] High-priority
-    - [ ] Medium-priority
-    - [ ] Low-priority
-
-    ## References
-    - Link/mention related documents, modules, and owners.
-
-    ## Changelog
-    - {time.strftime("%Y-%m-%d")} • Initialized/updated by agents_sync.py
-    """).strip() + "\n"
 
     if existing_text:
-        # Preserve any unique content after removing previous managed tag
-        preserved = re.sub(r"(?m)^<!-- managed-by:.*?-->[\r\n]*", "", existing_text).strip()
-        # Avoid duplicating identical content
-        if preserved and sha256_text(preserved) != sha256_text(baseline_sections):
-            body = f"{reuse_block}## Preserved Content\n\n{preserved}\n\n" + baseline_sections
-        else:
-            body = f"{reuse_block}{baseline_sections}"
-    else:
-        body = f"{reuse_block}{baseline_sections}"
+        text = existing_text
+        if MANAGED_HEADER not in text:
+            lines = text.splitlines()
+            if lines and lines[0].startswith("# "):
+                rest = "\n".join(lines[1:]).lstrip("\n")
+                text = lines[0] + "\n\n" + MANAGED_HEADER + rest
+            else:
+                text = MANAGED_HEADER + text.lstrip("\n")
+        if not text.endswith("\n"):
+            text += "\n"
+        return text
 
-    return header + "\n" + body
+    title = Path(relpath).stem.replace("_", " ").replace("-", " ").title()
+    scaffold = textwrap.dedent(
+        f"""\
+        # {title}
+
+        {MANAGED_HEADER.strip()}
+
+        ## Overview
+        Provide a concise narrative of the current state, scope, and intent of this artifact.
+
+        ## Checklist
+        - [ ] Describe current objectives.
+        - [ ] Capture owners and communication channels.
+        - [ ] Link to supporting documents.
+
+        ## Changelog
+        - {time.strftime("%Y-%m-%d")} • Initialized by agents_sync.py
+        """
+    ).strip()
+    # The MANAGED_HEADER inside the scaffold already lacks trailing newline due to strip;
+    # restore it so downstream checks see the canonical header line.
+    scaffold = scaffold.replace(MANAGED_HEADER.strip(), MANAGED_HEADER.strip() + "\n", 1)
+    return scaffold + "\n"
 
 def diff_text(a: str, b: str, path: str) -> str:
     a_lines = a.splitlines(keepends=True)
@@ -352,9 +368,44 @@ def build_plan() -> Plan:
         notes.append("No managed artifacts declared in AGENTS.md; using defaults.")
 
     # Consult existing docs to inform generation (context pack)
-    consulted = gather_existing_generated_docs(managed_paths)
+    gather_existing_generated_docs(managed_paths)
 
     artifacts: List[Artifact] = []
+
+    # --- Manage AGENTS.md itself (create/modify if needed) ---
+    existing_agents_md_text = (
+        AGENTS_MD.read_text(encoding="utf-8", errors="ignore") if AGENTS_MD.exists() else None
+    )
+    desired_agents = desired_agents_md(existing_agents_md_text)
+    if sha256_text(existing_agents_md_text or "") != sha256_text(desired_agents):
+        h, sz = compute_hash_and_size(AGENTS_MD)
+        artifacts.append(
+            Artifact(
+                path=AGENTS_MD,
+                exists=True,
+                managed=False,
+                current_hash=h,
+                current_size=sz,
+                suggested_content=desired_agents,
+                decision="modify",
+                rationale="Normalize AGENTS.md newline/managed header without rewriting maintainer guidance.",
+            )
+        )
+    else:
+        h, sz = compute_hash_and_size(AGENTS_MD)
+        artifacts.append(
+            Artifact(
+                path=AGENTS_MD,
+                exists=True,
+                managed=False,
+                current_hash=h,
+                current_size=sz,
+                suggested_content=None,
+                decision="keep",
+                rationale="AGENTS.md already up to date.",
+            )
+        )
+
     for rel in managed_paths:
         p = ROOT / rel
         exists = p.exists()
@@ -366,7 +417,7 @@ def build_plan() -> Plan:
             current_text = p.read_text(encoding="utf-8", errors="ignore")
             current_hash, current_size = compute_hash_and_size(p)
 
-        desired = synthesize_desired_content(rel, current_text, consulted)
+        desired = synthesize_desired_content(rel, current_text)
 
         art = Artifact(
             path=p, exists=exists, managed=managed,
