@@ -18,3 +18,4 @@
 
 - When integrating with external services, wrap I/O with cancellation-aware utilities to keep session teardown responsive.
 - Use dependency injection for clock or network abstractions to facilitate deterministic simulations.
+
