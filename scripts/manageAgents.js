@@ -27,13 +27,14 @@ async function main() {
     const relDir = normalizeRelative(agent.directory);
     manualPaths.add(relDir);
     const filePath = path.join(rootDir, relDir === '.' ? '' : relDir, 'AGENTS.md');
-    const content = buildMarkdown({
+    const content = await buildMarkdown({
       title: agent.title,
       scope: agent.scope,
       instructions: agent.instructions,
       notes: agent.notes,
       sourceLabel: `manual entry (${relDir})`,
       body: agent.body,
+      bodyPath: agent.body_path,
     });
     expected.set(relDir, { filePath, content, source: 'manual' });
   }
@@ -130,7 +131,11 @@ function validateAgent(agent) {
     throw new Error(`Agent ${agent.directory} is missing a scope description.`);
   }
   const hasBody = typeof agent.body === 'string' && agent.body.trim().length > 0;
-  if (!hasBody && (!Array.isArray(agent.instructions) || agent.instructions.length === 0)) {
+  const hasBodyPath = typeof agent.body_path === 'string' && agent.body_path.trim().length > 0;
+  if (hasBody && hasBodyPath) {
+    throw new Error(`Agent ${agent.directory} cannot specify both body and body_path.`);
+  }
+  if (!hasBody && !hasBodyPath && (!Array.isArray(agent.instructions) || agent.instructions.length === 0)) {
     throw new Error(`Agent ${agent.directory} must declare at least one instruction.`);
   }
 }
@@ -181,7 +186,7 @@ async function resolveAutoRule(rule, manualPaths) {
   if (includeSelf) {
     const relDir = normalizeRelative(path.relative(rootDir, baseDir));
     if (!manualPaths.has(relDir) && !isExcluded(relDir, path.basename(baseDir), exclude, rule.directory)) {
-      result.push(buildAutoEntry(relDir, baseDir, template, rule));
+      result.push(await buildAutoEntry(relDir, baseDir, template, rule));
     }
   }
 
@@ -201,7 +206,7 @@ async function resolveAutoRule(rule, manualPaths) {
       }
       continue;
     }
-    result.push(buildAutoEntry(relDir, dirPath, template, rule));
+    result.push(await buildAutoEntry(relDir, dirPath, template, rule));
   }
   return result;
 }
@@ -259,14 +264,14 @@ function isExcluded(relativeDir, dirName, exclude, ruleDirectory) {
   return false;
 }
 
-function buildAutoEntry(relDir, absDir, template, rule) {
+async function buildAutoEntry(relDir, absDir, template, rule) {
   const context = {
     relativePath: relDir,
     directoryName: path.posix.basename(relDir === '.' ? '' : relDir) || path.basename(absDir),
     autoRoot: normalizeRelative(rule.directory),
     relativeToAutoRoot: normalizeRelative(path.relative(path.join(rootDir, rule.directory === '.' ? '' : rule.directory), absDir)),
   };
-  const content = buildMarkdown({
+  const content = await buildMarkdown({
     title: renderTemplate(template.title, context),
     scope: renderTemplate(template.scope, context),
     instructions: template.instructions.map((item) => renderTemplate(item, context)),
@@ -296,9 +301,27 @@ function normalizeExclude(value) {
   return normalized.split(path.sep).join('/');
 }
 
-function buildMarkdown({ title, scope, instructions, notes, sourceLabel, body }) {
+async function buildMarkdown({ title, scope, instructions, notes, sourceLabel, body, bodyPath }) {
   if (typeof body === 'string' && body.trim().length > 0) {
     return ensureTrailingNewline(body);
+  }
+  if (typeof bodyPath === 'string' && bodyPath.trim().length > 0) {
+    const trimmedPath = bodyPath.trim();
+    const resolvedPath = path.resolve(rootDir, trimmedPath);
+    const relativeToRoot = path.relative(rootDir, resolvedPath);
+    const normalizedRoot = rootDir.endsWith(path.sep) ? rootDir : `${rootDir}${path.sep}`;
+    if (relativeToRoot.startsWith('..') || (resolvedPath !== rootDir && !resolvedPath.startsWith(normalizedRoot))) {
+      throw new Error(`body_path must resolve within the repository: ${trimmedPath}`);
+    }
+    try {
+      const content = await fs.readFile(resolvedPath, 'utf8');
+      return ensureTrailingNewline(content);
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        throw new Error(`body_path '${trimmedPath}' does not exist.`);
+      }
+      throw error;
+    }
   }
   const lines = [];
   lines.push('# AGENTS.md');
