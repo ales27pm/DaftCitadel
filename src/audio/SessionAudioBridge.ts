@@ -964,51 +964,109 @@ export class SessionAudioBridge {
       return undefined;
     }
 
+    const existing = this.pluginBindings.get(node.instanceId);
+
+    let descriptor: PluginDescriptor | undefined;
     try {
-      const descriptor = await this.resolvePluginDescriptor(node.instanceId, node);
-      if (!descriptor) {
+      descriptor = await this.resolvePluginDescriptor(node.instanceId, node);
+    } catch (error) {
+      this.logger.error('Failed to resolve plugin descriptor', {
+        pluginInstanceId: node.instanceId,
+        error,
+      });
+      return existing;
+    }
+
+    if (!descriptor) {
+      if (!existing) {
         this.logger.warn(
           `Descriptor resolver returned empty result for plugin ${node.instanceId}`,
         );
         return undefined;
       }
+      this.logger.warn(
+        `Descriptor resolver returned empty result for plugin ${node.instanceId}; preserving existing binding`,
+      );
+      return existing;
+    }
 
-      const existing = this.pluginBindings.get(node.instanceId);
-      if (
-        existing &&
-        existing.descriptor.identifier === descriptor.identifier &&
-        existing.handle.descriptor.version === descriptor.version
-      ) {
-        existing.descriptor = descriptor;
-        return existing;
-      }
+    if (
+      existing &&
+      existing.descriptor.identifier === descriptor.identifier &&
+      existing.handle.descriptor.version === descriptor.version
+    ) {
+      existing.descriptor = descriptor;
+      return existing;
+    }
 
-      if (existing) {
-        await this.safeReleasePlugin(existing.hostInstanceId, node.instanceId);
-        this.pluginBindings.delete(node.instanceId);
-      }
-
-      const handle = await this.pluginHost.loadPlugin(descriptor, {
+    const instantiate = async (
+      targetDescriptor: PluginDescriptor,
+    ): Promise<PluginInstanceBinding> => {
+      const handle = await this.pluginHost!.loadPlugin(targetDescriptor, {
         sandboxIdentifier: node.instanceId,
         automationBindings: node.automation?.map((binding) => ({
           parameterId: binding.parameterId,
           curveId: binding.curveId,
         })),
       });
-      const binding: PluginInstanceBinding = {
-        descriptor,
+      return {
+        descriptor: targetDescriptor,
         hostInstanceId: handle.nativeInstanceId ?? handle.instanceId,
         handle,
       };
+    };
+
+    if (!existing) {
+      try {
+        const binding = await instantiate(descriptor);
+        this.pluginBindings.set(node.instanceId, binding);
+        return binding;
+      } catch (error) {
+        this.logger.error('Failed to load plugin instance', {
+          pluginInstanceId: node.instanceId,
+          error,
+        });
+        return undefined;
+      }
+    }
+
+    try {
+      const binding = await instantiate(descriptor);
+      await this.safeReleasePlugin(existing.hostInstanceId, node.instanceId);
       this.pluginBindings.set(node.instanceId, binding);
       return binding;
-    } catch (error) {
-      this.logger.error('Failed to ensure plugin instance', {
+    } catch (hotSwapError) {
+      this.logger.warn('Plugin hot swap failed; retrying with fresh instance', {
         pluginInstanceId: node.instanceId,
-        error,
+        error: hotSwapError,
       });
-      return undefined;
     }
+
+    await this.safeReleasePlugin(existing.hostInstanceId, node.instanceId);
+    this.pluginBindings.delete(node.instanceId);
+
+    try {
+      const binding = await instantiate(descriptor);
+      this.pluginBindings.set(node.instanceId, binding);
+      return binding;
+    } catch (reloadError) {
+      this.logger.error('Failed to reload plugin instance', {
+        pluginInstanceId: node.instanceId,
+        error: reloadError,
+      });
+      try {
+        const restored = await instantiate(existing.descriptor);
+        this.pluginBindings.set(node.instanceId, restored);
+        return restored;
+      } catch (restoreError) {
+        this.logger.error('Failed to restore previous plugin instance', {
+          pluginInstanceId: node.instanceId,
+          error: restoreError,
+        });
+      }
+    }
+
+    return undefined;
   }
 
   private describePluginAutomation(

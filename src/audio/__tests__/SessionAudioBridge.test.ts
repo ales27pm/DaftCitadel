@@ -230,7 +230,14 @@ const createSession = (overrides: Partial<Session> = {}): Session => ({
   ...overrides,
 });
 
-const createPluginHostMock = () => {
+const createPluginHostMock = (
+  options: {
+    loadPluginImpl?: (
+      descriptor: PluginDescriptor,
+      loadOptions?: Parameters<PluginHost['loadPlugin']>[1],
+    ) => Promise<PluginInstanceHandle>;
+  } = {},
+) => {
   let currentHandle: PluginInstanceHandle = {
     instanceId: 'session-plugin',
     nativeInstanceId: 'native-instance',
@@ -240,15 +247,30 @@ const createPluginHostMock = () => {
   };
   let crashListener: ((report: PluginCrashReport) => void) | undefined;
 
+  const defaultLoadImpl = async (
+    descriptor: PluginDescriptor,
+    loadOptions?: Parameters<PluginHost['loadPlugin']>[1],
+  ): Promise<PluginInstanceHandle> => {
+    if (loadOptions?.sandboxIdentifier) {
+      currentHandle = {
+        ...currentHandle,
+        instanceId: loadOptions.sandboxIdentifier,
+      };
+    }
+    currentHandle = { ...currentHandle, descriptor };
+    return { ...currentHandle };
+  };
+
+  const loadPluginImpl = options.loadPluginImpl ?? defaultLoadImpl;
+
   const loadPlugin = jest.fn(
-    async (_descriptor: PluginDescriptor, options?: { sandboxIdentifier?: string }) => {
-      if (options?.sandboxIdentifier) {
-        currentHandle = {
-          ...currentHandle,
-          instanceId: options.sandboxIdentifier,
-        };
-      }
-      return { ...currentHandle };
+    async (
+      descriptor: PluginDescriptor,
+      loadOptions?: Parameters<PluginHost['loadPlugin']>[1],
+    ) => {
+      const handle = await loadPluginImpl(descriptor, loadOptions);
+      currentHandle = { ...handle };
+      return { ...handle };
     },
   );
   const releasePlugin = jest.fn(async () => undefined);
@@ -757,6 +779,200 @@ describe('SessionAudioBridge', () => {
     );
 
     expect(releasePlugin).toHaveBeenCalledWith('native-instance');
+  });
+
+  it('retains existing plugin bindings when descriptor resolution fails', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine } = createMockEngine(clock);
+    const hostMock = createPluginHostMock();
+    const descriptorResolver = jest
+      .fn()
+      .mockResolvedValueOnce(mockDescriptor)
+      .mockRejectedValueOnce(new Error('resolver failure'));
+    const bridge = new SessionAudioBridge(engine, {
+      fileLoader: loader,
+      pluginHost: hostMock.host,
+      resolvePluginDescriptor: descriptorResolver,
+    });
+
+    const baseGraph = createDefaultTrackRoutingGraph('track-resolver');
+    const trackInput = baseGraph.nodes.find((node) => node.type === 'trackInput');
+    const trackOutput = baseGraph.nodes.find((node) => node.type === 'trackOutput');
+    if (!trackInput || !trackOutput) {
+      throw new Error('missing endpoints');
+    }
+
+    const pluginNode: PluginRoutingNode = {
+      id: 'track-resolver:plugin:slot',
+      type: 'plugin',
+      slot: 'insert',
+      instanceId: 'session-plugin-resolver',
+      order: 0,
+      accepts: ['audio'],
+      emits: ['audio'],
+      automation: [],
+    };
+
+    const graphWithPlugin: RoutingGraph = {
+      ...baseGraph,
+      nodes: [...baseGraph.nodes, pluginNode],
+      connections: [
+        {
+          id: 'resolver-in',
+          from: { nodeId: trackInput.id },
+          to: { nodeId: pluginNode.id },
+          signal: 'audio',
+          enabled: true,
+        },
+        {
+          id: 'resolver-out',
+          from: { nodeId: pluginNode.id },
+          to: { nodeId: trackOutput.id },
+          signal: 'audio',
+          enabled: true,
+        },
+      ],
+    };
+
+    const session = createSession({
+      revision: 1,
+      tracks: [
+        createTrack({
+          id: 'track-resolver',
+          routing: { graph: graphWithPlugin },
+        }),
+      ],
+    });
+
+    await bridge.applySessionUpdate(session);
+
+    const internal = bridge as unknown as { pluginBindings: Map<string, unknown> };
+    expect(hostMock.loadPlugin).toHaveBeenCalledTimes(1);
+    expect(internal.pluginBindings.has('session-plugin-resolver')).toBe(true);
+
+    await bridge.applySessionUpdate({ ...session, revision: 2 });
+
+    expect(hostMock.loadPlugin).toHaveBeenCalledTimes(1);
+    expect(internal.pluginBindings.has('session-plugin-resolver')).toBe(true);
+  });
+
+  it('restores previous plugin binding when updated descriptor loading fails', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine } = createMockEngine(clock);
+    let successfulLoads = 0;
+    const hostMock = createPluginHostMock({
+      loadPluginImpl: async (
+        descriptor: PluginDescriptor,
+        options?: Parameters<PluginHost['loadPlugin']>[1],
+      ) => {
+        if (descriptor.version === '2.0.0') {
+          throw new Error('load failed');
+        }
+        const nativeInstanceId =
+          successfulLoads === 0 ? 'native-instance' : 'native-instance-restored';
+        successfulLoads += 1;
+        return {
+          instanceId: options?.sandboxIdentifier ?? 'session-plugin-update',
+          nativeInstanceId,
+          descriptor,
+          cpuLoadPercent: 12,
+          latencySamples: 32,
+        };
+      },
+    });
+
+    const nextDescriptor: PluginDescriptor = {
+      ...mockDescriptor,
+      version: '2.0.0',
+      name: 'Fixture Plugin v2',
+    };
+
+    const descriptorResolver = jest
+      .fn()
+      .mockResolvedValueOnce(mockDescriptor)
+      .mockResolvedValue(nextDescriptor);
+
+    const bridge = new SessionAudioBridge(engine, {
+      fileLoader: loader,
+      pluginHost: hostMock.host,
+      resolvePluginDescriptor: descriptorResolver,
+    });
+
+    const baseGraph = createDefaultTrackRoutingGraph('track-update');
+    const trackInput = baseGraph.nodes.find((node) => node.type === 'trackInput');
+    const trackOutput = baseGraph.nodes.find((node) => node.type === 'trackOutput');
+    if (!trackInput || !trackOutput) {
+      throw new Error('missing endpoints');
+    }
+
+    const pluginNode: PluginRoutingNode = {
+      id: 'track-update:plugin:slot',
+      type: 'plugin',
+      slot: 'insert',
+      instanceId: 'session-plugin-update',
+      order: 0,
+      accepts: ['audio'],
+      emits: ['audio'],
+      automation: [],
+    };
+
+    const graphWithPlugin: RoutingGraph = {
+      ...baseGraph,
+      nodes: [...baseGraph.nodes, pluginNode],
+      connections: [
+        {
+          id: 'update-in',
+          from: { nodeId: trackInput.id },
+          to: { nodeId: pluginNode.id },
+          signal: 'audio',
+          enabled: true,
+        },
+        {
+          id: 'update-out',
+          from: { nodeId: pluginNode.id },
+          to: { nodeId: trackOutput.id },
+          signal: 'audio',
+          enabled: true,
+        },
+      ],
+    };
+
+    const session = createSession({
+      revision: 1,
+      tracks: [
+        createTrack({
+          id: 'track-update',
+          routing: { graph: graphWithPlugin },
+        }),
+      ],
+    });
+
+    await bridge.applySessionUpdate(session);
+
+    const internal = bridge as unknown as {
+      pluginBindings: Map<
+        string,
+        { descriptor: PluginDescriptor; hostInstanceId: string }
+      >;
+    };
+
+    expect(hostMock.loadPlugin).toHaveBeenCalledTimes(1);
+    expect(internal.pluginBindings.get('session-plugin-update')?.hostInstanceId).toBe(
+      'native-instance',
+    );
+
+    await bridge.applySessionUpdate({ ...session, revision: 2 });
+
+    expect(hostMock.loadPlugin).toHaveBeenCalledTimes(4);
+    expect(hostMock.releasePlugin).toHaveBeenCalledWith('native-instance');
+    expect(internal.pluginBindings.get('session-plugin-update')?.hostInstanceId).toBe(
+      'native-instance-restored',
+    );
+    expect(internal.pluginBindings.get('session-plugin-update')?.descriptor.version).toBe(
+      '1.0.0',
+    );
   });
 
   it('schedules plugin automation envelopes via the PluginHost facade', async () => {

@@ -1,5 +1,5 @@
 import { NativeModules, Platform } from 'react-native';
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 
 import type { PluginRoutingNode, Session } from '../../session/models';
 import { demoSession, DEMO_SESSION_ID } from '../../session/fixtures/demoSession';
@@ -889,17 +889,17 @@ export const useSessionEnvironmentLifecycle = (
   options: { context?: string } = {},
 ) => {
   const context = options.context ?? 'session environment';
-  const previous = useRef<SessionEnvironment | null>(null);
   useEffect(() => {
-    const prior = previous.current;
-    if (prior && prior !== environment) {
-      disposeSessionEnvironment(prior, context).catch(() => undefined);
+    if (!environment) {
+      return undefined;
     }
-    previous.current = environment;
+    let disposed = false;
     return () => {
-      if (environment) {
-        disposeSessionEnvironment(environment, context).catch(() => undefined);
+      if (disposed) {
+        return;
       }
+      disposed = true;
+      disposeSessionEnvironment(environment, context).catch(() => undefined);
     };
   }, [context, environment]);
 };
