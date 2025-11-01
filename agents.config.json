@@ -5,7 +5,16 @@
       "directory": ".",
       "title": "Agents Playbook",
       "scope": "All files in the repository unless a more specific AGENTS.md overrides these rules.",
-      "body_path": "./AGENTS.playbook.md"
+      "body_path": "./AGENTS.playbook.md",
+      "protocols": [
+        {
+          "title": "Session Shutdown Protocol",
+          "steps": [
+            "Run the complete end-session system whenever a session concludes so audio bridges, plugin hosts, and persistence layers are consistently released.",
+            "Back this policy with automated tests that exercise the teardown trigger and confirm the shutdown pipeline executes every time."
+          ]
+        }
+      ]
     },
     {
       "directory": "docs",
