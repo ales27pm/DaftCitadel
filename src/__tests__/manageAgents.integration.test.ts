@@ -67,7 +67,8 @@ async function bootstrapWorkingCopy(
   await writeJson(path.join(root, 'agents.config.json'), agentsConfig);
 
   if (options.useStubSync) {
-    const stub = `#!/usr/bin/env python3\nimport json\nimport sys\n\nPLAN = {\n  "ts": "000000",\n  "root": "${root}",\n  "artifacts": [\n    {\n      "path": "docs/ROADMAP.md",\n      "exists": False,\n      "managed": False,\n      "current_hash": None,\n      "current_size": None,\n      "decision": "create",\n      "rationale": "Stub sync script intentionally leaves drift for testing.",\n      "suggested_content": "# Roadmap\\n\\nPlaceholder\\n"\n    }\n  ],\n  "notes": []\n}\n\nif __name__ == "__main__":\n  if len(sys.argv) < 2:\n    sys.exit(1)\n  mode = sys.argv[1]\n  if mode == "plan":\n    sys.stdout.write(json.dumps(PLAN))\n    if "--fail-on-change" in sys.argv[2:]:\n      sys.exit(2)\n    sys.exit(0)\n  if mode == "apply":\n    sys.exit(0)\n  sys.exit(1)\n`;
+    const rootLiteral = JSON.stringify(root);
+    const stub = `#!/usr/bin/env python3\nimport json\nimport sys\n\nPLAN = {\n  "ts": "000000",\n  "root": ${rootLiteral},\n  "artifacts": [\n    {\n      "path": "docs/ROADMAP.md",\n      "exists": False,\n      "managed": False,\n      "current_hash": None,\n      "current_size": None,\n      "decision": "create",\n      "rationale": "Stub sync script intentionally leaves drift for testing.",\n      "suggested_content": "# Roadmap\\n\\nPlaceholder\\n"\n    }\n  ],\n  "notes": []\n}\n\nif __name__ == "__main__":\n  if len(sys.argv) < 2:\n    sys.exit(1)\n  mode = sys.argv[1]\n  if mode == "plan":\n    sys.stdout.write(json.dumps(PLAN))\n    if "--fail-on-change" in sys.argv[2:]:\n      sys.exit(2)\n    sys.exit(0)\n  if mode == "apply":\n    sys.exit(0)\n  sys.exit(1)\n`;
     await fs.writeFile(path.join(root, 'scripts', 'agents_sync.py'), stub, {
       encoding: 'utf8',
     });
