@@ -20,7 +20,7 @@ Daft Citadel combines a React Native shell, a TypeScript session core, and a nat
    - Collaboration patch helpers live in [`src/services/collab/types.ts`](../src/services/collab/types.ts) and integrate with the manager through `createRemoteSessionPatchApplier`.
 3. **Audio and plugin integration (`src/audio/`)**
    - [`AudioEngine`](../src/audio/AudioEngine.ts) wraps the native module contract (`NativeAudioEngine`) and enforces buffer semantics before delegating to platform code.
-   - [`SessionAudioBridge`](../src/audio/SessionAudioBridge.ts) diff-compares session routing graphs, provisions plugin sandboxes, and calls into the engine to realise the desired node graph.
+   - [`SessionAudioBridge`](../src/audio/SessionAudioBridge.ts) diff-compares session routing graphs, provisions plugin sandboxes, and calls into the engine to realise the desired node graph while preserving the last working plugin binding whenever descriptor resolution fails or reloads error out.
    - The plugin host (`src/audio/plugins/`) instantiates AUv3/VST3 components through `PluginHost`, translating crash notifications into retry hooks consumed by the session provider.
    - Automation helpers in [`src/audio/Automation.ts`](../src/audio/Automation.ts) maintain tempo-aligned scheduling for clip buffers and plugin envelopes.
 4. **Supporting services (`src/services/`)**
@@ -39,7 +39,7 @@ Daft Citadel combines a React Native shell, a TypeScript session core, and a nat
    - On first render, `SessionViewModelProvider` calls `SessionManager.loadSession`. When no session exists, it can seed one through the optional `bootstrapSession` callback.
    - Storage adapters initialise lazily (SQLite or JSON depending on platform) and resolve the requested session into normalised `Session` models.
 3. **Audio graph application**
-   - `SessionManager` forwards session updates to `SessionAudioBridge`, which computes a routing diff, loads clip buffers via `AudioEngine`, and instantiates plugin nodes through `PluginHost`.
+   - `SessionManager` forwards session updates to `SessionAudioBridge`, which computes a routing diff, loads clip buffers via `AudioEngine`, and instantiates plugin nodes through `PluginHost`, retrying hot swaps safely before falling back to the previous instance when necessary.
    - Transport commands triggered by hooks such as `useTransportControls` delegate to optional bridge methods (`startTransport`, `locateTransport`), while diagnostics data is polled from or subscribed to `NativeAudioEngine` through `useAudioDiagnostics`.
 4. **Collaboration and patch streaming**
    - When collaboration is enabled, remote patches deserialised by `deserializeCollabSessionPatch` are applied through `createRemoteSessionPatchApplier`, ensuring undo/redo history remains coherent.

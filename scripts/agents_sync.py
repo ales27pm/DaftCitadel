@@ -509,7 +509,14 @@ def backup_file(src: Path, backup_root: Path) -> Optional[Path]:
     shutil.copy2(src, dst)
     return dst
 
-def apply_plan(plan: Plan, allow_dirty: bool, auto_branch: bool, no_branch: bool, branch_prefix: str):
+def apply_plan(
+    plan: Plan,
+    allow_dirty: bool,
+    auto_branch: bool,
+    no_branch: bool,
+    branch_prefix: str,
+    no_commit: bool,
+):
     branch = None
     if not no_branch:
         branch = assert_git_safety(allow_dirty=allow_dirty, auto_branch=auto_branch, branch_prefix=branch_prefix)
@@ -558,6 +565,9 @@ def apply_plan(plan: Plan, allow_dirty: bool, auto_branch: bool, no_branch: bool
     atomic_write(report_path, json.dumps(report, indent=2))
     print(f"[ok] Applied. Report at {report_path}")
 
+    if no_commit:
+        return
+
     # Stage and commit if in Git repo
     code, out, _ = run(["git", "rev-parse", "--is-inside-work-tree"])
     if code == 0 and out.strip() == "true":
@@ -579,12 +589,23 @@ def main():
     p_plan = sub.add_parser("plan", help="Analyze and print the change plan (dry-run).")
     p_plan.add_argument("--no-diffs", action="store_true", help="Do not print diffs.")
     p_plan.add_argument("--json", action="store_true", help="Also write plan JSON to .agents/reports/<ts>.plan.json")
+    p_plan.add_argument(
+        "--json-stdout",
+        action="store_true",
+        help="Print the plan as JSON to stdout instead of the human-readable summary.",
+    )
+    p_plan.add_argument(
+        "--fail-on-change",
+        action="store_true",
+        help="Exit with status 2 when any artifact requires create/modify/remove.",
+    )
 
     p_apply = sub.add_parser("apply", help="Apply the plan (transactional with backups).")
     p_apply.add_argument("--allow-dirty", action="store_true", help="Allow applying with a dirty working tree.")
     p_apply.add_argument("--auto-branch", action="store_true", help="Create a new branch before applying.")
     p_apply.add_argument("--no-branch", action="store_true", help="Do not create/switch branches at all.")
     p_apply.add_argument("--branch-prefix", default="agents-sync/", help="Prefix for auto-created branch names.")
+    p_apply.add_argument("--no-commit", action="store_true", help="Skip auto-committing the applied changes.")
 
     args = parser.parse_args()
     ensure_layout()
@@ -598,11 +619,24 @@ def main():
         plan = build_plan()
 
         if args.cmd == "plan":
-            print_plan(plan, with_diffs=not args.no_diffs)
+            has_changes = any(a.decision != "keep" for a in plan.artifacts)
+
+            if args.json_stdout:
+                plan_json = plan.to_json()
+                sys.stdout.write(plan_json)
+                if not plan_json.endswith("\n"):
+                    sys.stdout.write("\n")
+            else:
+                print_plan(plan, with_diffs=not args.no_diffs)
+
             if args.json:
+                plan_json = plan.to_json()
                 plan_path = REPORTS_DIR / f"{plan.ts}.plan.json"
-                atomic_write(plan_path, plan.to_json())
+                atomic_write(plan_path, plan_json)
                 print(f"[ok] Wrote plan JSON to {plan_path}")
+
+            if args.fail_on_change and has_changes:
+                sys.exit(2)
             return
 
         if args.cmd == "apply":
@@ -613,7 +647,8 @@ def main():
                 allow_dirty=getattr(args, "allow_dirty", False),
                 auto_branch=getattr(args, "auto_branch", False),
                 no_branch=getattr(args, "no_branch", False),
-                branch_prefix=getattr(args, "branch_prefix", "agents-sync/")
+                branch_prefix=getattr(args, "branch_prefix", "agents-sync/"),
+                no_commit=getattr(args, "no_commit", False),
             )
             return
 

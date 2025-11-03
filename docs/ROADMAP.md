@@ -13,7 +13,7 @@ This roadmap captures the near-term delivery goals for Daft Citadel as we bring 
 - **Objective**: Replace demo fixtures with live session state across Arrangement, Mixer, and Performance screens.
 - **Scope**:
   - ✅ Wire [`SessionAppProvider`](../src/ui/session/SessionAppProvider.tsx) to construct a real [`SessionManager`](../src/session/sessionManager.ts) using the correct storage adapter per platform. Fallback logic now automatically selects the passive bridge when native audio is unavailable.
-  - Finalise the `SessionAudioBridge` diff so session routing updates reach [`AudioEngine`](../src/audio/AudioEngine.ts) and plugin sandboxes.
+  - ✅ Finalised the `SessionAudioBridge` diff so session routing updates reach [`AudioEngine`](../src/audio/AudioEngine.ts) and plugin sandboxes, even when descriptor resolution fails or plugin reloads require falling back to the last known good instance.
   - Extend selectors in [`src/ui/session/selectors.ts`](../src/ui/session/selectors.ts) so screens consume real transport, diagnostics, and track data without relying on placeholder fixtures.
 - **Done when**: Launching the app with an existing session shows accurate track layouts, transport state, and diagnostics without manual refreshes.
 
@@ -63,7 +63,7 @@ This roadmap captures the near-term delivery goals for Daft Citadel as we bring 
 ## Operational Considerations
 
 - **Security posture**: Collaboration and plugin telemetry must respect encryption constraints defined in `src/services/collab/EncryptionManager.ts`; redact identifiers before emitting analytics.
-- **Testing**: Gate merges on `npm run lint`, `npm run test`, `npm run typecheck`, `npm run prettier`, and `npm run manage:agents`. Expand CI to execute the same checks on macOS and Linux runners.
+- **Testing**: Gate merges on `npm run lint`, `npm run test`, `npm run typecheck`, `npm run prettier`, and `npm run manage:agents` (which now refreshes managed docs such as this roadmap). Expand CI to execute the same checks on macOS and Linux runners.
 - **Support readiness**: Keep `TEST_SUMMARY.md` and `docs/collaboration-performance.md` updated so support staff can reproduce expected behaviour and diagnose reports quickly.
 
 ## Decision Log
