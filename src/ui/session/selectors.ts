@@ -258,25 +258,98 @@ const buildPluginChain = (
   });
 };
 
+type RawDiagnosticsSnapshot = {
+  status: 'loading' | 'ready' | 'unavailable' | 'error';
+  xruns: number;
+  renderLoad: number;
+  lastRenderDurationMicros?: number;
+  clipBufferBytes?: number;
+  error?: Error;
+  updatedAt?: number;
+};
+
+type NativeDiagnosticsPayload = {
+  xruns: number;
+  lastRenderDurationMicros: number;
+  clipBufferBytes: number;
+};
+
+type DiagnosticsPayload = RawDiagnosticsSnapshot | NativeDiagnosticsPayload;
+
+const clampRenderLoad = (value: number | undefined): number => clamp(value ?? 0, 0, 1);
+
+const isSnapshotPayload = (
+  input: DiagnosticsPayload,
+): input is RawDiagnosticsSnapshot => {
+  return (input as RawDiagnosticsSnapshot).status != null;
+};
+
 export const buildDiagnosticsView = (
   diagnostics: SessionDiagnosticsView,
-  rawDiagnostics?: {
-    xruns: number;
-    lastRenderDurationMicros: number;
-    clipBufferBytes: number;
-  },
+  rawDiagnostics?: DiagnosticsPayload,
 ): SessionDiagnosticsView => {
   if (!rawDiagnostics) {
     return diagnostics;
   }
-  const renderLoad = clamp(rawDiagnostics.lastRenderDurationMicros / 10_000, 0, 1);
+
+  if (!isSnapshotPayload(rawDiagnostics)) {
+    const renderLoad = clampRenderLoad(rawDiagnostics.lastRenderDurationMicros / 10_000);
+    return {
+      status: 'ready',
+      xruns: rawDiagnostics.xruns,
+      lastRenderDurationMicros: rawDiagnostics.lastRenderDurationMicros,
+      clipBufferBytes: rawDiagnostics.clipBufferBytes,
+      renderLoad,
+      updatedAt: Date.now(),
+    };
+  }
+
+  const timestamp = rawDiagnostics.updatedAt ?? Date.now();
+
+  if (rawDiagnostics.status === 'ready') {
+    const derivedRenderLoad = rawDiagnostics.lastRenderDurationMicros
+      ? rawDiagnostics.lastRenderDurationMicros / 10_000
+      : rawDiagnostics.renderLoad;
+    return {
+      status: 'ready',
+      xruns: rawDiagnostics.xruns,
+      lastRenderDurationMicros: rawDiagnostics.lastRenderDurationMicros,
+      clipBufferBytes: rawDiagnostics.clipBufferBytes,
+      renderLoad: clampRenderLoad(derivedRenderLoad),
+      updatedAt: timestamp,
+    };
+  }
+
+  if (rawDiagnostics.status === 'error') {
+    return {
+      status: 'error',
+      xruns: rawDiagnostics.xruns,
+      renderLoad: clampRenderLoad(rawDiagnostics.renderLoad),
+      error: rawDiagnostics.error ?? diagnostics.error,
+      updatedAt: timestamp,
+    };
+  }
+
+  if (rawDiagnostics.status === 'unavailable') {
+    return {
+      status: 'unavailable',
+      xruns: rawDiagnostics.xruns,
+      renderLoad: clampRenderLoad(rawDiagnostics.renderLoad),
+      updatedAt: timestamp,
+    };
+  }
+
   return {
-    status: 'ready',
-    xruns: rawDiagnostics.xruns,
-    lastRenderDurationMicros: rawDiagnostics.lastRenderDurationMicros,
-    clipBufferBytes: rawDiagnostics.clipBufferBytes,
-    renderLoad,
-    updatedAt: Date.now(),
+    status: 'loading',
+    xruns: Number.isFinite(rawDiagnostics.xruns)
+      ? rawDiagnostics.xruns
+      : diagnostics.xruns,
+    renderLoad: Number.isFinite(rawDiagnostics.renderLoad)
+      ? clampRenderLoad(rawDiagnostics.renderLoad)
+      : diagnostics.renderLoad,
+    lastRenderDurationMicros: diagnostics.lastRenderDurationMicros,
+    clipBufferBytes: diagnostics.clipBufferBytes,
+    updatedAt: timestamp,
   };
 };
 
@@ -310,22 +383,36 @@ export const buildTransport = (
   const totalBeats = length / beatDuration;
   const totalBars = Math.max(1, Math.ceil(totalBeats / beatsPerBar(session.metadata)));
 
-  let isPlaying = diagnostics.status === 'ready' && diagnostics.renderLoad < 0.98;
+  const diagnosticsGate = diagnostics.status === 'ready' && diagnostics.renderLoad < 0.98;
+  let isPlaying = diagnosticsGate;
   let playheadBeats = 0;
 
   if (runtime) {
+    const runtimeBeats = Number.isFinite(runtime.beats) ? runtime.beats : 0;
+    const runtimeBpm = runtime.bpm > 0 ? runtime.bpm : session.metadata.bpm;
+    const runtimeUpdatedAt = Number.isFinite(runtime.updatedAt)
+      ? runtime.updatedAt
+      : Date.now();
+    const now = Date.now();
     isPlaying = runtime.isPlaying;
+    playheadBeats = runtimeBeats;
+    if (runtime.isPlaying) {
+      const elapsedMs = Math.max(0, now - runtimeUpdatedAt);
+      const elapsedBeats = (elapsedMs / 60000) * runtimeBpm;
+      playheadBeats += elapsedBeats;
+    }
     if (totalBeats > 0) {
-      const wrappedBeats = ((runtime.beats % totalBeats) + totalBeats) % totalBeats;
+      const wrappedBeats = ((playheadBeats % totalBeats) + totalBeats) % totalBeats;
       playheadBeats = clamp(wrappedBeats, 0, totalBeats);
     } else {
-      playheadBeats = Math.max(0, runtime.beats);
+      playheadBeats = Math.max(0, playheadBeats);
     }
   } else {
     const cycleLengthMs = Math.max(length, MIN_SESSION_LENGTH_MS);
     const referenceTime = diagnostics.updatedAt ?? Date.now();
-    const playheadMs = isPlaying ? referenceTime % cycleLengthMs : 0;
+    const playheadMs = diagnosticsGate ? referenceTime % cycleLengthMs : 0;
     playheadBeats = playheadMs / beatDuration;
+    isPlaying = diagnosticsGate;
   }
 
   const playheadRatio = totalBeats > 0 ? clamp(playheadBeats / totalBeats, 0, 1) : 0;
