@@ -251,17 +251,12 @@ export class PluginHost {
     return { updated, proceed: true };
   }
 
-  private markCrashed(
-    instanceId: string,
-    binding: InstanceBindingRecord,
-  ): void {
+  private markCrashed(instanceId: string, binding: InstanceBindingRecord): void {
     this.instances.delete(instanceId);
     this.crashedInstances.set(instanceId, binding);
   }
 
-  private async prepareRestart(
-    binding: InstanceBindingRecord,
-  ): Promise<{
+  private async prepareRestart(binding: InstanceBindingRecord): Promise<{
     options: PluginInstanceOptions;
     sandboxContext?: SandboxContext;
     sandboxIdentifier?: string;

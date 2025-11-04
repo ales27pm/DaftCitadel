@@ -114,6 +114,23 @@ type ChannelMessageHandler = (data: unknown) => void;
 
 type RTCDataChannelState = 'connecting' | 'open' | 'closing' | 'closed';
 
+type RTCPeerConnectionState =
+  | 'new'
+  | 'connecting'
+  | 'connected'
+  | 'disconnected'
+  | 'failed'
+  | 'closed';
+
+type RTCIceConnectionState =
+  | 'new'
+  | 'checking'
+  | 'connected'
+  | 'completed'
+  | 'failed'
+  | 'disconnected'
+  | 'closed';
+
 class MockRTCDataChannel {
   readonly label: string;
   readyState: RTCDataChannelState = 'connecting';
@@ -161,11 +178,15 @@ type DataChannelEventHandler = (event: { channel: MockRTCDataChannel }) => void;
 class MockPeerConnection {
   onicecandidate?: IceCandidateHandler;
   ondatachannel?: DataChannelEventHandler;
+  onconnectionstatechange?: () => void;
+  oniceconnectionstatechange?: () => void;
   public readonly addedCandidates: RTCIceCandidateInit[] = [];
   public lastCreatedChannel?: MockRTCDataChannel;
   private peer?: MockPeerConnection;
   private pendingRemoteChannels: MockRTCDataChannel[] = [];
   private remoteDescriptionSet = false;
+  private currentConnectionState: RTCPeerConnectionState = 'new';
+  private currentIceState: RTCIceConnectionState = 'new';
 
   linkPeer(peer: MockPeerConnection): void {
     this.peer = peer;
@@ -218,6 +239,24 @@ class MockPeerConnection {
 
   triggerIceCandidate(candidate: RTCIceCandidateInit): void {
     this.onicecandidate?.({ candidate });
+  }
+
+  simulateConnectionState(state: RTCPeerConnectionState): void {
+    this.currentConnectionState = state;
+    this.onconnectionstatechange?.();
+  }
+
+  simulateIceConnectionState(state: RTCIceConnectionState): void {
+    this.currentIceState = state;
+    this.oniceconnectionstatechange?.();
+  }
+
+  get connectionState(): RTCPeerConnectionState {
+    return this.currentConnectionState;
+  }
+
+  get iceConnectionState(): RTCIceConnectionState {
+    return this.currentIceState;
   }
 
   private enqueueRemoteChannel(channel: MockRTCDataChannel): void {
@@ -519,6 +558,73 @@ describe('CollabSessionService', () => {
     );
     expect(appliedLog?.[1]).toHaveProperty('applyDurationMs');
 
+    initiatorService.stop();
+    responderService.stop();
+  });
+
+  it('exposes health snapshots covering connection, diagnostics, and latency', async () => {
+    const [initiatorSignaling, responderSignaling] = pairSignalingClients();
+    const initiatorConnection = new MockPeerConnection();
+    const responderConnection = new MockPeerConnection();
+    initiatorConnection.linkPeer(responderConnection);
+
+    const diagnostics = new TestNetworkDiagnostics({
+      linkSpeedMbps: 32,
+      rssi: -50,
+    });
+
+    const responderService = new CollabSessionService<{ text: string }>({
+      signalingClient: responderSignaling,
+      connectionFactory: () => responderConnection as unknown as RTCPeerConnection,
+      networkDiagnostics: diagnostics,
+    });
+
+    const initiatorService = new CollabSessionService<{ text: string }>({
+      signalingClient: initiatorSignaling,
+      connectionFactory: () => initiatorConnection as unknown as RTCPeerConnection,
+    });
+
+    const healthEvents: Array<ReturnType<typeof responderService.getHealthSnapshot>> = [];
+    const unsubscribe = responderService.subscribeHealth((snapshot) => {
+      healthEvents.push(snapshot);
+    });
+
+    await responderService.start('responder');
+    await initiatorService.start('initiator');
+
+    await new Promise((resolve) => setImmediate(resolve));
+    responderConnection.simulateConnectionState('connected');
+    responderConnection.simulateIceConnectionState('connected');
+
+    diagnostics.emit({
+      timestamp: Date.now(),
+      category: 'excellent',
+      linkSpeedMbps: 96,
+      rssi: -48,
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    await initiatorService.broadcastUpdate({ text: 'health-check' });
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const latest = responderService.getHealthSnapshot();
+    expect(
+      latest.connectionState === 'connected' || latest.connectionState === 'reconnecting',
+    ).toBe(true);
+    expect(latest.dataChannelState).toBe('open');
+    expect(latest.lastMetrics).toMatchObject({ linkSpeedMbps: 96, rssi: -48 });
+    expect(typeof latest.lastLatencyMs === 'number').toBe(true);
+    expect(typeof latest.averageLatencyMs === 'number').toBe(true);
+
+    expect(healthEvents.some((event) => event.connectionState === 'connecting')).toBe(
+      true,
+    );
+    expect(healthEvents.some((event) => event.connectionState === 'connected')).toBe(
+      true,
+    );
+
+    unsubscribe();
     initiatorService.stop();
     responderService.stop();
   });

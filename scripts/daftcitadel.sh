@@ -47,6 +47,150 @@ DAFTCITADEL_PHASE="bootstrap"
 DAFTCITADEL_STDOUT_IS_TTY=false
 DAFTCITADEL_STRICT_ERRORS=false
 
+PROFILE_MANIFEST_VERSION=2
+PLUGIN_CACHE_HINTS_VERSION=1
+
+declare -a PLUGIN_HINT_FORMATS=()
+declare -a PLUGIN_HINT_IDENTIFIERS=()
+declare -a PLUGIN_HINT_NAMES=()
+declare -a PLUGIN_HINT_BINARIES=()
+declare -a PLUGIN_HINT_CACHE_PATHS=()
+declare -a PLUGIN_HINT_ENABLED=()
+declare -a PLUGIN_HINT_AVAILABLE=()
+declare -a PLUGIN_HINT_VERSIONS=()
+declare -a PLUGIN_HINT_MODULES_B64=()
+
+VITAL_LAST_INSTALLED_VERSION=""
+SURGE_LAST_INSTALLED_VERSION=""
+HELM_LAST_INSTALLED_VERSION=""
+TYRELL_LAST_INSTALLED_VERSION=""
+OBXD_LAST_INSTALLED_VERSION=""
+
+bool_to_flag() {
+    local value="${1:-false}"
+    if [[ "${value,,}" == "true" ]]; then
+        printf 'true'
+    else
+        printf 'false'
+    fi
+}
+
+encode_base64() {
+    python3 - <<'PY'
+import base64
+import sys
+
+data = sys.stdin.buffer.read()
+print(base64.b64encode(data).decode('utf-8'), end='')
+PY
+}
+
+register_plugin_hint() {
+    local format="$1"
+    local identifier="$2"
+    local name="$3"
+    local binary_path="$4"
+    local version="$5"
+    local enabled_flag="${6:-false}"
+    shift 6 || true
+    local modules=("$@")
+
+    local cache_dir="${PLUGIN_CACHE_DIR:-$BASE/PluginCache}/$format/$identifier"
+    local enabled_json
+    enabled_json=$(bool_to_flag "$enabled_flag")
+    local available_json="false"
+    if [[ -n "$binary_path" && -e "$binary_path" ]]; then
+        available_json="true"
+    fi
+
+    if [[ "$enabled_json" == "true" ]]; then
+        mkdir -p "$cache_dir"
+        chown -R "$USER_NAME:$USER_NAME" "$cache_dir" 2>/dev/null || true
+    fi
+
+    local modules_payload=""
+    if ((${#modules[@]} > 0)); then
+        local module_data=""
+        local module_value
+        for module_value in "${modules[@]}"; do
+            [[ -z "$module_value" ]] && continue
+            module_data+="$module_value"$'\n'
+        done
+        if [[ -n "$module_data" ]]; then
+            modules_payload=$(printf '%s' "$module_data" | encode_base64)
+        fi
+    fi
+
+    PLUGIN_HINT_FORMATS+=("$format")
+    PLUGIN_HINT_IDENTIFIERS+=("$identifier")
+    PLUGIN_HINT_NAMES+=("$name")
+    PLUGIN_HINT_BINARIES+=("$binary_path")
+    PLUGIN_HINT_CACHE_PATHS+=("$cache_dir")
+    PLUGIN_HINT_ENABLED+=("$enabled_json")
+    PLUGIN_HINT_AVAILABLE+=("$available_json")
+    PLUGIN_HINT_VERSIONS+=("$version")
+    PLUGIN_HINT_MODULES_B64+=("$modules_payload")
+}
+
+write_metadata_files() {
+    local manifest_path="$BASE/citadel_profile.json"
+    local hints_path="$BASE/plugin_cache_hints.json"
+    local manifest_timestamp
+    manifest_timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    local hints_timestamp="$manifest_timestamp"
+
+    local args=(
+        "--profile-manifest-out=$manifest_path"
+        "--plugin-hints-out=$hints_path"
+        "--profile-manifest-version=$PROFILE_MANIFEST_VERSION"
+        "--plugin-hints-version=$PLUGIN_CACHE_HINTS_VERSION"
+        "--manifest-generated-at=$manifest_timestamp"
+        "--plugin-hints-generated-at=$hints_timestamp"
+        "--profile=$PROFILE"
+        "--profile-name=$PROFILE_NAME"
+        "--base-path=$BASE"
+        "--log-path=$LOG"
+        "--plugin-cache-path=$PLUGIN_CACHE_DIR"
+        "--plugin-cache-hints-path=$BASE/plugin_cache_hints.json"
+        "--feature-ai=$(bool_to_flag "$ENABLE_AI")"
+        "--feature-gui=$(bool_to_flag "$ENABLE_GUI")"
+        "--feature-expanded-synths=$(bool_to_flag "$ENABLE_EXPANDED_SYNTHS")"
+        "--feature-heavy-assets=$(bool_to_flag "$ENABLE_HEAVY_ASSETS")"
+        "--feature-groove-tools=$(bool_to_flag "$ENABLE_GROOVE_TOOLS")"
+        "--feature-experimental-synths=$(bool_to_flag "$ENABLE_EXPERIMENTAL_SYNTHS")"
+        "--feature-container=$(bool_to_flag "$CONTAINER_MODE")"
+    )
+
+    local module_value
+    for module_value in "${MODULE_ENABLES[@]}"; do
+        [[ -z "$module_value" ]] && continue
+        args+=("--module-enabled-override=$module_value")
+    done
+    for module_value in "${MODULE_DISABLES[@]}"; do
+        [[ -z "$module_value" ]] && continue
+        args+=("--module-disabled-override=$module_value")
+    done
+
+    local hint_count=${#PLUGIN_HINT_FORMATS[@]}
+    local index=0
+    while ((index < hint_count)); do
+        args+=("--plugin-hint-format=${PLUGIN_HINT_FORMATS[$index]}")
+        args+=("--plugin-hint-identifier=${PLUGIN_HINT_IDENTIFIERS[$index]}")
+        args+=("--plugin-hint-name=${PLUGIN_HINT_NAMES[$index]}")
+        args+=("--plugin-hint-binary-path=${PLUGIN_HINT_BINARIES[$index]}")
+        args+=("--plugin-hint-cache-path=${PLUGIN_HINT_CACHE_PATHS[$index]}")
+        args+=("--plugin-hint-enabled=${PLUGIN_HINT_ENABLED[$index]}")
+        args+=("--plugin-hint-available=${PLUGIN_HINT_AVAILABLE[$index]}")
+        args+=("--plugin-hint-version=${PLUGIN_HINT_VERSIONS[$index]}")
+        args+=("--plugin-hint-modules=${PLUGIN_HINT_MODULES_B64[$index]}")
+        ((index++))
+    done
+
+    "$SCRIPT_DIR/generate_metadata.py" "${args[@]}"
+
+    chown "$USER_NAME:$USER_NAME" "$manifest_path" "$hints_path" 2>/dev/null || true
+}
+
 usage() {
     cat <<'EOF'
 Daft Citadel deployment
@@ -716,6 +860,7 @@ install_vital_suite() {
         fi
     fi
 
+    VITAL_LAST_INSTALLED_VERSION="${VITAL_VERSION_DISPLAY:-$VITAL_DEFAULT_VERSION}"
     rm -rf "$VITAL_WORKDIR"
 }
 
@@ -785,6 +930,7 @@ install_tyrell_n6() {
                         as_user "ln -snf /usr/lib/clap/TyrellN6.clap ~/.clap/TyrellN6.clap"
 
                         tyrell_installed=true
+                        TYRELL_LAST_INSTALLED_VERSION="latest"
                         log "[PLUGINS] Installed Tyrell N6 from $mirror"
                         rm -rf "$TYRELL_WORKDIR"
                         break
@@ -872,6 +1018,7 @@ install_obxd() {
             as_user "ln -snf /usr/lib/vst3/OB-Xd.vst3 ~/.vst3/OB-Xd.vst3"
 
             success=true
+            OBXD_LAST_INSTALLED_VERSION="$obxd_target_version"
             log "[PLUGINS] Installed OB-Xd ${obxd_target_version}"
         else
             log "[WARN] OB-Xd archive missing expected files"
@@ -1570,34 +1717,11 @@ BASE="$USER_HOME/DaftCitadel"
 LOG="$USER_HOME/daft_citadel.log"
 VENV="$BASE/.venv"
 THEME_DIR="$BASE/Theme"
-run_step "Ensure base directories exist" mkdir -p "$BASE" "$THEME_DIR"
+PLUGIN_CACHE_DIR="$BASE/PluginCache"
+run_step "Ensure base directories exist" mkdir -p "$BASE" "$THEME_DIR" "$PLUGIN_CACHE_DIR"
 run_step "Initialize deployment log" touch "$LOG"
 run_step "Set ownership for base directories" chown -R "$USER_NAME:$USER_NAME" "$BASE" "$LOG"
 log "[IGNITION] $PROFILE_NAME deployment - $(date)"
-
-[[ $ENABLE_AI == true ]] && JSON_AI=true || JSON_AI=false
-[[ $ENABLE_GUI == true ]] && JSON_GUI=true || JSON_GUI=false
-[[ $ENABLE_EXPANDED_SYNTHS == true ]] && JSON_SYNTHS=true || JSON_SYNTHS=false
-[[ $ENABLE_HEAVY_ASSETS == true ]] && JSON_ASSETS=true || JSON_ASSETS=false
-[[ $ENABLE_GROOVE_TOOLS == true ]] && JSON_GROOVE=true || JSON_GROOVE=false
-[[ $ENABLE_EXPERIMENTAL_SYNTHS == true ]] && JSON_EXPERIMENTAL=true || JSON_EXPERIMENTAL=false
-[[ $CONTAINER_MODE == true ]] && JSON_CONTAINER=true || JSON_CONTAINER=false
-
-cat >"$BASE/citadel_profile.json" <<EOF_PROFILE_META
-{
-  "profile": "$PROFILE",
-  "features": {
-    "ai": $JSON_AI,
-    "gui": $JSON_GUI,
-    "expandedSynths": $JSON_SYNTHS,
-    "heavyAssets": $JSON_ASSETS,
-    "grooveTools": $JSON_GROOVE,
-    "experimentalSynths": $JSON_EXPERIMENTAL,
-    "container": $JSON_CONTAINER
-  }
-}
-EOF_PROFILE_META
-chown "$USER_NAME:$USER_NAME" "$BASE/citadel_profile.json"
 
 set_phase "system-prep"
 run_step "Update apt package cache" apt-get update -y
@@ -1722,6 +1846,17 @@ if ! $surge_installed; then
     run_step "Install Surge XT ${surge_version_selected}" install_deb_file "$SURGE_ARCHIVE_PATH"
 fi
 
+SURGE_LAST_INSTALLED_VERSION="${surge_version_selected:-${SURGE_DYNAMIC_VERSION:-unknown}}"
+register_plugin_hint \
+    "vst3" \
+    "surge-xt" \
+    "Surge XT" \
+    "/usr/lib/vst3/Surge XT.vst3" \
+    "$SURGE_LAST_INSTALLED_VERSION" \
+    "true" \
+    core \
+    synths
+
 HELM_URL=""
 HELM_SHA256=""
 HELM_VERSION_DISPLAY=""
@@ -1751,9 +1886,28 @@ helm_filename="helm-$(sanitize_filename_component "$helm_version_for_name").deb"
 HELM_ARCHIVE_PATH="$DEPS_DIR/${helm_filename:-helm.deb}"
 run_step "Download Helm ${HELM_VERSION_DISPLAY:-0.9.0}" download_and_verify "$HELM_URL" "$HELM_ARCHIVE_PATH" "$HELM_SHA256"
 run_step "Install Helm ${HELM_VERSION_DISPLAY:-0.9.0}" install_deb_file "$HELM_ARCHIVE_PATH"
+HELM_LAST_INSTALLED_VERSION="${HELM_VERSION_DISPLAY:-0.9.0}"
+register_plugin_hint \
+    "vst3" \
+    "helm" \
+    "Helm" \
+    "/usr/lib/vst3/Helm.vst3" \
+    "$HELM_LAST_INSTALLED_VERSION" \
+    "true" \
+    core \
+    synths
 
 if $ENABLE_EXPANDED_SYNTHS; then
     run_step "Install Vital suite" install_vital_suite
+    register_plugin_hint \
+        "vst3" \
+        "vital" \
+        "Vital" \
+        "/usr/lib/vst3/Vital.vst3" \
+        "${VITAL_LAST_INSTALLED_VERSION:-unknown}" \
+        "$ENABLE_EXPANDED_SYNTHS" \
+        expandedSynths \
+        synths
 
     # TAL-Vocoder via DISTRHO Ports (Ubuntu-packaged build)
     log "[PLUGINS] Installing DISTRHO Ports collection for TAL instruments"
@@ -1773,8 +1927,26 @@ if $ENABLE_EXPANDED_SYNTHS; then
     fi
 
     run_step "Install Tyrell N6" install_tyrell_n6
+    register_plugin_hint \
+        "vst3" \
+        "tyrell-n6" \
+        "Tyrell N6" \
+        "/usr/lib/vst3/TyrellN6.vst3" \
+        "${TYRELL_LAST_INSTALLED_VERSION:-latest}" \
+        "$ENABLE_EXPANDED_SYNTHS" \
+        expandedSynths \
+        synths
 
     run_step "Install OB-Xd" install_obxd
+    register_plugin_hint \
+        "vst3" \
+        "ob-xd" \
+        "OB-Xd" \
+        "/usr/lib/vst3/OB-Xd.vst3" \
+        "${OBXD_LAST_INSTALLED_VERSION:-2.17.0}" \
+        "$ENABLE_EXPANDED_SYNTHS" \
+        expandedSynths \
+        synths
 
     log "[INFO] Consider installing Dragonfly Reverb, LSP, Calf, x42, Zam, and DISTRHO Ports for a comprehensive Linux-native toolchain"
     log "[INFO] MT Power Drumkit 2 requires a manual download; native alternatives like AVLDrums or DrumGizmo are installed automatically"
@@ -1985,6 +2157,8 @@ else
     log "[PY] GUI stack disabled for this profile"
 fi
 
+write_metadata_files
+
 log "[ENV] Exporting DAW paths to user profile"
 PROFILE_BLOCK_START="# >>> DaftCitadel profile >>>"
 PROFILE_BLOCK_END="# <<< DaftCitadel profile <<<"
@@ -2011,6 +2185,7 @@ as_user "cd '$BASE' && git commit -m 'Daft Citadel bootstrap' || true"
 
 log "[FINAL] $PROFILE_NAME deployment complete"
 log "Profile manifest: $BASE/citadel_profile.json"
+log "Plugin cache hints: $BASE/plugin_cache_hints.json"
 if $ENABLE_GUI; then
     log "GUI launcher: $VENV/bin/python $BASE/citadel_gui.py"
 fi

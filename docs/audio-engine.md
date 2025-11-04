@@ -51,6 +51,10 @@ assumptions baked into `createProductionSessionEnvironment`:
 - **Error handling** – If the device cannot satisfy the requested configuration the JavaScript
   bootstrap falls back to a passive environment. Keep the native logging (`os_log` / Logcat)
   enabled so configuration mismatches can be diagnosed during bring-up.
+- **Installer metadata** – Run `scripts/daftcitadel.sh` so the runtime emits
+  `~/DaftCitadel/citadel_profile.json` and `~/DaftCitadel/plugin_cache_hints.json`. The TypeScript
+  session environment reads these files to preload plugin caches and align sample directories with
+  the expectations baked into the native audio bridge.
 
 ## Threading Model
 
