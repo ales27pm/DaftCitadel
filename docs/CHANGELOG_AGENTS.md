@@ -9,6 +9,7 @@ Chronological log of notable automation and documentation updates related to Daf
 ## Entries
 
 - 2025-11-03 — Hardened `npm run manage:agents` to re-run `agents_sync.py plan` after applying updates, fail if drift persists, and expose sandbox overrides plus Jest integration coverage to keep automation reliable. Follow-up: extend the stub coverage to mimic common contributor failure modes (missing docs, permission errors).
+- 2025-11-04 — Recorded the transport selector purity work across ROADMAP and session docs after adopting [`useProjectedTransport`](../src/ui/session/useProjectedTransport.ts) for playhead projection. Follow-up: expand PerformanceScreen docs once diagnostics HUD sparklines land.
 - 2025-11-02 — Wired `npm run manage:agents` to invoke `agents_sync.py apply --no-commit` so ROADMAP, architecture docs, and AGENTS.md stay synchronized without ad-hoc edits. Follow-up: monitor CI logs to ensure the new `--fail-on-change` plan check surfaces drift clearly.
 - 2025-11-02 — Recorded the SessionAudioBridge resilience upgrade across ROADMAP, ARCHITECTURE, and plugin-hosting docs so contributors know descriptor failures now retain audio. Follow-up: audit PluginHost native bindings to ensure retry tokens surface the refreshed instance identifiers.
 - 2025-11-02 — Documented SessionAppProvider runtime selection and fallback behaviour across README, ROADMAP, and architecture guides after landing the live session bootstrap. Follow-up: verify SessionAudioBridge diff workstreams update docs when completed.
