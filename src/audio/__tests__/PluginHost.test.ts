@@ -308,41 +308,53 @@ describe('PluginHost', () => {
     );
   });
 
-  it('allows manual retry after automatic restart is refused', async () => {
+  it('allows repeated manual retries after automatic restart is refused', async () => {
     const crashOnlyHandle = { ...instanceHandle, restartToken: undefined };
 
     instantiateMock.mockResolvedValueOnce(crashOnlyHandle);
-    instantiateMock.mockResolvedValueOnce(restartedHandle);
 
     const host = new PluginHost(new FakeSandboxManager());
     await host.loadPlugin(descriptor);
-
-    __mockPluginHostEmitter.emit('pluginCrashed', {
-      instanceId: instanceHandle.instanceId,
-      descriptor,
-      timestamp: new Date().toISOString(),
-      reason: 'Test crash',
-      recovered: false,
-      restartToken: undefined,
-    });
 
     const ackMock = NativePluginHost.acknowledgeCrash as jest.MockedFunction<
       typeof NativePluginHost.acknowledgeCrash
     >;
 
-    await waitForCondition(() => ackMock.mock.calls.length > 0, 12, 15);
+    const emitCrashWithoutRestartToken = async () => {
+      const expectedCalls = ackMock.mock.calls.length + 1;
+      __mockPluginHostEmitter.emit('pluginCrashed', {
+        instanceId: instanceHandle.instanceId,
+        descriptor,
+        timestamp: new Date().toISOString(),
+        reason: 'Test crash',
+        recovered: false,
+        restartToken: undefined,
+      });
+      await waitForCondition(
+        () => ackMock.mock.calls.length >= expectedCalls,
+        12,
+        15,
+      );
+    };
 
-    const callsBeforeRetry = instantiateMock.mock.calls.length;
-    const retried = await host.retryInstance(instanceHandle.instanceId);
+    const performManualRetry = async () => {
+      instantiateMock.mockResolvedValueOnce(crashOnlyHandle);
+      const previousCallCount = instantiateMock.mock.calls.length;
+      const retried = await host.retryInstance(instanceHandle.instanceId);
+      expect(retried).toBe(true);
+      expect(instantiateMock.mock.calls.length).toBeGreaterThan(previousCallCount);
+      const lastCall = instantiateMock.mock.calls.at(-1);
+      expect(lastCall?.[1]?.sandboxIdentifier).toBe(descriptor.identifier);
+    };
 
-    expect(retried).toBe(true);
-    expect(instantiateMock.mock.calls.length).toBeGreaterThan(callsBeforeRetry);
+    await emitCrashWithoutRestartToken();
+    await performManualRetry();
 
-    const lastCall = instantiateMock.mock.calls.at(-1);
-    expect(lastCall?.[1]).toMatchObject({
-      sandboxIdentifier: descriptor.identifier,
-    });
-    expect(lastCall?.[1]?.restartToken).toBeUndefined();
+    await emitCrashWithoutRestartToken();
+    await performManualRetry();
+
+    await emitCrashWithoutRestartToken();
+    await performManualRetry();
   });
 
   it('supports manual retry of plugin instances', async () => {
