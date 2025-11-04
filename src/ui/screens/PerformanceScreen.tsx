@@ -11,11 +11,12 @@ import Animated, {
 
 import { NeonButton, NeonSurface, NeonText, NeonToolbar } from '../design-system';
 import { useAdaptiveLayout } from '../layout';
-import { useSessionViewModel } from '../session';
+import { useSessionViewModel, useProjectedTransport } from '../session';
 
 export const PerformanceScreen: React.FC = () => {
   const adaptive = useAdaptiveLayout();
   const { status, transport, tracks, diagnostics, refresh } = useSessionViewModel();
+  const { projectedBeats } = useProjectedTransport(transport);
   const bpm = useSharedValue(transport?.bpm ?? 0);
   const renderLoad = useSharedValue(diagnostics.renderLoad);
   const bpmDisplay = useDerivedValue(() => bpm.value);
@@ -97,7 +98,7 @@ export const PerformanceScreen: React.FC = () => {
             <NeonText variant="body" style={statusTextStyle}>
               {status === 'ready'
                 ? `Time Signature ${transport?.timeSignature ?? '4/4'} • Playhead ${
-                    transport ? transport.playheadBeats.toFixed(2) : '0.00'
+                    transport ? projectedBeats.toFixed(2) : '0.00'
                   } beats`
                 : 'Connecting to transport controller...'}
             </NeonText>

@@ -13,6 +13,7 @@ import {
   TrackPluginViewModel,
   TrackPluginStatus,
   TransportRuntimeState,
+  PlayheadReference,
 } from './types';
 import type { PluginCrashReport } from '../../audio';
 
@@ -441,56 +442,43 @@ const shouldPlay = (
   return passesDiagnosticsGate(diagnostics);
 };
 
-const computeRuntimePlayheadBeats = (
+const createRuntimePlayheadReference = (
   runtime: TransportRuntimeState,
-  sessionBpm: number,
   totalBeats: number,
-): number => {
+  fallbackBpm: number,
+): PlayheadReference => {
   const baseBeats = Number.isFinite(runtime.beats) ? runtime.beats : 0;
-  if (!runtime.isPlaying) {
-    return wrapBeats(baseBeats, totalBeats);
-  }
-  const runtimeUpdatedAt = Number.isFinite(runtime.updatedAt)
-    ? runtime.updatedAt
-    : Date.now();
-  const elapsedMs = Math.max(0, Date.now() - runtimeUpdatedAt);
-  const bpm = runtime.bpm > 0 ? runtime.bpm : sessionBpm;
-  const elapsedBeats = (elapsedMs / 60000) * bpm;
-  return wrapBeats(baseBeats + elapsedBeats, totalBeats);
+  const updatedAt = Number.isFinite(runtime.updatedAt) ? runtime.updatedAt : undefined;
+  const bpm = runtime.bpm > 0 ? runtime.bpm : fallbackBpm;
+  return {
+    source: 'runtime',
+    beats: wrapBeats(baseBeats, totalBeats),
+    bpm,
+    updatedAt,
+  };
 };
 
-const computeDiagnosticsPlayheadBeats = (
+const createDiagnosticsPlayheadReference = (
   diagnostics: SessionDiagnosticsView,
   diagnosticsGate: boolean,
   sessionLengthMs: number,
   beatDuration: number,
   totalBeats: number,
-): number => {
+  fallbackBpm: number,
+): PlayheadReference => {
   const cycleLengthMs = Math.max(sessionLengthMs, MIN_SESSION_LENGTH_MS);
-  const referenceTime = diagnostics.updatedAt ?? Date.now();
-  const playheadMs = diagnosticsGate ? referenceTime % cycleLengthMs : 0;
-  return wrapBeats(playheadMs / beatDuration, totalBeats);
-};
-
-const computePlayheadBeats = (
-  runtime: TransportRuntimeState | undefined,
-  diagnostics: SessionDiagnosticsView,
-  diagnosticsGate: boolean,
-  sessionLengthMs: number,
-  beatDuration: number,
-  totalBeats: number,
-  sessionBpm: number,
-): number => {
-  if (runtime) {
-    return computeRuntimePlayheadBeats(runtime, sessionBpm, totalBeats);
-  }
-  return computeDiagnosticsPlayheadBeats(
-    diagnostics,
-    diagnosticsGate,
-    sessionLengthMs,
-    beatDuration,
-    totalBeats,
-  );
+  const updatedAt = Number.isFinite(diagnostics.updatedAt)
+    ? diagnostics.updatedAt
+    : undefined;
+  const playheadMs =
+    diagnosticsGate && typeof updatedAt === 'number' ? updatedAt % cycleLengthMs : 0;
+  const baseBeats = playheadMs / beatDuration;
+  return {
+    source: 'diagnostics',
+    beats: wrapBeats(baseBeats, totalBeats),
+    bpm: fallbackBpm,
+    updatedAt,
+  };
 };
 
 export const buildTracks = (
@@ -525,15 +513,17 @@ export const buildTransport = (
 
   const diagnosticsGate = passesDiagnosticsGate(diagnostics);
   const isPlaying = shouldPlay(runtime, diagnostics);
-  const playheadBeats = computePlayheadBeats(
-    runtime,
-    diagnostics,
-    diagnosticsGate,
-    length,
-    beatDuration,
-    totalBeats,
-    session.metadata.bpm,
-  );
+  const playheadReference = runtime
+    ? createRuntimePlayheadReference(runtime, totalBeats, session.metadata.bpm)
+    : createDiagnosticsPlayheadReference(
+        diagnostics,
+        diagnosticsGate,
+        length,
+        beatDuration,
+        totalBeats,
+        session.metadata.bpm,
+      );
+  const playheadBeats = playheadReference?.beats ?? 0;
   const playheadRatio = totalBeats > 0 ? clamp(playheadBeats / totalBeats, 0, 1) : 0;
 
   return {
@@ -544,5 +534,7 @@ export const buildTransport = (
     playheadBeats,
     playheadRatio,
     isPlaying,
+    diagnosticsGate,
+    playheadReference,
   };
 };

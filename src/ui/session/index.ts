@@ -11,6 +11,7 @@ export { buildTracks, buildTransport } from './selectors';
 export { SessionStoryProvider } from './fixtures';
 export { SessionAppProvider } from './SessionAppProvider';
 export { useTransportControls } from './useTransportControls';
+export { useProjectedTransport } from './useProjectedTransport';
 export {
   createDemoSessionEnvironment,
   createPassiveSessionEnvironment,
