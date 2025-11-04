@@ -103,7 +103,7 @@ function ensurePositiveInteger(value: unknown, path: string): number {
 }
 
 function ensureStringArray(value: unknown, path: string): string[] {
-  if (value === undefined) {
+  if (value === undefined || value === null) {
     return [];
   }
   if (!Array.isArray(value)) {
