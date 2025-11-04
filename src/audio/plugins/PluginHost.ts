@@ -216,13 +216,15 @@ export class PluginHost {
     this.crashListeners.forEach((listener) => listener(report));
   }
 
-  private async tryRestartInstance(payload: PluginCrashEventPayload): Promise<boolean> {
-    const binding = this.instances.get(payload.instanceId);
-    if (!binding) {
-      return false;
-    }
-
-    const updatedBinding: InstanceBindingRecord = {
+  private mergeCrashPayload(
+    binding: InstanceBindingRecord,
+    payload: PluginCrashEventPayload,
+  ): {
+    updated: InstanceBindingRecord;
+    proceed: boolean;
+    reason?: 'mismatch' | 'missing';
+  } {
+    const updated: InstanceBindingRecord = {
       ...binding,
       restartToken: payload.restartToken ?? binding.restartToken,
       sandboxIdentifier: payload.sandboxIdentifier ?? binding.sandboxIdentifier,
@@ -235,29 +237,98 @@ export class PluginHost {
     };
 
     if (
-      payload.restartToken &&
       binding.restartToken &&
+      payload.restartToken &&
       payload.restartToken !== binding.restartToken
     ) {
-      console.warn('Restart token mismatch; refusing automatic restart', {
-        instanceId: payload.instanceId,
-      });
-      this.instances.delete(payload.instanceId);
-      this.crashedInstances.set(payload.instanceId, updatedBinding);
+      return { updated, proceed: false, reason: 'mismatch' };
+    }
+
+    if (!updated.restartToken) {
+      return { updated, proceed: false, reason: 'missing' };
+    }
+
+    return { updated, proceed: true };
+  }
+
+  private markCrashed(
+    instanceId: string,
+    binding: InstanceBindingRecord,
+  ): void {
+    this.instances.delete(instanceId);
+    this.crashedInstances.set(instanceId, binding);
+  }
+
+  private async prepareRestart(
+    binding: InstanceBindingRecord,
+  ): Promise<{
+    options: PluginInstanceOptions;
+    sandboxContext?: SandboxContext;
+    sandboxIdentifier?: string;
+  }> {
+    const { descriptor, cpuLoadPercent } = binding.handle;
+    let { sandboxIdentifier } = binding;
+    let sandboxContext: SandboxContext | undefined;
+
+    if (
+      descriptor.supportsSandbox &&
+      (Platform.OS === 'ios' || Platform.OS === 'android')
+    ) {
+      const preferredIdentifier = sandboxIdentifier ?? descriptor.identifier;
+      try {
+        sandboxContext = await this.sandboxManager.ensureSandbox(
+          descriptor,
+          preferredIdentifier,
+        );
+        sandboxIdentifier = sandboxContext.identifier;
+      } catch (error) {
+        console.error('Failed to prepare sandbox for plugin restart', error);
+      }
+    }
+
+    const instantiateOptions: PluginInstanceOptions = {
+      initialPresetId: descriptor.factoryPresets?.[0]?.id,
+      cpuBudgetPercent: cpuLoadPercent,
+    };
+
+    if (sandboxContext?.identifier || sandboxIdentifier) {
+      instantiateOptions.sandboxIdentifier =
+        sandboxContext?.identifier ?? sandboxIdentifier;
+    }
+
+    if (binding.restartToken) {
+      instantiateOptions.restartToken = binding.restartToken;
+    }
+
+    return {
+      options: instantiateOptions,
+      sandboxContext,
+      sandboxIdentifier: sandboxContext?.identifier ?? sandboxIdentifier,
+    };
+  }
+
+  private async tryRestartInstance(payload: PluginCrashEventPayload): Promise<boolean> {
+    const binding = this.instances.get(payload.instanceId);
+    if (!binding) {
       return false;
     }
 
-    if (!updatedBinding.restartToken) {
-      console.warn('Restart token missing; refusing automatic restart', {
+    const { updated, proceed, reason } = this.mergeCrashPayload(binding, payload);
+
+    if (!proceed) {
+      const message =
+        reason === 'mismatch'
+          ? 'Restart token mismatch; refusing automatic restart'
+          : 'Restart token missing; refusing automatic restart';
+      console.warn(message, {
         instanceId: payload.instanceId,
       });
-      this.instances.delete(payload.instanceId);
-      this.crashedInstances.set(payload.instanceId, updatedBinding);
+      this.markCrashed(payload.instanceId, updated);
       return false;
     }
 
-    this.instances.set(payload.instanceId, updatedBinding);
-    return this.reviveBinding(updatedBinding, payload.instanceId);
+    this.instances.set(payload.instanceId, updated);
+    return this.reviveBinding(updated, payload.instanceId);
   }
 
   getInstanceRuntime(
@@ -286,43 +357,13 @@ export class PluginHost {
     binding: InstanceBindingRecord,
     targetInstanceId: string,
   ): Promise<boolean> {
-    let sandboxContext: SandboxContext | undefined;
-    let sandboxIdentifier = binding.sandboxIdentifier;
-
-    if (
-      binding.handle.descriptor.supportsSandbox &&
-      (Platform.OS === 'ios' || Platform.OS === 'android')
-    ) {
-      const preferredIdentifier =
-        sandboxIdentifier ?? binding.handle.descriptor.identifier;
-      try {
-        sandboxContext = await this.sandboxManager.ensureSandbox(
-          binding.handle.descriptor,
-          preferredIdentifier,
-        );
-        sandboxIdentifier = sandboxContext.identifier;
-      } catch (error) {
-        console.error('Failed to prepare sandbox for plugin restart', error);
-      }
-    }
-
-    const instantiateOptions: PluginInstanceOptions = {
-      initialPresetId: binding.handle.descriptor.factoryPresets?.[0]?.id,
-      cpuBudgetPercent: binding.handle.cpuLoadPercent,
-    };
-
-    if (sandboxContext?.identifier || sandboxIdentifier) {
-      instantiateOptions.sandboxIdentifier =
-        sandboxContext?.identifier ?? sandboxIdentifier;
-    }
-    if (binding.restartToken) {
-      instantiateOptions.restartToken = binding.restartToken;
-    }
+    const { options, sandboxContext, sandboxIdentifier } =
+      await this.prepareRestart(binding);
 
     try {
       const newHandle = await NativePluginHost.instantiatePlugin(
         binding.handle.descriptor.identifier,
-        instantiateOptions,
+        options,
       );
       const revivedHandle: PluginInstanceHandle = {
         ...newHandle,
@@ -341,7 +382,7 @@ export class PluginHost {
         nativeInstanceId:
           handleWithSandbox.nativeInstanceId ?? handleWithSandbox.instanceId,
         restartToken: handleWithSandbox.restartToken ?? binding.restartToken,
-        sandboxIdentifier: sandboxContext?.identifier ?? sandboxIdentifier,
+        sandboxIdentifier,
         sandboxPath: resolvedSandboxPath ?? binding.sandboxPath,
       };
       if (sandboxContext) {
@@ -352,8 +393,7 @@ export class PluginHost {
       return true;
     } catch (error) {
       console.error('Plugin revive failed', error);
-      this.instances.delete(targetInstanceId);
-      this.crashedInstances.set(targetInstanceId, { ...binding });
+      this.markCrashed(targetInstanceId, { ...binding });
       return false;
     }
   }
