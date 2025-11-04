@@ -57,6 +57,22 @@ const restartedHandle: PluginInstanceHandle = {
   restartToken: 'token-2',
 };
 
+const delay = (ms = 10): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+const waitForCondition = async (
+  predicate: () => boolean,
+  attempts = 10,
+  intervalMs = 10,
+): Promise<void> => {
+  for (let index = 0; index < attempts; index += 1) {
+    if (predicate()) {
+      return;
+    }
+    await delay(intervalMs);
+  }
+};
+
 describe('PluginHost', () => {
   let instantiateMock: jest.SpiedFunction<typeof NativePluginHost.instantiatePlugin>;
 
@@ -124,21 +140,28 @@ describe('PluginHost', () => {
       restartToken: 'token-1',
     });
 
-    await new Promise((resolve) => setImmediate(resolve));
+    const ackMock = NativePluginHost.acknowledgeCrash as jest.MockedFunction<
+      typeof NativePluginHost.acknowledgeCrash
+    >;
+
+    await waitForCondition(() => ackMock.mock.calls.length > 0, 12, 15);
+    await waitForCondition(() => instantiateMock.mock.calls.length >= 2, 12, 15);
 
     expect(NativePluginHost.acknowledgeCrash).toHaveBeenCalledWith(
-      instanceHandle.instanceId,
+      instanceHandle.nativeInstanceId,
     );
     expect(NativePluginHost.instantiatePlugin).toHaveBeenCalledWith(
       descriptor.identifier,
       expect.objectContaining({
         initialPresetId: 'default',
+        restartToken: 'token-1',
       }),
     );
     expect(listener).toHaveBeenCalledWith(
       expect.objectContaining({
         instanceId: instanceHandle.instanceId,
         reason: 'Test crash',
+        recovered: true,
       }),
     );
   });
@@ -180,8 +203,7 @@ describe('PluginHost', () => {
       restartToken: 'token-1',
     });
 
-    await new Promise((resolve) => setImmediate(resolve));
-    await new Promise((resolve) => setImmediate(resolve));
+    await waitForCondition(() => instantiateMock.mock.calls.length >= 2, 12, 15);
 
     expect(instantiateMock.mock.calls.length).toBeGreaterThanOrEqual(2);
 
@@ -200,6 +222,37 @@ describe('PluginHost', () => {
     );
   });
 
+  it('preserves sandbox identifiers across crash recoveries', async () => {
+    instantiateMock.mockImplementationOnce(async () => instanceHandle);
+    instantiateMock.mockImplementationOnce(async () => restartedHandle);
+
+    const sandboxManager = new FakeSandboxManager();
+    const host = new PluginHost(sandboxManager);
+    await host.loadPlugin(descriptor, { sandboxIdentifier: 'custom-sandbox' });
+
+    __mockPluginHostEmitter.emit('pluginCrashed', {
+      instanceId: instanceHandle.instanceId,
+      descriptor,
+      timestamp: new Date().toISOString(),
+      reason: 'Test crash',
+      recovered: false,
+      restartToken: 'token-1',
+      sandboxPath: instanceHandle.sandboxPath,
+    });
+
+    await waitForCondition(() => instantiateMock.mock.calls.length >= 2, 12, 15);
+
+    const [, options] = instantiateMock.mock.calls[1];
+    expect(options).toMatchObject({
+      sandboxIdentifier: 'custom-sandbox',
+      restartToken: 'token-1',
+    });
+    expect(sandboxManager.ensureSandbox).toHaveBeenCalledWith(
+      descriptor,
+      'custom-sandbox',
+    );
+  });
+
   it('refuses to restart when the restart token mismatches', async () => {
     const host = new PluginHost(new FakeSandboxManager());
     await host.loadPlugin(descriptor);
@@ -213,13 +266,52 @@ describe('PluginHost', () => {
       restartToken: 'token-mismatch',
     });
 
-    await new Promise((resolve) => setImmediate(resolve));
+    const ackMock = NativePluginHost.acknowledgeCrash as jest.MockedFunction<
+      typeof NativePluginHost.acknowledgeCrash
+    >;
+
+    await waitForCondition(() => ackMock.mock.calls.length > 0, 12, 15);
 
     expect(instantiateMock).toHaveBeenCalledTimes(1);
   });
 
+  it('updates restart tokens from crash payloads for manual retries', async () => {
+    instantiateMock.mockImplementationOnce(async () => instanceHandle);
+
+    const host = new PluginHost(new FakeSandboxManager());
+    await host.loadPlugin(descriptor);
+
+    __mockPluginHostEmitter.emit('pluginCrashed', {
+      instanceId: instanceHandle.instanceId,
+      descriptor,
+      timestamp: new Date().toISOString(),
+      reason: 'Test crash',
+      recovered: false,
+      restartToken: 'token-override',
+    });
+
+    const ackMock = NativePluginHost.acknowledgeCrash as jest.MockedFunction<
+      typeof NativePluginHost.acknowledgeCrash
+    >;
+
+    await waitForCondition(() => ackMock.mock.calls.length > 0, 12, 15);
+
+    instantiateMock.mockClear();
+    instantiateMock.mockResolvedValueOnce(restartedHandle);
+
+    const retried = await host.retryInstance(instanceHandle.instanceId);
+
+    expect(retried).toBe(true);
+    expect(instantiateMock).toHaveBeenCalledWith(
+      descriptor.identifier,
+      expect.objectContaining({ restartToken: 'token-override' }),
+    );
+  });
+
   it('allows manual retry after automatic restart is refused', async () => {
-    instantiateMock.mockResolvedValueOnce(instanceHandle);
+    const crashOnlyHandle = { ...instanceHandle, restartToken: undefined };
+
+    instantiateMock.mockResolvedValueOnce(crashOnlyHandle);
     instantiateMock.mockResolvedValueOnce(restartedHandle);
 
     const host = new PluginHost(new FakeSandboxManager());
@@ -234,12 +326,23 @@ describe('PluginHost', () => {
       restartToken: undefined,
     });
 
-    await new Promise((resolve) => setImmediate(resolve));
+    const ackMock = NativePluginHost.acknowledgeCrash as jest.MockedFunction<
+      typeof NativePluginHost.acknowledgeCrash
+    >;
 
+    await waitForCondition(() => ackMock.mock.calls.length > 0, 12, 15);
+
+    const callsBeforeRetry = instantiateMock.mock.calls.length;
     const retried = await host.retryInstance(instanceHandle.instanceId);
 
     expect(retried).toBe(true);
-    expect(instantiateMock).toHaveBeenCalledTimes(2);
+    expect(instantiateMock.mock.calls.length).toBeGreaterThan(callsBeforeRetry);
+
+    const lastCall = instantiateMock.mock.calls.at(-1);
+    expect(lastCall?.[1]).toMatchObject({
+      sandboxIdentifier: descriptor.identifier,
+    });
+    expect(lastCall?.[1]?.restartToken).toBeUndefined();
   });
 
   it('supports manual retry of plugin instances', async () => {

@@ -39,6 +39,8 @@ export type PluginHostEvent = 'pluginCrashed' | 'sandboxPermissionRequired';
 
 export interface PluginCrashEventPayload extends PluginCrashReport {
   restartToken?: string;
+  sandboxIdentifier?: string;
+  sandboxPath?: string;
 }
 
 export interface SandboxPermissionPayload {
