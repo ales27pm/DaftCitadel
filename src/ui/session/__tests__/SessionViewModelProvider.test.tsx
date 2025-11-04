@@ -157,6 +157,180 @@ describe('SessionViewModelProvider', () => {
     jest.useRealTimers();
   });
 
+  it('falls back to plugin host retries when the audio bridge lacks support', async () => {
+    jest.useFakeTimers();
+    const storage = new InMemorySessionStorageAdapter();
+    await storage.initialize();
+    const bridge = new PassiveAudioEngineBridge();
+    const manager = new SessionManager(storage, bridge);
+
+    let listener: ((report: PluginCrashReport) => void) | undefined;
+    const retryInstance = jest.fn(async () => true);
+    const host: PluginHost = {
+      onCrash: (cb: (report: PluginCrashReport) => void) => {
+        listener = cb;
+        return () => {
+          listener = undefined;
+        };
+      },
+      retryInstance,
+    } as unknown as PluginHost;
+
+    let alerts: PluginCrashReport[] = [];
+    let viewModelRef: ReturnType<typeof useSessionViewModel> | undefined;
+
+    const Consumer = () => {
+      const viewModel = useSessionViewModel();
+      alerts = viewModel.pluginAlerts;
+      viewModelRef = viewModel;
+      return null;
+    };
+
+    await act(async () => {
+      TestRenderer.create(
+        React.createElement(
+          SessionViewModelProvider,
+          {
+            manager,
+            sessionId: DEMO_SESSION_ID,
+            bootstrapSession: () => demoSession,
+            diagnosticsPollIntervalMs: 0,
+            pluginHost: host,
+            audioBridge: bridge,
+          },
+          React.createElement(Consumer, null),
+        ),
+      );
+      await Promise.resolve();
+    });
+
+    const crashReport: PluginCrashReport = {
+      instanceId: 'plugin-2',
+      descriptor: {
+        identifier: 'com.acme.Plugin',
+        name: 'Fixture Plugin',
+        format: 'auv3',
+        manufacturer: 'Acme',
+        version: '1.0',
+        supportsSandbox: true,
+        audioInputChannels: 2,
+        audioOutputChannels: 2,
+        midiInput: false,
+        midiOutput: false,
+        parameters: [],
+      },
+      timestamp: new Date().toISOString(),
+      reason: 'test',
+      recovered: false,
+    };
+
+    await act(async () => {
+      listener?.(crashReport);
+      await Promise.resolve();
+    });
+
+    expect(alerts).toHaveLength(1);
+
+    await act(async () => {
+      await viewModelRef?.retryPlugin('plugin-2');
+      await Promise.resolve();
+    });
+
+    expect(retryInstance).toHaveBeenCalledWith('plugin-2');
+    expect(alerts[0].recovered).toBe(true);
+
+    await act(async () => {
+      jest.advanceTimersByTime(4500);
+      await Promise.resolve();
+    });
+
+    expect(alerts).toHaveLength(0);
+    jest.useRealTimers();
+  });
+
+  it('deduplicates plugin crash alerts by instance and timestamp', async () => {
+    const storage = new InMemorySessionStorageAdapter();
+    await storage.initialize();
+    const bridge = new PassiveAudioEngineBridge();
+    const manager = new SessionManager(storage, bridge);
+
+    let listener: ((report: PluginCrashReport) => void) | undefined;
+    const host: PluginHost = {
+      onCrash: (cb: (report: PluginCrashReport) => void) => {
+        listener = cb;
+        return () => {
+          listener = undefined;
+        };
+      },
+    } as PluginHost;
+
+    let alerts: PluginCrashReport[] = [];
+
+    const Consumer = () => {
+      const viewModel = useSessionViewModel();
+      alerts = viewModel.pluginAlerts;
+      return null;
+    };
+
+    await act(async () => {
+      TestRenderer.create(
+        React.createElement(
+          SessionViewModelProvider,
+          {
+            manager,
+            sessionId: DEMO_SESSION_ID,
+            bootstrapSession: () => demoSession,
+            diagnosticsPollIntervalMs: 0,
+            pluginHost: host,
+            audioBridge: bridge,
+          },
+          React.createElement(Consumer, null),
+        ),
+      );
+      await Promise.resolve();
+    });
+
+    const timestamp = new Date().toISOString();
+    const crashReport: PluginCrashReport = {
+      instanceId: 'plugin-3',
+      descriptor: {
+        identifier: 'com.acme.Plugin',
+        name: 'Fixture Plugin',
+        format: 'auv3',
+        manufacturer: 'Acme',
+        version: '1.0',
+        supportsSandbox: true,
+        audioInputChannels: 2,
+        audioOutputChannels: 2,
+        midiInput: false,
+        midiOutput: false,
+        parameters: [],
+      },
+      timestamp,
+      reason: 'test',
+      recovered: false,
+    };
+
+    await act(async () => {
+      listener?.(crashReport);
+      listener?.(crashReport);
+      await Promise.resolve();
+    });
+
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].timestamp).toBe(timestamp);
+
+    const nextCrash = { ...crashReport, timestamp: new Date().toISOString() };
+
+    await act(async () => {
+      listener?.(nextCrash);
+      await Promise.resolve();
+    });
+
+    expect(alerts).toHaveLength(2);
+    expect(alerts[0].timestamp).toBe(nextCrash.timestamp);
+  });
+
   it('surfaces audio engine failures as an error status', async () => {
     const storage = new InMemorySessionStorageAdapter();
     await storage.initialize();
