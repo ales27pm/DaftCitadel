@@ -54,7 +54,7 @@ const deriveRuntimeFromTransport = (
     bpm,
     sampleRate,
     isPlaying: transport.isPlaying,
-    updatedAt: Date.now(),
+    updatedAt: transport.playheadReference?.updatedAt ?? Date.now(),
   };
 };
 

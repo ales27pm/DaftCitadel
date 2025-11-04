@@ -204,7 +204,7 @@ describe('session selectors', () => {
     expect(unavailableSnapshot.status).toBe('unavailable');
   });
 
-  it('projects transport beats when runtime is playing', () => {
+  it('provides runtime playhead reference when runtime is playing', () => {
     const session = createSession();
     const diagnostics: SessionDiagnosticsView = {
       status: 'ready',
@@ -225,8 +225,33 @@ describe('session selectors', () => {
     });
 
     expect(transport.isPlaying).toBe(true);
-    expect(transport.playheadBeats).toBeGreaterThan(2);
-    expect(transport.playheadBeats).toBeCloseTo(4, 1);
-    expect(transport.playheadRatio).toBeGreaterThan(0);
+    expect(transport.playheadBeats).toBeCloseTo(2, 5);
+    expect(transport.playheadRatio).toBeCloseTo(0.25, 5);
+    expect(transport.diagnosticsGate).toBe(true);
+    expect(transport.playheadReference).toEqual({
+      source: 'runtime',
+      beats: 2,
+      bpm: 120,
+      updatedAt: runtimeUpdatedAt,
+    });
+  });
+
+  it('derives diagnostics playhead reference when runtime is unavailable', () => {
+    const session = createSession();
+    const diagnostics: SessionDiagnosticsView = {
+      status: 'ready',
+      xruns: 0,
+      renderLoad: 0.15,
+      updatedAt: Date.now(),
+    };
+
+    const transport = buildTransport(session, diagnostics, undefined, 4000);
+
+    expect(transport.isPlaying).toBe(true);
+    expect(transport.playheadReference).toMatchObject({
+      source: 'diagnostics',
+      bpm: session.metadata.bpm,
+    });
+    expect(transport.playheadReference?.updatedAt).toBe(diagnostics.updatedAt);
   });
 });
