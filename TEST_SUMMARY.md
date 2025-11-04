@@ -89,4 +89,8 @@ Successfully generated **59 comprehensive unit tests** (expanded from 1 basic te
 - ✅ Node IDs with special characters (-, _, .)
 - ✅ Many connections to single node (20+ inputs)
 
+### 9. Installer Metadata Validation (2 tests)
+- ✅ `parseProfileManifest` normalises feature flags, module overrides, and path metadata.
+- ✅ `parsePluginCacheHints` deduplicates module tags, validates supported formats, and exposes helper accessors for the React Native host.
+
 ## Test Organization Structure
