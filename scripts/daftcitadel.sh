@@ -50,7 +50,15 @@ DAFTCITADEL_STRICT_ERRORS=false
 PROFILE_MANIFEST_VERSION=2
 PLUGIN_CACHE_HINTS_VERSION=1
 
-declare -a PLUGIN_HINTS=()
+declare -a PLUGIN_HINT_FORMATS=()
+declare -a PLUGIN_HINT_IDENTIFIERS=()
+declare -a PLUGIN_HINT_NAMES=()
+declare -a PLUGIN_HINT_BINARIES=()
+declare -a PLUGIN_HINT_CACHE_PATHS=()
+declare -a PLUGIN_HINT_ENABLED=()
+declare -a PLUGIN_HINT_AVAILABLE=()
+declare -a PLUGIN_HINT_VERSIONS=()
+declare -a PLUGIN_HINT_MODULES_B64=()
 
 VITAL_LAST_INSTALLED_VERSION=""
 SURGE_LAST_INSTALLED_VERSION=""
@@ -58,21 +66,7 @@ HELM_LAST_INSTALLED_VERSION=""
 TYRELL_LAST_INSTALLED_VERSION=""
 OBXD_LAST_INSTALLED_VERSION=""
 
-json_escape() {
-    local str="$1"
-    str="${str//\\/\\\\}"
-    str="${str//\"/\\\"}"
-    str="${str//$'\n'/\\n}"
-    str="${str//$'\r'/\\r}"
-    str="${str//$'\t'/\\t}"
-    printf '%s' "$str"
-}
-
-json_quote() {
-    printf '"%s"' "$(json_escape "$1")"
-}
-
-bool_to_json() {
+bool_to_flag() {
     local value="${1:-false}"
     if [[ "${value,,}" == "true" ]]; then
         printf 'true'
@@ -81,28 +75,14 @@ bool_to_json() {
     fi
 }
 
-json_array_from_list() {
-    declare -A seen=()
-    local ordered=()
-    local item
-    for item in "$@"; do
-        [[ -z "$item" ]] && continue
-        if [[ -z "${seen["$item"]:-}" ]]; then
-            seen["$item"]=1
-            ordered+=("$item")
-        fi
-    done
-    printf '['
-    local first=true
-    for item in "${ordered[@]}"; do
-        if $first; then
-            first=false
-        else
-            printf ', '
-        fi
-        printf '%s' "$(json_quote "$item")"
-    done
-    printf ']'
+encode_base64() {
+    python3 - <<'PY'
+import base64
+import sys
+
+data = sys.stdin.buffer.read()
+print(base64.b64encode(data).decode('utf-8'), end='')
+PY
 }
 
 register_plugin_hint() {
@@ -116,7 +96,8 @@ register_plugin_hint() {
     local modules=("$@")
 
     local cache_dir="${PLUGIN_CACHE_DIR:-$BASE/PluginCache}/$format/$identifier"
-    local enabled_json=$(bool_to_json "$enabled_flag")
+    local enabled_json
+    enabled_json=$(bool_to_flag "$enabled_flag")
     local available_json="false"
     if [[ -n "$binary_path" && -e "$binary_path" ]]; then
         available_json="true"
@@ -127,112 +108,87 @@ register_plugin_hint() {
         chown -R "$USER_NAME:$USER_NAME" "$cache_dir" 2>/dev/null || true
     fi
 
-    local modules_json
-    modules_json=$(json_array_from_list "${modules[@]}")
-
-    local entry_format
-    entry_format=$(json_quote "$format")
-    local entry_identifier
-    entry_identifier=$(json_quote "$identifier")
-    local entry_name
-    entry_name=$(json_quote "$name")
-    local entry_binary
-    entry_binary=$(json_quote "$binary_path")
-    local entry_cache
-    entry_cache=$(json_quote "$cache_dir")
-    local version_field=""
-    if [[ -n "$version" ]]; then
-        version_field=", \"version\": $(json_quote "$version")"
+    local modules_payload=""
+    if ((${#modules[@]} > 0)); then
+        local module_data=""
+        local module_value
+        for module_value in "${modules[@]}"; do
+            [[ -z "$module_value" ]] && continue
+            module_data+="$module_value"$'\n'
+        done
+        if [[ -n "$module_data" ]]; then
+            modules_payload=$(printf '%s' "$module_data" | encode_base64)
+        fi
     fi
 
-    local entry
-    entry="{\"format\": $entry_format, \"identifier\": $entry_identifier, \"name\": $entry_name, \"binaryPath\": $entry_binary, \"cachePath\": $entry_cache, \"enabled\": $enabled_json, \"available\": $available_json, \"modules\": $modules_json$version_field}"
-    PLUGIN_HINTS+=("$entry")
+    PLUGIN_HINT_FORMATS+=("$format")
+    PLUGIN_HINT_IDENTIFIERS+=("$identifier")
+    PLUGIN_HINT_NAMES+=("$name")
+    PLUGIN_HINT_BINARIES+=("$binary_path")
+    PLUGIN_HINT_CACHE_PATHS+=("$cache_dir")
+    PLUGIN_HINT_ENABLED+=("$enabled_json")
+    PLUGIN_HINT_AVAILABLE+=("$available_json")
+    PLUGIN_HINT_VERSIONS+=("$version")
+    PLUGIN_HINT_MODULES_B64+=("$modules_payload")
 }
 
-write_plugin_cache_hints() {
-    local hints_path="$BASE/plugin_cache_hints.json"
-    local timestamp
-    timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-    local timestamp_json
-    timestamp_json=$(json_quote "$timestamp")
-
-    {
-        printf '{\n'
-        printf '  "version": %s,\n' "$PLUGIN_CACHE_HINTS_VERSION"
-        printf '  "generatedAt": %s,\n' "$timestamp_json"
-        printf '  "hints": [\n'
-        local count=${#PLUGIN_HINTS[@]}
-        if ((count > 0)); then
-            local index=0
-            for entry in "${PLUGIN_HINTS[@]}"; do
-                printf '    %s' "$entry"
-                if ((index < count - 1)); then
-                    printf ','
-                fi
-                printf '\n'
-                ((index++))
-            done
-        fi
-        printf '  ]\n'
-        printf '}\n'
-    } >"$hints_path"
-
-    chown "$USER_NAME:$USER_NAME" "$hints_path" 2>/dev/null || true
-}
-
-write_profile_manifest() {
+write_metadata_files() {
     local manifest_path="$BASE/citadel_profile.json"
-    local timestamp
-    timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-    local timestamp_json
-    timestamp_json=$(json_quote "$timestamp")
-    local profile_json
-    profile_json=$(json_quote "$PROFILE")
-    local profile_name_json
-    profile_name_json=$(json_quote "$PROFILE_NAME")
-    local base_json
-    base_json=$(json_quote "$BASE")
-    local log_json
-    log_json=$(json_quote "$LOG")
-    local plugin_cache_json
-    plugin_cache_json=$(json_quote "$PLUGIN_CACHE_DIR")
-    local plugin_cache_hints_json
-    plugin_cache_hints_json=$(json_quote "$BASE/plugin_cache_hints.json")
-    local enabled_overrides
-    enabled_overrides=$(json_array_from_list "${MODULE_ENABLES[@]}")
-    local disabled_overrides
-    disabled_overrides=$(json_array_from_list "${MODULE_DISABLES[@]}")
+    local hints_path="$BASE/plugin_cache_hints.json"
+    local manifest_timestamp
+    manifest_timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    local hints_timestamp="$manifest_timestamp"
 
-    {
-        printf '{\n'
-        printf '  "version": %s,\n' "$PROFILE_MANIFEST_VERSION"
-        printf '  "generatedAt": %s,\n' "$timestamp_json"
-        printf '  "profile": %s,\n' "$profile_json"
-        printf '  "profileName": %s,\n' "$profile_name_json"
-        printf '  "features": {\n'
-        printf '    "ai": %s,\n' "$(bool_to_json "$ENABLE_AI")"
-        printf '    "gui": %s,\n' "$(bool_to_json "$ENABLE_GUI")"
-        printf '    "expandedSynths": %s,\n' "$(bool_to_json "$ENABLE_EXPANDED_SYNTHS")"
-        printf '    "heavyAssets": %s,\n' "$(bool_to_json "$ENABLE_HEAVY_ASSETS")"
-        printf '    "grooveTools": %s,\n' "$(bool_to_json "$ENABLE_GROOVE_TOOLS")"
-        printf '    "experimentalSynths": %s,\n' "$(bool_to_json "$ENABLE_EXPERIMENTAL_SYNTHS")"
-        printf '    "container": %s\n' "$(bool_to_json "$CONTAINER_MODE")"
-        printf '  },\n'
-        printf '  "paths": {\n'
-        printf '    "base": %s,\n' "$base_json"
-        printf '    "log": %s,\n' "$log_json"
-        printf '    "pluginCache": %s,\n' "$plugin_cache_json"
-        printf '    "pluginCacheHints": %s\n' "$plugin_cache_hints_json"
-        printf '  },\n'
-        printf '  "modules": {\n'
-        printf '    "enabledOverrides": %s,\n' "$enabled_overrides"
-        printf '    "disabledOverrides": %s\n' "$disabled_overrides"
-        printf '  }\n'
-        printf '}\n'
-    } >"$manifest_path"
+    local args=(
+        "--profile-manifest-out=$manifest_path"
+        "--plugin-hints-out=$hints_path"
+        "--profile-manifest-version=$PROFILE_MANIFEST_VERSION"
+        "--plugin-hints-version=$PLUGIN_CACHE_HINTS_VERSION"
+        "--manifest-generated-at=$manifest_timestamp"
+        "--plugin-hints-generated-at=$hints_timestamp"
+        "--profile=$PROFILE"
+        "--profile-name=$PROFILE_NAME"
+        "--base-path=$BASE"
+        "--log-path=$LOG"
+        "--plugin-cache-path=$PLUGIN_CACHE_DIR"
+        "--plugin-cache-hints-path=$BASE/plugin_cache_hints.json"
+        "--feature-ai=$(bool_to_flag "$ENABLE_AI")"
+        "--feature-gui=$(bool_to_flag "$ENABLE_GUI")"
+        "--feature-expanded-synths=$(bool_to_flag "$ENABLE_EXPANDED_SYNTHS")"
+        "--feature-heavy-assets=$(bool_to_flag "$ENABLE_HEAVY_ASSETS")"
+        "--feature-groove-tools=$(bool_to_flag "$ENABLE_GROOVE_TOOLS")"
+        "--feature-experimental-synths=$(bool_to_flag "$ENABLE_EXPERIMENTAL_SYNTHS")"
+        "--feature-container=$(bool_to_flag "$CONTAINER_MODE")"
+    )
 
-    chown "$USER_NAME:$USER_NAME" "$manifest_path" 2>/dev/null || true
+    local module_value
+    for module_value in "${MODULE_ENABLES[@]}"; do
+        [[ -z "$module_value" ]] && continue
+        args+=("--module-enabled-override=$module_value")
+    done
+    for module_value in "${MODULE_DISABLES[@]}"; do
+        [[ -z "$module_value" ]] && continue
+        args+=("--module-disabled-override=$module_value")
+    done
+
+    local hint_count=${#PLUGIN_HINT_FORMATS[@]}
+    local index=0
+    while ((index < hint_count)); do
+        args+=("--plugin-hint-format=${PLUGIN_HINT_FORMATS[$index]}")
+        args+=("--plugin-hint-identifier=${PLUGIN_HINT_IDENTIFIERS[$index]}")
+        args+=("--plugin-hint-name=${PLUGIN_HINT_NAMES[$index]}")
+        args+=("--plugin-hint-binary-path=${PLUGIN_HINT_BINARIES[$index]}")
+        args+=("--plugin-hint-cache-path=${PLUGIN_HINT_CACHE_PATHS[$index]}")
+        args+=("--plugin-hint-enabled=${PLUGIN_HINT_ENABLED[$index]}")
+        args+=("--plugin-hint-available=${PLUGIN_HINT_AVAILABLE[$index]}")
+        args+=("--plugin-hint-version=${PLUGIN_HINT_VERSIONS[$index]}")
+        args+=("--plugin-hint-modules=${PLUGIN_HINT_MODULES_B64[$index]}")
+        ((index++))
+    done
+
+    python3 "$SCRIPT_DIR/generate_metadata.py" "${args[@]}"
+
+    chown "$USER_NAME:$USER_NAME" "$manifest_path" "$hints_path" 2>/dev/null || true
 }
 
 usage() {
@@ -2201,8 +2157,7 @@ else
     log "[PY] GUI stack disabled for this profile"
 fi
 
-write_plugin_cache_hints
-write_profile_manifest
+write_metadata_files
 
 log "[ENV] Exporting DAW paths to user profile"
 PROFILE_BLOCK_START="# >>> DaftCitadel profile >>>"
