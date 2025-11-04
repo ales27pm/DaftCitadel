@@ -13,6 +13,7 @@ import {
   TrackPluginViewModel,
   TrackPluginStatus,
   TransportRuntimeState,
+  PlayheadReference,
 } from './types';
 import type { PluginCrashReport } from '../../audio';
 
@@ -258,25 +259,225 @@ const buildPluginChain = (
   });
 };
 
+type RawDiagnosticsSnapshot = {
+  status: 'loading' | 'ready' | 'unavailable' | 'error';
+  xruns: number;
+  renderLoad: number;
+  lastRenderDurationMicros?: number;
+  clipBufferBytes?: number;
+  error?: Error;
+  updatedAt?: number;
+};
+
+type NativeDiagnosticsPayload = {
+  xruns: number;
+  lastRenderDurationMicros: number;
+  clipBufferBytes: number;
+};
+
+type DiagnosticsPayload = RawDiagnosticsSnapshot | NativeDiagnosticsPayload;
+
+const RENDER_LOAD_THRESHOLD = 0.98;
+
+const clampRenderLoad = (value: number | undefined): number => {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return clamp(value as number, 0, 1);
+};
+
+const SNAPSHOT_STATUS_VALUES: RawDiagnosticsSnapshot['status'][] = [
+  'loading',
+  'ready',
+  'unavailable',
+  'error',
+];
+
+const isSnapshotPayload = (
+  input: DiagnosticsPayload,
+): input is RawDiagnosticsSnapshot => {
+  if (!input || typeof input !== 'object') {
+    return false;
+  }
+  const candidate = input as RawDiagnosticsSnapshot;
+  return (
+    typeof candidate.status === 'string' &&
+    SNAPSHOT_STATUS_VALUES.includes(candidate.status) &&
+    typeof candidate.renderLoad === 'number'
+  );
+};
+
+const deriveRenderLoadFromMicros = (
+  lastRenderDurationMicros?: number,
+): number | undefined => {
+  if (!Number.isFinite(lastRenderDurationMicros)) {
+    return undefined;
+  }
+  return (lastRenderDurationMicros as number) / 10_000;
+};
+
+const normalizeSnapshotDiagnostics = (
+  snapshot: RawDiagnosticsSnapshot,
+  previous: SessionDiagnosticsView,
+  now: number,
+): SessionDiagnosticsView => {
+  const safeXruns = Number.isFinite(snapshot.xruns) ? snapshot.xruns : previous.xruns;
+  const safeRenderLoad = Number.isFinite(snapshot.renderLoad)
+    ? snapshot.renderLoad
+    : previous.renderLoad;
+  const updatedAt = snapshot.updatedAt ?? now;
+
+  if (snapshot.status === 'ready') {
+    const lastRenderDurationMicros = Number.isFinite(snapshot.lastRenderDurationMicros)
+      ? snapshot.lastRenderDurationMicros
+      : previous.lastRenderDurationMicros;
+    const clipBufferBytes = Number.isFinite(snapshot.clipBufferBytes)
+      ? snapshot.clipBufferBytes
+      : previous.clipBufferBytes;
+    // Prefer lastRenderDurationMicros for render load calculation when available.
+    // If both lastRenderDurationMicros and renderLoad are present, lastRenderDurationMicros takes precedence
+    // because it reflects the most recent render duration directly from the engine.
+    const renderLoadSource =
+      deriveRenderLoadFromMicros(snapshot.lastRenderDurationMicros) ?? safeRenderLoad;
+    return {
+      status: 'ready',
+      xruns: safeXruns,
+      lastRenderDurationMicros,
+      clipBufferBytes,
+      renderLoad: clampRenderLoad(renderLoadSource),
+      updatedAt,
+    };
+  }
+
+  if (snapshot.status === 'error') {
+    return {
+      status: 'error',
+      xruns: safeXruns,
+      renderLoad: clampRenderLoad(safeRenderLoad),
+      error: snapshot.error ?? previous.error,
+      updatedAt,
+    };
+  }
+
+  if (snapshot.status === 'unavailable') {
+    return {
+      status: 'unavailable',
+      xruns: safeXruns,
+      renderLoad: clampRenderLoad(safeRenderLoad),
+      updatedAt,
+    };
+  }
+
+  return {
+    status: 'loading',
+    xruns: safeXruns,
+    renderLoad: clampRenderLoad(safeRenderLoad),
+    lastRenderDurationMicros: previous.lastRenderDurationMicros,
+    clipBufferBytes: previous.clipBufferBytes,
+    updatedAt,
+  };
+};
+
+const normalizeNativeDiagnostics = (
+  payload: NativeDiagnosticsPayload,
+  previous: SessionDiagnosticsView,
+  now: number,
+): SessionDiagnosticsView => {
+  const lastRenderDurationMicros = Number.isFinite(payload.lastRenderDurationMicros)
+    ? payload.lastRenderDurationMicros
+    : previous.lastRenderDurationMicros;
+  const clipBufferBytes = Number.isFinite(payload.clipBufferBytes)
+    ? payload.clipBufferBytes
+    : previous.clipBufferBytes;
+  const xruns = Number.isFinite(payload.xruns) ? payload.xruns : previous.xruns;
+  const renderLoadSource =
+    deriveRenderLoadFromMicros(payload.lastRenderDurationMicros) ?? previous.renderLoad;
+
+  return {
+    status: 'ready',
+    xruns,
+    lastRenderDurationMicros,
+    clipBufferBytes,
+    renderLoad: clampRenderLoad(renderLoadSource),
+    updatedAt: now,
+  };
+};
+
 export const buildDiagnosticsView = (
   diagnostics: SessionDiagnosticsView,
-  rawDiagnostics?: {
-    xruns: number;
-    lastRenderDurationMicros: number;
-    clipBufferBytes: number;
-  },
+  rawDiagnostics?: DiagnosticsPayload,
 ): SessionDiagnosticsView => {
   if (!rawDiagnostics) {
     return diagnostics;
   }
-  const renderLoad = clamp(rawDiagnostics.lastRenderDurationMicros / 10_000, 0, 1);
+
+  const now = Date.now();
+
+  if (isSnapshotPayload(rawDiagnostics)) {
+    return normalizeSnapshotDiagnostics(rawDiagnostics, diagnostics, now);
+  }
+
+  return normalizeNativeDiagnostics(rawDiagnostics, diagnostics, now);
+};
+
+const passesDiagnosticsGate = (diagnostics: SessionDiagnosticsView): boolean => {
+  return diagnostics.status === 'ready' && diagnostics.renderLoad < RENDER_LOAD_THRESHOLD;
+};
+
+const wrapBeats = (value: number, totalBeats: number): number => {
+  if (totalBeats > 0) {
+    const normalized = ((value % totalBeats) + totalBeats) % totalBeats;
+    return clamp(normalized, 0, totalBeats);
+  }
+  return Math.max(0, value);
+};
+
+const shouldPlay = (
+  runtime: TransportRuntimeState | undefined,
+  diagnostics: SessionDiagnosticsView,
+): boolean => {
+  if (runtime) {
+    return runtime.isPlaying;
+  }
+  return passesDiagnosticsGate(diagnostics);
+};
+
+const createRuntimePlayheadReference = (
+  runtime: TransportRuntimeState,
+  totalBeats: number,
+  fallbackBpm: number,
+): PlayheadReference => {
+  const baseBeats = Number.isFinite(runtime.beats) ? runtime.beats : 0;
+  const updatedAt = Number.isFinite(runtime.updatedAt) ? runtime.updatedAt : undefined;
+  const bpm = runtime.bpm > 0 ? runtime.bpm : fallbackBpm;
   return {
-    status: 'ready',
-    xruns: rawDiagnostics.xruns,
-    lastRenderDurationMicros: rawDiagnostics.lastRenderDurationMicros,
-    clipBufferBytes: rawDiagnostics.clipBufferBytes,
-    renderLoad,
-    updatedAt: Date.now(),
+    source: 'runtime',
+    beats: wrapBeats(baseBeats, totalBeats),
+    bpm,
+    updatedAt,
+  };
+};
+
+const createDiagnosticsPlayheadReference = (
+  diagnostics: SessionDiagnosticsView,
+  diagnosticsGate: boolean,
+  sessionLengthMs: number,
+  beatDuration: number,
+  totalBeats: number,
+  fallbackBpm: number,
+): PlayheadReference => {
+  const cycleLengthMs = Math.max(sessionLengthMs, MIN_SESSION_LENGTH_MS);
+  const updatedAt = Number.isFinite(diagnostics.updatedAt)
+    ? diagnostics.updatedAt
+    : undefined;
+  const playheadMs =
+    diagnosticsGate && typeof updatedAt === 'number' ? updatedAt % cycleLengthMs : 0;
+  const baseBeats = playheadMs / beatDuration;
+  return {
+    source: 'diagnostics',
+    beats: wrapBeats(baseBeats, totalBeats),
+    bpm: fallbackBpm,
+    updatedAt,
   };
 };
 
@@ -310,24 +511,19 @@ export const buildTransport = (
   const totalBeats = length / beatDuration;
   const totalBars = Math.max(1, Math.ceil(totalBeats / beatsPerBar(session.metadata)));
 
-  let isPlaying = diagnostics.status === 'ready' && diagnostics.renderLoad < 0.98;
-  let playheadBeats = 0;
-
-  if (runtime) {
-    isPlaying = runtime.isPlaying;
-    if (totalBeats > 0) {
-      const wrappedBeats = ((runtime.beats % totalBeats) + totalBeats) % totalBeats;
-      playheadBeats = clamp(wrappedBeats, 0, totalBeats);
-    } else {
-      playheadBeats = Math.max(0, runtime.beats);
-    }
-  } else {
-    const cycleLengthMs = Math.max(length, MIN_SESSION_LENGTH_MS);
-    const referenceTime = diagnostics.updatedAt ?? Date.now();
-    const playheadMs = isPlaying ? referenceTime % cycleLengthMs : 0;
-    playheadBeats = playheadMs / beatDuration;
-  }
-
+  const diagnosticsGate = passesDiagnosticsGate(diagnostics);
+  const isPlaying = shouldPlay(runtime, diagnostics);
+  const playheadReference = runtime
+    ? createRuntimePlayheadReference(runtime, totalBeats, session.metadata.bpm)
+    : createDiagnosticsPlayheadReference(
+        diagnostics,
+        diagnosticsGate,
+        length,
+        beatDuration,
+        totalBeats,
+        session.metadata.bpm,
+      );
+  const playheadBeats = playheadReference?.beats ?? 0;
   const playheadRatio = totalBeats > 0 ? clamp(playheadBeats / totalBeats, 0, 1) : 0;
 
   return {
@@ -338,5 +534,7 @@ export const buildTransport = (
     playheadBeats,
     playheadRatio,
     isPlaying,
+    diagnosticsGate,
+    playheadReference,
   };
 };

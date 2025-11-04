@@ -10,12 +10,17 @@ import {
   type NeonToolbarProps,
 } from '../design-system';
 import { useAdaptiveLayout } from '../layout';
-import { useSessionViewModel, useTransportControls } from '../session';
+import {
+  useSessionViewModel,
+  useTransportControls,
+  useProjectedTransport,
+} from '../session';
 
 export const ArrangementScreen: React.FC = () => {
   const adaptive = useAdaptiveLayout();
   const { status, tracks, transport, refresh, diagnostics, pluginAlerts } =
     useSessionViewModel();
+  const { projectedRatio } = useProjectedTransport(transport);
   const transportControls = useTransportControls();
   const arrangementTrack = useMemo(
     () => tracks.find((track) => track.waveform.length > 0) ?? tracks[0],
@@ -108,9 +113,9 @@ export const ArrangementScreen: React.FC = () => {
 
   useEffect(() => {
     if (transport) {
-      playhead.value = transport.playheadRatio;
+      playhead.value = projectedRatio;
     }
-  }, [playhead, transport]);
+  }, [playhead, projectedRatio, transport]);
 
   const handlePlay = useCallback(() => {
     transportControls.play().catch((error) => {
