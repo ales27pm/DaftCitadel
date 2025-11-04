@@ -186,7 +186,7 @@ write_metadata_files() {
         ((index++))
     done
 
-    python3 "$SCRIPT_DIR/generate_metadata.py" "${args[@]}"
+    "$SCRIPT_DIR/generate_metadata.py" "${args[@]}"
 
     chown "$USER_NAME:$USER_NAME" "$manifest_path" "$hints_path" 2>/dev/null || true
 }
