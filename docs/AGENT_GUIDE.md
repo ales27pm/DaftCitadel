@@ -11,6 +11,7 @@ This guide explains how Daft Citadel uses automation agents to keep contributor 
 - `scripts/agents_sync.py plan` — Reads `agents.config.json`, compares desired instructions with the workspace, and prints proposed changes. Use the `--json` flag when you need machine-readable output for CI annotations.
 - `scripts/agents_sync.py apply` — Applies the planned changes, writing Markdown files and committing them if `--auto-branch` is provided.
 - `npm run manage:agents` — Convenience script that regenerates all AGENTS.md files and then runs `agents_sync.py apply --no-commit` so docs/ROADMAP.md and other managed guides stay synchronized; the command re-runs `agents_sync.py plan` afterward and fails fast if drift remains, and CI also executes it to ensure changes do not reach `main`.
+- `npm run maintain:docs` — Self-contained documentation maintenance workflow that invokes `agents_sync.py` directly for roadmap and guide updates, formats everything under `docs/` with Prettier, and exits non-zero if any managed artifact still needs manual intervention; accepts `--no-prettier` and `--check` just like `scripts/maintainDocs.js`.
 
 ## Daily Workflow
 
@@ -23,6 +24,7 @@ This guide explains how Daft Citadel uses automation agents to keep contributor 
    - `npm run typecheck`
    - `npm run test`
    - `npm run manage:agents` _(automatically re-synchronizes AGENTS.md plus managed docs such as docs/ROADMAP.md and stops if any managed file still needs edits)_
+   - `npm run maintain:docs` _(runs just the documentation refresh pipeline including Prettier formatting so roadmap-only tweaks do not touch AGENTS.md)_
 5. Review the generated Markdown for accuracy, especially platform-specific instructions related to diagnostics or sideloading.
 
 ## Editing `agents.config.json`
@@ -53,5 +55,6 @@ This guide explains how Daft Citadel uses automation agents to keep contributor 
 ## Changelog
 
 - 2025-11-03 • Added post-apply verification for `npm run manage:agents`, documented the new environment overrides for sandbox testing, and referenced the Jest integration coverage.
+- 2025-11-03 • Introduced `npm run maintain:docs` for roadmap-focused upkeep, wired it into CI guidance alongside Prettier automation, and added Jest coverage for the script.
 - 2025-11-02 • Documented the updated `npm run manage:agents` workflow that now refreshes docs/ROADMAP.md via `agents_sync.py --no-commit`.
 - 2025-11-01 • Reframed the agent guide with daily workflow steps, troubleshooting tips, and platform-specific best practices.
