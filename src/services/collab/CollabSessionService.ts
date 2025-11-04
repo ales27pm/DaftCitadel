@@ -43,6 +43,50 @@ export interface CollabSessionOptions<T> {
 
 export type CollabSessionRole = 'initiator' | 'responder';
 
+export type CollaborationConnectionState =
+  | 'idle'
+  | 'connecting'
+  | 'connected'
+  | 'reconnecting'
+  | 'disconnected';
+
+export interface CollabSessionHealthSnapshot {
+  readonly role: CollabSessionRole | null;
+  readonly connectionState: CollaborationConnectionState;
+  readonly dataChannelState: RTCDataChannel['readyState'] | 'unknown';
+  readonly lastMetrics?: LinkMetrics;
+  readonly lastUpdateReceivedAt?: number;
+  readonly lastRemoteClock?: number;
+  readonly lastLatencyMs?: number;
+  readonly averageLatencyMs?: number;
+}
+
+type HealthListener = (snapshot: CollabSessionHealthSnapshot) => void;
+
+type PeerConnectionState =
+  | 'new'
+  | 'connecting'
+  | 'connected'
+  | 'disconnected'
+  | 'failed'
+  | 'closed';
+
+type IceConnectionState =
+  | 'new'
+  | 'checking'
+  | 'connected'
+  | 'completed'
+  | 'failed'
+  | 'disconnected'
+  | 'closed';
+
+type ExtendedPeerConnection = RTCPeerConnection & {
+  onconnectionstatechange?: () => void;
+  oniceconnectionstatechange?: () => void;
+  connectionState?: PeerConnectionState;
+  iceConnectionState?: IceConnectionState;
+};
+
 const DEFAULT_CHANNEL_LABEL = 'daft-collab';
 const DEFAULT_CHANNEL_CONFIG: RTCDataChannelInit = { ordered: true, maxRetransmits: 2 };
 const DEFAULT_MIN_BUFFERED_AMOUNT_LOW_THRESHOLD = 16 * 1024;
@@ -75,6 +119,17 @@ export class CollabSessionService<T = unknown> {
   private readonly diagnosticsManager: DiagnosticsManager;
 
   private dataChannel?: RTCDataChannel;
+  private peerConnection?: RTCPeerConnection;
+  private role: CollabSessionRole | null = null;
+
+  private readonly healthListeners = new Set<HealthListener>();
+  private health: CollabSessionHealthSnapshot = {
+    role: null,
+    connectionState: 'idle',
+    dataChannelState: 'unknown',
+  };
+  private lastLatencyMs?: number;
+  private averageLatencyMs?: number;
 
   private readonly boundOfferHandler: (offer: SignalingOffer) => void;
   private readonly boundAnswerHandler: (answer: SignalingAnswer) => void;
@@ -124,7 +179,10 @@ export class CollabSessionService<T = unknown> {
     this.diagnosticsManager = new DiagnosticsManager({
       diagnostics: networkDiagnostics,
       logger: this.logger,
-      onMetrics: (metrics) => this.tuneDataChannel(metrics),
+      onMetrics: (metrics) => {
+        this.tuneDataChannel(metrics);
+        this.updateHealth({ lastMetrics: metrics });
+      },
     });
 
     this.boundOfferHandler = (offer) => {
@@ -159,7 +217,15 @@ export class CollabSessionService<T = unknown> {
   }
 
   async start(role: CollabSessionRole): Promise<void> {
-    this.connectionManager.getOrCreate();
+    this.role = role;
+    const connection = this.connectionManager.getOrCreate();
+    this.peerConnection = connection;
+    this.attachConnectionObservers(connection);
+    this.updateHealth({
+      role,
+      connectionState: 'connecting',
+      dataChannelState: this.dataChannel?.readyState ?? 'unknown',
+    });
     if (role === 'initiator') {
       const channel = this.connectionManager.createDataChannel(
         this.channelLabel,
@@ -213,7 +279,30 @@ export class CollabSessionService<T = unknown> {
     }
     this.connectionManager.close();
     this.dataChannel = undefined;
+    this.peerConnection = undefined;
     this.encryptionManager.reset();
+    this.lastLatencyMs = undefined;
+    this.averageLatencyMs = undefined;
+    this.updateHealth({
+      connectionState: 'disconnected',
+      dataChannelState: 'closed',
+    });
+  }
+
+  getHealthSnapshot(): CollabSessionHealthSnapshot {
+    return this.cloneHealth();
+  }
+
+  subscribeHealth(listener: HealthListener): () => void {
+    this.healthListeners.add(listener);
+    try {
+      listener(this.cloneHealth());
+    } catch (error) {
+      this.logger('collab.healthListenerError', { error: String(error) });
+    }
+    return () => {
+      this.healthListeners.delete(listener);
+    };
   }
 
   private attachDataChannel(channel: RTCDataChannel): void {
@@ -223,9 +312,17 @@ export class CollabSessionService<T = unknown> {
         label: channel.label,
         readyState: channel.readyState,
       });
+      this.updateHealth({
+        connectionState: 'connected',
+        dataChannelState: channel.readyState,
+      });
     };
     channel.onclose = () => {
       this.logger('collab.dataChannel.close');
+      this.updateHealth({
+        connectionState: 'disconnected',
+        dataChannelState: channel.readyState,
+      });
     };
     channel.onerror = (event: unknown) => {
       this.logger('collab.dataChannel.error', { error: JSON.stringify(event) });
@@ -234,6 +331,7 @@ export class CollabSessionService<T = unknown> {
       this.handleIncomingFrame(event.data);
     };
     this.configureDataChannelForNetwork();
+    this.updateHealth({ dataChannelState: channel.readyState });
   }
 
   private configureDataChannelForNetwork(): void {
@@ -325,6 +423,8 @@ export class CollabSessionService<T = unknown> {
 
     this.logger('collab.remoteUpdate.received', baseLogContext);
 
+    this.recordLatency(latencyMs, receiveTime, payload.clock);
+
     if (this.remoteUpdateAppliedHandler) {
       const applyStart = Date.now();
       try {
@@ -365,6 +465,117 @@ export class CollabSessionService<T = unknown> {
       );
       this.dataChannel.bufferedAmountLowThreshold = threshold;
     }
+  }
+
+  private attachConnectionObservers(connection: RTCPeerConnection): void {
+    const extended = connection as ExtendedPeerConnection;
+    extended.onconnectionstatechange = () => {
+      const state = extended.connectionState ?? 'new';
+      this.updateHealth({
+        connectionState: this.mapConnectionState(state),
+        dataChannelState: this.dataChannel?.readyState ?? 'unknown',
+      });
+    };
+    extended.oniceconnectionstatechange = () => {
+      const iceState = extended.iceConnectionState ?? 'new';
+      if (iceState === 'disconnected' || iceState === 'failed') {
+        this.updateHealth({ connectionState: 'reconnecting' });
+      } else if (iceState === 'connected' || iceState === 'completed') {
+        this.updateHealth({ connectionState: 'connected' });
+      }
+    };
+  }
+
+  private mapConnectionState(
+    state: PeerConnectionState | undefined,
+  ): CollaborationConnectionState {
+    switch (state) {
+      case 'connected':
+        return 'connected';
+      case 'connecting':
+      case 'new':
+        return 'connecting';
+      case 'closed':
+        return 'disconnected';
+      case 'disconnected':
+      case 'failed':
+        return 'reconnecting';
+      default:
+        return this.health.connectionState;
+    }
+  }
+
+  private recordLatency(
+    latencyMs: number,
+    receivedAt: number,
+    remoteClock: number,
+  ): void {
+    if (!Number.isFinite(latencyMs)) {
+      return;
+    }
+    const normalizedLatency = latencyMs >= 0 ? latencyMs : 0;
+    this.lastLatencyMs = normalizedLatency;
+    const smoothing = 0.2;
+    if (typeof this.averageLatencyMs === 'number') {
+      this.averageLatencyMs =
+        this.averageLatencyMs * (1 - smoothing) + normalizedLatency * smoothing;
+    } else {
+      this.averageLatencyMs = normalizedLatency;
+    }
+    this.updateHealth({
+      lastLatencyMs: this.lastLatencyMs,
+      averageLatencyMs: this.averageLatencyMs,
+      lastUpdateReceivedAt: receivedAt,
+      lastRemoteClock: remoteClock,
+    });
+  }
+
+  private updateHealth(patch: Partial<CollabSessionHealthSnapshot>): void {
+    const resolvedRole =
+      patch.role !== undefined ? patch.role : (this.role ?? this.health.role ?? null);
+
+    const hasNewMetrics = Object.prototype.hasOwnProperty.call(patch, 'lastMetrics');
+    let resolvedMetrics: LinkMetrics | undefined;
+    if (hasNewMetrics) {
+      resolvedMetrics = patch.lastMetrics ? { ...patch.lastMetrics } : undefined;
+    } else if (this.health.lastMetrics) {
+      resolvedMetrics = { ...this.health.lastMetrics };
+    }
+
+    const snapshot: CollabSessionHealthSnapshot = {
+      role: resolvedRole,
+      connectionState: patch.connectionState ?? this.health.connectionState,
+      dataChannelState: patch.dataChannelState ?? this.health.dataChannelState,
+      lastMetrics: resolvedMetrics,
+      lastUpdateReceivedAt:
+        patch.lastUpdateReceivedAt ?? this.health.lastUpdateReceivedAt ?? undefined,
+      lastRemoteClock: patch.lastRemoteClock ?? this.health.lastRemoteClock ?? undefined,
+      lastLatencyMs: patch.lastLatencyMs ?? this.health.lastLatencyMs ?? undefined,
+      averageLatencyMs:
+        patch.averageLatencyMs ?? this.health.averageLatencyMs ?? undefined,
+    };
+
+    this.health = snapshot;
+    this.notifyHealthListeners();
+  }
+
+  private cloneHealth(): CollabSessionHealthSnapshot {
+    const metrics = this.health.lastMetrics ? { ...this.health.lastMetrics } : undefined;
+    return {
+      ...this.health,
+      lastMetrics: metrics,
+    };
+  }
+
+  private notifyHealthListeners(): void {
+    const snapshot = this.cloneHealth();
+    this.healthListeners.forEach((listener) => {
+      try {
+        listener(snapshot);
+      } catch (error) {
+        this.logger('collab.healthListenerError', { error: String(error) });
+      }
+    });
   }
 
   private normalizeOffer(offer: RTCSessionDescriptionInit): SignalingOffer {
