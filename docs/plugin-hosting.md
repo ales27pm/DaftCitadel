@@ -21,6 +21,7 @@ The `scripts/daftcitadel.sh` bootstrap now favors vendor-maintained endpoints an
 - **Resolver hygiene.** Surge XT continues to rely on the release manifest MD5 sums, Helm still reads the maintained `helm_download.js` lookup table, and Vital reuses the nixpkgs resolver for version/hash pairs before falling back to the vendor CDN. All download helpers enforce SHA-256 or MD5 verification as before.
 - **Module-aware assets.** The `--modules`/`--without-module` CLI switches allow precise opt-in for `ai`, `gui`, `synths`, `assets`, `groove`, and `experimental` feature sets. Heavy preset/sample payloads are grouped into named packs (`bpb909`, `daftpack`, `surge-presets`, `vital-daft`) that can be toggled via `--packs=bpb909,daftpack`.
 - **Creative extras.** Enabling the `groove` module clones the BitwigBuddy extension and Daft Punk MIDI studies, auto-importing `.mid` files into the Citadel library. The `experimental` module checks out the ForSynth Fortran toolkit, compiles the bundled demos, and ships a `forsynth-demo` launcher for quick experiments.
+- **Cache hints for React Native.** Each run emits `~/DaftCitadel/plugin_cache_hints.json`, describing the installed plugin binaries, cache directories, availability flags, and module provenance. The TypeScript `PluginHost` reads this alongside `citadel_profile.json` to pre-warm descriptor caches and to expose unavailable modules as disabled toggles in the UI.
 
 ## AUv3 (iOS) bridge
 

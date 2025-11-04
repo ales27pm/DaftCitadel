@@ -330,11 +330,7 @@ describe('PluginHost', () => {
         recovered: false,
         restartToken: undefined,
       });
-      await waitForCondition(
-        () => ackMock.mock.calls.length >= expectedCalls,
-        12,
-        15,
-      );
+      await waitForCondition(() => ackMock.mock.calls.length >= expectedCalls, 12, 15);
     };
 
     const performManualRetry = async () => {

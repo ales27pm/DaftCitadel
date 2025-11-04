@@ -47,6 +47,194 @@ DAFTCITADEL_PHASE="bootstrap"
 DAFTCITADEL_STDOUT_IS_TTY=false
 DAFTCITADEL_STRICT_ERRORS=false
 
+PROFILE_MANIFEST_VERSION=2
+PLUGIN_CACHE_HINTS_VERSION=1
+
+declare -a PLUGIN_HINTS=()
+
+VITAL_LAST_INSTALLED_VERSION=""
+SURGE_LAST_INSTALLED_VERSION=""
+HELM_LAST_INSTALLED_VERSION=""
+TYRELL_LAST_INSTALLED_VERSION=""
+OBXD_LAST_INSTALLED_VERSION=""
+
+json_escape() {
+    local str="$1"
+    str="${str//\\/\\\\}"
+    str="${str//\"/\\\"}"
+    str="${str//$'\n'/\\n}"
+    str="${str//$'\r'/\\r}"
+    str="${str//$'\t'/\\t}"
+    printf '%s' "$str"
+}
+
+json_quote() {
+    printf '"%s"' "$(json_escape "$1")"
+}
+
+bool_to_json() {
+    local value="${1:-false}"
+    if [[ "${value,,}" == "true" ]]; then
+        printf 'true'
+    else
+        printf 'false'
+    fi
+}
+
+json_array_from_list() {
+    declare -A seen=()
+    local ordered=()
+    local item
+    for item in "$@"; do
+        [[ -z "$item" ]] && continue
+        if [[ -z "${seen[$item]:-}" ]]; then
+            seen[$item]=1
+            ordered+=("$item")
+        fi
+    done
+    printf '['
+    local first=true
+    for item in "${ordered[@]}"; do
+        if $first; then
+            first=false
+        else
+            printf ', '
+        fi
+        printf '%s' "$(json_quote "$item")"
+    done
+    printf ']'
+}
+
+register_plugin_hint() {
+    local format="$1"
+    local identifier="$2"
+    local name="$3"
+    local binary_path="$4"
+    local version="$5"
+    local enabled_flag="${6:-false}"
+    shift 6 || true
+    local modules=("$@")
+
+    local cache_dir="${PLUGIN_CACHE_DIR:-$BASE/PluginCache}/$format/$identifier"
+    local enabled_json=$(bool_to_json "$enabled_flag")
+    local available_json="false"
+    if [[ -n "$binary_path" && -e "$binary_path" ]]; then
+        available_json="true"
+    fi
+
+    if [[ "$enabled_json" == "true" ]]; then
+        mkdir -p "$cache_dir"
+        chown -R "$USER_NAME:$USER_NAME" "$cache_dir" 2>/dev/null || true
+    fi
+
+    local modules_json
+    modules_json=$(json_array_from_list "${modules[@]}")
+
+    local entry_format
+    entry_format=$(json_quote "$format")
+    local entry_identifier
+    entry_identifier=$(json_quote "$identifier")
+    local entry_name
+    entry_name=$(json_quote "$name")
+    local entry_binary
+    entry_binary=$(json_quote "$binary_path")
+    local entry_cache
+    entry_cache=$(json_quote "$cache_dir")
+    local version_field=""
+    if [[ -n "$version" ]]; then
+        version_field=", \"version\": $(json_quote "$version")"
+    fi
+
+    local entry
+    entry="{\"format\": $entry_format, \"identifier\": $entry_identifier, \"name\": $entry_name, \"binaryPath\": $entry_binary, \"cachePath\": $entry_cache, \"enabled\": $enabled_json, \"available\": $available_json, \"modules\": $modules_json$version_field}"
+    PLUGIN_HINTS+=("$entry")
+}
+
+write_plugin_cache_hints() {
+    local hints_path="$BASE/plugin_cache_hints.json"
+    local timestamp
+    timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    local timestamp_json
+    timestamp_json=$(json_quote "$timestamp")
+
+    {
+        printf '{\n'
+        printf '  "version": %s,\n' "$PLUGIN_CACHE_HINTS_VERSION"
+        printf '  "generatedAt": %s,\n' "$timestamp_json"
+        printf '  "hints": [\n'
+        local count=${#PLUGIN_HINTS[@]}
+        if ((count > 0)); then
+            local index=0
+            for entry in "${PLUGIN_HINTS[@]}"; do
+                printf '    %s' "$entry"
+                if ((index < count - 1)); then
+                    printf ','
+                fi
+                printf '\n'
+                ((index++))
+            done
+        fi
+        printf '  ]\n'
+        printf '}\n'
+    } >"$hints_path"
+
+    chown "$USER_NAME:$USER_NAME" "$hints_path" 2>/dev/null || true
+}
+
+write_profile_manifest() {
+    local manifest_path="$BASE/citadel_profile.json"
+    local timestamp
+    timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    local timestamp_json
+    timestamp_json=$(json_quote "$timestamp")
+    local profile_json
+    profile_json=$(json_quote "$PROFILE")
+    local profile_name_json
+    profile_name_json=$(json_quote "$PROFILE_NAME")
+    local base_json
+    base_json=$(json_quote "$BASE")
+    local log_json
+    log_json=$(json_quote "$LOG")
+    local plugin_cache_json
+    plugin_cache_json=$(json_quote "$PLUGIN_CACHE_DIR")
+    local plugin_cache_hints_json
+    plugin_cache_hints_json=$(json_quote "$BASE/plugin_cache_hints.json")
+    local enabled_overrides
+    enabled_overrides=$(json_array_from_list "${MODULE_ENABLES[@]}")
+    local disabled_overrides
+    disabled_overrides=$(json_array_from_list "${MODULE_DISABLES[@]}")
+
+    {
+        printf '{\n'
+        printf '  "version": %s,\n' "$PROFILE_MANIFEST_VERSION"
+        printf '  "generatedAt": %s,\n' "$timestamp_json"
+        printf '  "profile": %s,\n' "$profile_json"
+        printf '  "profileName": %s,\n' "$profile_name_json"
+        printf '  "features": {\n'
+        printf '    "ai": %s,\n' "$(bool_to_json "$ENABLE_AI")"
+        printf '    "gui": %s,\n' "$(bool_to_json "$ENABLE_GUI")"
+        printf '    "expandedSynths": %s,\n' "$(bool_to_json "$ENABLE_EXPANDED_SYNTHS")"
+        printf '    "heavyAssets": %s,\n' "$(bool_to_json "$ENABLE_HEAVY_ASSETS")"
+        printf '    "grooveTools": %s,\n' "$(bool_to_json "$ENABLE_GROOVE_TOOLS")"
+        printf '    "experimentalSynths": %s,\n' "$(bool_to_json "$ENABLE_EXPERIMENTAL_SYNTHS")"
+        printf '    "container": %s\n' "$(bool_to_json "$CONTAINER_MODE")"
+        printf '  },\n'
+        printf '  "paths": {\n'
+        printf '    "base": %s,\n' "$base_json"
+        printf '    "log": %s,\n' "$log_json"
+        printf '    "pluginCache": %s,\n' "$plugin_cache_json"
+        printf '    "pluginCacheHints": %s\n' "$plugin_cache_hints_json"
+        printf '  },\n'
+        printf '  "modules": {\n'
+        printf '    "enabledOverrides": %s,\n' "$enabled_overrides"
+        printf '    "disabledOverrides": %s\n' "$disabled_overrides"
+        printf '  }\n'
+        printf '}\n'
+    } >"$manifest_path"
+
+    chown "$USER_NAME:$USER_NAME" "$manifest_path" 2>/dev/null || true
+}
+
 usage() {
     cat <<'EOF'
 Daft Citadel deployment
@@ -716,6 +904,7 @@ install_vital_suite() {
         fi
     fi
 
+    VITAL_LAST_INSTALLED_VERSION="${VITAL_VERSION_DISPLAY:-$VITAL_DEFAULT_VERSION}"
     rm -rf "$VITAL_WORKDIR"
 }
 
@@ -785,6 +974,7 @@ install_tyrell_n6() {
                         as_user "ln -snf /usr/lib/clap/TyrellN6.clap ~/.clap/TyrellN6.clap"
 
                         tyrell_installed=true
+                        TYRELL_LAST_INSTALLED_VERSION="latest"
                         log "[PLUGINS] Installed Tyrell N6 from $mirror"
                         rm -rf "$TYRELL_WORKDIR"
                         break
@@ -872,6 +1062,7 @@ install_obxd() {
             as_user "ln -snf /usr/lib/vst3/OB-Xd.vst3 ~/.vst3/OB-Xd.vst3"
 
             success=true
+            OBXD_LAST_INSTALLED_VERSION="$obxd_target_version"
             log "[PLUGINS] Installed OB-Xd ${obxd_target_version}"
         else
             log "[WARN] OB-Xd archive missing expected files"
@@ -1570,34 +1761,11 @@ BASE="$USER_HOME/DaftCitadel"
 LOG="$USER_HOME/daft_citadel.log"
 VENV="$BASE/.venv"
 THEME_DIR="$BASE/Theme"
-run_step "Ensure base directories exist" mkdir -p "$BASE" "$THEME_DIR"
+PLUGIN_CACHE_DIR="$BASE/PluginCache"
+run_step "Ensure base directories exist" mkdir -p "$BASE" "$THEME_DIR" "$PLUGIN_CACHE_DIR"
 run_step "Initialize deployment log" touch "$LOG"
 run_step "Set ownership for base directories" chown -R "$USER_NAME:$USER_NAME" "$BASE" "$LOG"
 log "[IGNITION] $PROFILE_NAME deployment - $(date)"
-
-[[ $ENABLE_AI == true ]] && JSON_AI=true || JSON_AI=false
-[[ $ENABLE_GUI == true ]] && JSON_GUI=true || JSON_GUI=false
-[[ $ENABLE_EXPANDED_SYNTHS == true ]] && JSON_SYNTHS=true || JSON_SYNTHS=false
-[[ $ENABLE_HEAVY_ASSETS == true ]] && JSON_ASSETS=true || JSON_ASSETS=false
-[[ $ENABLE_GROOVE_TOOLS == true ]] && JSON_GROOVE=true || JSON_GROOVE=false
-[[ $ENABLE_EXPERIMENTAL_SYNTHS == true ]] && JSON_EXPERIMENTAL=true || JSON_EXPERIMENTAL=false
-[[ $CONTAINER_MODE == true ]] && JSON_CONTAINER=true || JSON_CONTAINER=false
-
-cat >"$BASE/citadel_profile.json" <<EOF_PROFILE_META
-{
-  "profile": "$PROFILE",
-  "features": {
-    "ai": $JSON_AI,
-    "gui": $JSON_GUI,
-    "expandedSynths": $JSON_SYNTHS,
-    "heavyAssets": $JSON_ASSETS,
-    "grooveTools": $JSON_GROOVE,
-    "experimentalSynths": $JSON_EXPERIMENTAL,
-    "container": $JSON_CONTAINER
-  }
-}
-EOF_PROFILE_META
-chown "$USER_NAME:$USER_NAME" "$BASE/citadel_profile.json"
 
 set_phase "system-prep"
 run_step "Update apt package cache" apt-get update -y
@@ -1722,6 +1890,17 @@ if ! $surge_installed; then
     run_step "Install Surge XT ${surge_version_selected}" install_deb_file "$SURGE_ARCHIVE_PATH"
 fi
 
+SURGE_LAST_INSTALLED_VERSION="${surge_version_selected:-${SURGE_DYNAMIC_VERSION:-unknown}}"
+register_plugin_hint \
+    "vst3" \
+    "surge-xt" \
+    "Surge XT" \
+    "/usr/lib/vst3/Surge XT.vst3" \
+    "$SURGE_LAST_INSTALLED_VERSION" \
+    "true" \
+    core \
+    synths
+
 HELM_URL=""
 HELM_SHA256=""
 HELM_VERSION_DISPLAY=""
@@ -1751,9 +1930,28 @@ helm_filename="helm-$(sanitize_filename_component "$helm_version_for_name").deb"
 HELM_ARCHIVE_PATH="$DEPS_DIR/${helm_filename:-helm.deb}"
 run_step "Download Helm ${HELM_VERSION_DISPLAY:-0.9.0}" download_and_verify "$HELM_URL" "$HELM_ARCHIVE_PATH" "$HELM_SHA256"
 run_step "Install Helm ${HELM_VERSION_DISPLAY:-0.9.0}" install_deb_file "$HELM_ARCHIVE_PATH"
+HELM_LAST_INSTALLED_VERSION="${HELM_VERSION_DISPLAY:-0.9.0}"
+register_plugin_hint \
+    "vst3" \
+    "helm" \
+    "Helm" \
+    "/usr/lib/vst3/Helm.vst3" \
+    "$HELM_LAST_INSTALLED_VERSION" \
+    "true" \
+    core \
+    synths
 
 if $ENABLE_EXPANDED_SYNTHS; then
     run_step "Install Vital suite" install_vital_suite
+    register_plugin_hint \
+        "vst3" \
+        "vital" \
+        "Vital" \
+        "/usr/lib/vst3/Vital.vst3" \
+        "${VITAL_LAST_INSTALLED_VERSION:-unknown}" \
+        "$ENABLE_EXPANDED_SYNTHS" \
+        expandedSynths \
+        synths
 
     # TAL-Vocoder via DISTRHO Ports (Ubuntu-packaged build)
     log "[PLUGINS] Installing DISTRHO Ports collection for TAL instruments"
@@ -1773,8 +1971,26 @@ if $ENABLE_EXPANDED_SYNTHS; then
     fi
 
     run_step "Install Tyrell N6" install_tyrell_n6
+    register_plugin_hint \
+        "vst3" \
+        "tyrell-n6" \
+        "Tyrell N6" \
+        "/usr/lib/vst3/TyrellN6.vst3" \
+        "${TYRELL_LAST_INSTALLED_VERSION:-latest}" \
+        "$ENABLE_EXPANDED_SYNTHS" \
+        expandedSynths \
+        synths
 
     run_step "Install OB-Xd" install_obxd
+    register_plugin_hint \
+        "vst3" \
+        "ob-xd" \
+        "OB-Xd" \
+        "/usr/lib/vst3/OB-Xd.vst3" \
+        "${OBXD_LAST_INSTALLED_VERSION:-2.17.0}" \
+        "$ENABLE_EXPANDED_SYNTHS" \
+        expandedSynths \
+        synths
 
     log "[INFO] Consider installing Dragonfly Reverb, LSP, Calf, x42, Zam, and DISTRHO Ports for a comprehensive Linux-native toolchain"
     log "[INFO] MT Power Drumkit 2 requires a manual download; native alternatives like AVLDrums or DrumGizmo are installed automatically"
@@ -1985,6 +2201,9 @@ else
     log "[PY] GUI stack disabled for this profile"
 fi
 
+write_plugin_cache_hints
+write_profile_manifest
+
 log "[ENV] Exporting DAW paths to user profile"
 PROFILE_BLOCK_START="# >>> DaftCitadel profile >>>"
 PROFILE_BLOCK_END="# <<< DaftCitadel profile <<<"
@@ -2011,6 +2230,7 @@ as_user "cd '$BASE' && git commit -m 'Daft Citadel bootstrap' || true"
 
 log "[FINAL] $PROFILE_NAME deployment complete"
 log "Profile manifest: $BASE/citadel_profile.json"
+log "Plugin cache hints: $BASE/plugin_cache_hints.json"
 if $ENABLE_GUI; then
     log "GUI launcher: $VENV/bin/python $BASE/citadel_gui.py"
 fi

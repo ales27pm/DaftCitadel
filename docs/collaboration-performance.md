@@ -15,7 +15,46 @@ The collaboration service is built around `CollabSessionService` and helper modu
 
 `PeerSignalingClient` is an abstract interface. Implementations must relay events (`offer`, `answer`, `iceCandidate`, `publicKey`, and `shutdown`) to remote peers. The default service registers listeners in its constructor and cleans them up on `stop()`.
 
-## 2. Native Diagnostics Integration
+## 2. Collaboration Handshake and Recovery Sequence
+
+With the collaboration toggles now exposed in the UI, every connection run should follow the
+same deterministic handshake. `CollabSessionService` emits structured health snapshots so the
+UI can reflect connection state without polling low-level primitives.
+
+1. **Session bootstrapping**
+   - Instantiate `CollabSessionService` with a `PeerSignalingClient`, optional
+     `createNetworkDiagnostics()` instance, and a `remoteUpdateApplied` handler that points to
+     `createRemoteSessionPatchApplier(SessionManager)`.
+   - Call `subscribeHealth(listener)` immediately after construction so the UI can present the
+     initial `idle → connecting` state while the service negotiates keys.
+2. **Handshake progression**
+   - `start('initiator' | 'responder')` creates/accepts the data channel, broadcasts the Curve25519
+     public key, and begins sampling diagnostics. Health snapshots transition through
+     `connecting` until both the ICE and data-channel callbacks report `connected`.
+   - The service records the last network metrics payload and exposes the current
+     `RTCDataChannel.readyState` inside `CollabSessionHealthSnapshot` so the UI can surface
+     channel quality indicators.
+3. **Remote edits and history**
+   - Remote payloads are timestamp-compensated and delegated to the injected
+     `onRemoteUpdateApplied`. When wired through `createRemoteSessionPatchApplier`, the patch is
+     applied via `SessionManager.updateSession`, ensuring an undo point is recorded before the
+     merged session is emitted.
+   - `CollabSessionService` updates `lastLatencyMs`, `averageLatencyMs`, and
+     `lastUpdateReceivedAt` in the health snapshot after each frame, allowing the UI to render
+     live latency readouts.
+4. **Recovery and teardown**
+   - On disconnection (ICE state `disconnected` or data channel `close`), health snapshots switch
+     to `reconnecting`/`disconnected`. The UI should prompt the operator or attempt an automatic
+     retry by calling `start` again once signaling reconnects.
+   - Always call `stop()` when collaboration is disabled to release listeners, close the
+     `RTCPeerConnection`, and reset encryption keys. The health snapshot remains available via
+     `getHealthSnapshot()` so the UI can display the last-known state for audit logs.
+
+Health snapshots deliberately avoid including raw diagnostics payloads with personally
+identifiable interface data (e.g., adapter names). The sanitised metrics mirror the values logged
+via `collab.networkMetrics` so operators can reconcile GUI output with logcat/syslog captures.
+
+## 3. Native Diagnostics Integration
 
 ### iOS (Wi-Fi APIs)
 
@@ -32,7 +71,7 @@ The collaboration service is built around `CollabSessionService` and helper modu
 2. Declare `ACCESS_WIFI_STATE`, `ACCESS_FINE_LOCATION`, and `NEARBY_WIFI_DEVICES` in the library manifest. The module requests `ACCESS_FINE_LOCATION` (or `ACCESS_COARSE_LOCATION`) on Android 12 and below, and `NEARBY_WIFI_DEVICES` on Android 13+. Surface permission requirements through the JS helper `requiresLocationPermission()`, which inspects the Android API level so UI flows skip the legacy location prompt once `NEARBY_WIFI_DEVICES` is available.
 3. Optionally integrate `ConnectivityManager.registerNetworkCallback` to capture link bandwidth using `LinkProperties.getLinkBandwidths()` on Android 13+.
 
-## 3. Performance Capture Workflow
+## 4. Performance Capture Workflow
 
 ### Tethered capture with rvictl
 
@@ -52,7 +91,7 @@ Use `scripts/rvictl-capture.sh` to collect encrypted packets directly from a con
 - Use `adb shell tcpdump -i any -w /sdcard/collab.pcap` combined with `adb pull` for rooted diagnostics builds.
 - On stock devices, rely on `adb shell dumpsys wifi` and `adb bugreport` for aggregated link metrics when packet capture is unavailable.
 
-## 4. CI/CD Pipelines for Sideloading Builds
+## 5. CI/CD Pipelines for Sideloading Builds
 
 ### iOS (Xcode + AltStore)
 
@@ -83,7 +122,7 @@ Use `scripts/rvictl-capture.sh` to collect encrypted packets directly from a con
 2. Request `android.permission.ACCESS_FINE_LOCATION`, `android.permission.ACCESS_WIFI_STATE`, and `android.permission.CHANGE_NETWORK_STATE` in the manifest. If leveraging tethered VPN captures, declare `android.permission.BIND_VPN_SERVICE` and implement a foreground service wrapper for `VpnService`.
 3. Distribute the resulting APK via secure artifact storage or an internal AltStore-equivalent (e.g., `adb install --grant-all-permissions`).
 
-## 5. Operational Runbooks
+## 6. Operational Runbooks
 
 ### Establishing a collaboration session
 
@@ -106,7 +145,7 @@ Use `scripts/rvictl-capture.sh` to collect encrypted packets directly from a con
 - Review CI artifact retention policies to ensure sideloadable builds remain accessible for at least 30 days.
 - Schedule quarterly drills to exercise the rvictl workflow and confirm engineers maintain sudo access to diagnostics hosts.
 
-## 6. References
+## 7. References
 
 - `src/services/collab/CollabSessionService.ts` for orchestration logic.
 - `src/services/collab/diagnostics/NetworkDiagnostics.ts` for native bridging expectations.
