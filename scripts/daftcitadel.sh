@@ -87,8 +87,8 @@ json_array_from_list() {
     local item
     for item in "$@"; do
         [[ -z "$item" ]] && continue
-        if [[ -z "${seen[$item]:-}" ]]; then
-            seen[$item]=1
+        if [[ -z "${seen["$item"]:-}" ]]; then
+            seen["$item"]=1
             ordered+=("$item")
         fi
     done
