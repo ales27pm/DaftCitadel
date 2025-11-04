@@ -27,27 +27,21 @@ export interface LoadPluginOptions extends PluginInstanceOptions {
   sandboxIdentifier?: string;
 }
 
+type InstanceBindingRecord = {
+  handle: PluginInstanceHandle;
+  nativeInstanceId: string;
+  restartToken?: string;
+  sandboxIdentifier?: string;
+  sandboxPath?: string;
+};
+
 export class PluginHost {
   private readonly emitter: NativeEventEmitter;
   private readonly sandboxManager: PluginSandboxManager;
   private readonly crashListeners = new Set<CrashListener>();
   private readonly sandboxListeners = new Set<SandboxPermissionListener>();
-  private readonly instances = new Map<
-    string,
-    {
-      handle: PluginInstanceHandle;
-      nativeInstanceId: string;
-      restartToken?: string;
-    }
-  >();
-  private readonly crashedInstances = new Map<
-    string,
-    {
-      handle: PluginInstanceHandle;
-      nativeInstanceId: string;
-      restartToken?: string;
-    }
-  >();
+  private readonly instances = new Map<string, InstanceBindingRecord>();
+  private readonly crashedInstances = new Map<string, InstanceBindingRecord>();
   private subscriptions: Array<{ remove: () => void }> = [];
 
   constructor(sandboxManager?: PluginSandboxManager) {
@@ -82,10 +76,18 @@ export class PluginHost {
     if (sandboxContext) {
       this.sandboxManager.recordSandbox(sandboxContext);
     }
+    const sandboxIdentifier = sandboxContext?.identifier ?? options.sandboxIdentifier;
+    const sandboxPath = sandboxContext?.path ?? normalizedHandle.sandboxPath;
+    const handleWithSandbox =
+      sandboxPath && normalizedHandle.sandboxPath !== sandboxPath
+        ? { ...normalizedHandle, sandboxPath }
+        : normalizedHandle;
     this.instances.set(normalizedHandle.instanceId, {
-      handle: normalizedHandle,
+      handle: handleWithSandbox,
       nativeInstanceId: normalizedHandle.nativeInstanceId ?? normalizedHandle.instanceId,
       restartToken: normalizedHandle.restartToken,
+      sandboxIdentifier,
+      sandboxPath,
     });
     this.crashedInstances.delete(normalizedHandle.instanceId);
     return normalizedHandle;
@@ -203,42 +205,130 @@ export class PluginHost {
     };
     if (!report.recovered) {
       try {
-        await NativePluginHost.acknowledgeCrash(report.instanceId);
+        const binding = this.instances.get(payload.instanceId);
+        const acknowledgeId = binding?.nativeInstanceId ?? payload.instanceId;
+        await NativePluginHost.acknowledgeCrash(acknowledgeId);
       } catch (error) {
         console.error('Failed to acknowledge plugin crash', error);
       }
-      report.recovered = await this.tryRestartInstance(report, payload.restartToken);
+      report.recovered = await this.tryRestartInstance(payload);
     }
     this.crashListeners.forEach((listener) => listener(report));
   }
 
-  private async tryRestartInstance(
-    report: PluginCrashReport,
-    restartToken?: string,
-  ): Promise<boolean> {
-    const binding = this.instances.get(report.instanceId);
+  private mergeCrashPayload(
+    binding: InstanceBindingRecord,
+    payload: PluginCrashEventPayload,
+  ): {
+    updated: InstanceBindingRecord;
+    proceed: boolean;
+    reason?: 'mismatch' | 'missing';
+  } {
+    const updated: InstanceBindingRecord = {
+      ...binding,
+      restartToken: payload.restartToken ?? binding.restartToken,
+      sandboxIdentifier: payload.sandboxIdentifier ?? binding.sandboxIdentifier,
+      sandboxPath:
+        payload.sandboxPath ?? binding.sandboxPath ?? binding.handle.sandboxPath,
+      handle:
+        payload.sandboxPath && binding.handle.sandboxPath !== payload.sandboxPath
+          ? { ...binding.handle, sandboxPath: payload.sandboxPath }
+          : binding.handle,
+    };
+
+    if (
+      binding.restartToken &&
+      payload.restartToken &&
+      payload.restartToken !== binding.restartToken
+    ) {
+      return { updated, proceed: false, reason: 'mismatch' };
+    }
+
+    if (!updated.restartToken) {
+      return { updated, proceed: false, reason: 'missing' };
+    }
+
+    return { updated, proceed: true };
+  }
+
+  private markCrashed(
+    instanceId: string,
+    binding: InstanceBindingRecord,
+  ): void {
+    this.instances.delete(instanceId);
+    this.crashedInstances.set(instanceId, binding);
+  }
+
+  private async prepareRestart(
+    binding: InstanceBindingRecord,
+  ): Promise<{
+    options: PluginInstanceOptions;
+    sandboxContext?: SandboxContext;
+    sandboxIdentifier?: string;
+  }> {
+    const { descriptor, cpuLoadPercent } = binding.handle;
+    let { sandboxIdentifier } = binding;
+    let sandboxContext: SandboxContext | undefined;
+
+    if (
+      descriptor.supportsSandbox &&
+      (Platform.OS === 'ios' || Platform.OS === 'android')
+    ) {
+      const preferredIdentifier = sandboxIdentifier ?? descriptor.identifier;
+      try {
+        sandboxContext = await this.sandboxManager.ensureSandbox(
+          descriptor,
+          preferredIdentifier,
+        );
+        sandboxIdentifier = sandboxContext.identifier;
+      } catch (error) {
+        console.error('Failed to prepare sandbox for plugin restart', error);
+      }
+    }
+
+    const instantiateOptions: PluginInstanceOptions = {
+      initialPresetId: descriptor.factoryPresets?.[0]?.id,
+      cpuBudgetPercent: cpuLoadPercent,
+    };
+
+    if (sandboxContext?.identifier || sandboxIdentifier) {
+      instantiateOptions.sandboxIdentifier =
+        sandboxContext?.identifier ?? sandboxIdentifier;
+    }
+
+    if (binding.restartToken) {
+      instantiateOptions.restartToken = binding.restartToken;
+    }
+
+    return {
+      options: instantiateOptions,
+      sandboxContext,
+      sandboxIdentifier: sandboxContext?.identifier ?? sandboxIdentifier,
+    };
+  }
+
+  private async tryRestartInstance(payload: PluginCrashEventPayload): Promise<boolean> {
+    const binding = this.instances.get(payload.instanceId);
     if (!binding) {
       return false;
     }
-    if (!restartToken || restartToken !== binding.restartToken) {
-      if (!restartToken) {
-        console.warn('Restart token missing; refusing automatic restart', {
-          instanceId: report.instanceId,
-        });
-      } else {
-        console.warn('Restart token mismatch; refusing automatic restart', {
-          instanceId: report.instanceId,
-        });
-      }
-      this.crashedInstances.set(report.instanceId, {
-        handle: binding.handle,
-        nativeInstanceId: binding.nativeInstanceId,
-        restartToken: binding.restartToken,
+
+    const { updated, proceed, reason } = this.mergeCrashPayload(binding, payload);
+
+    if (!proceed) {
+      const message =
+        reason === 'mismatch'
+          ? 'Restart token mismatch; refusing automatic restart'
+          : 'Restart token missing; refusing automatic restart';
+      console.warn(message, {
+        instanceId: payload.instanceId,
       });
-      this.instances.delete(report.instanceId);
+      this.markCrashed(payload.instanceId, updated);
       return false;
     }
-    return this.reviveBinding(binding, report.instanceId);
+
+    this.instances.set(payload.instanceId, updated);
+    return this.reviveBinding(updated, payload.instanceId);
   }
 
   getInstanceRuntime(
@@ -264,49 +354,46 @@ export class PluginHost {
   }
 
   private async reviveBinding(
-    binding: {
-      handle: PluginInstanceHandle;
-      nativeInstanceId: string;
-      restartToken?: string;
-    },
+    binding: InstanceBindingRecord,
     targetInstanceId: string,
   ): Promise<boolean> {
-    const sandboxContext = binding.handle.sandboxPath
-      ? ({
-          descriptor: binding.handle.descriptor,
-          identifier: binding.handle.descriptor.identifier,
-          path: binding.handle.sandboxPath,
-        } as SandboxContext)
-      : undefined;
+    const { options, sandboxContext, sandboxIdentifier } =
+      await this.prepareRestart(binding);
+
     try {
       const newHandle = await NativePluginHost.instantiatePlugin(
         binding.handle.descriptor.identifier,
-        {
-          sandboxIdentifier: sandboxContext?.identifier,
-          initialPresetId: binding.handle.descriptor.factoryPresets?.[0]?.id,
-          cpuBudgetPercent: binding.handle.cpuLoadPercent,
-        },
+        options,
       );
       const revivedHandle: PluginInstanceHandle = {
         ...newHandle,
         instanceId: targetInstanceId,
         nativeInstanceId: newHandle.nativeInstanceId ?? newHandle.instanceId,
+        restartToken: newHandle.restartToken ?? binding.restartToken,
       };
-      this.instances.set(targetInstanceId, {
-        handle: revivedHandle,
-        nativeInstanceId: revivedHandle.nativeInstanceId ?? newHandle.instanceId,
-        restartToken: revivedHandle.restartToken,
-      });
+      const resolvedSandboxPath =
+        sandboxContext?.path ?? newHandle.sandboxPath ?? binding.sandboxPath;
+      const handleWithSandbox =
+        resolvedSandboxPath && revivedHandle.sandboxPath !== resolvedSandboxPath
+          ? { ...revivedHandle, sandboxPath: resolvedSandboxPath }
+          : revivedHandle;
+      const nextBinding: InstanceBindingRecord = {
+        handle: handleWithSandbox,
+        nativeInstanceId:
+          handleWithSandbox.nativeInstanceId ?? handleWithSandbox.instanceId,
+        restartToken: handleWithSandbox.restartToken ?? binding.restartToken,
+        sandboxIdentifier,
+        sandboxPath: resolvedSandboxPath ?? binding.sandboxPath,
+      };
+      if (sandboxContext) {
+        this.sandboxManager.recordSandbox(sandboxContext);
+      }
+      this.instances.set(targetInstanceId, nextBinding);
       this.crashedInstances.delete(targetInstanceId);
       return true;
     } catch (error) {
       console.error('Plugin revive failed', error);
-      this.instances.delete(targetInstanceId);
-      this.crashedInstances.set(targetInstanceId, {
-        handle: binding.handle,
-        nativeInstanceId: binding.nativeInstanceId,
-        restartToken: binding.restartToken,
-      });
+      this.markCrashed(targetInstanceId, { ...binding });
       return false;
     }
   }
