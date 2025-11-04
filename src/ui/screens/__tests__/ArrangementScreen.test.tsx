@@ -8,9 +8,11 @@ import type { SessionManager } from '../../../session';
 jest.mock('../../session', () => ({
   useSessionViewModel: jest.fn(),
   useTransportControls: jest.fn(),
+  useProjectedTransport: jest.fn(),
 }));
 
-const { useSessionViewModel, useTransportControls } = jest.requireMock('../../session');
+const { useSessionViewModel, useTransportControls, useProjectedTransport } =
+  jest.requireMock('../../session');
 
 const baseTrack = {
   id: 'track-1',
@@ -36,6 +38,8 @@ const baseTransport = {
   playheadBeats: 0,
   playheadRatio: 0,
   isPlaying: false,
+  diagnosticsGate: false,
+  playheadReference: undefined,
 };
 
 const baseDiagnostics = {
@@ -58,6 +62,11 @@ beforeEach(() => {
     transportRuntime: null,
     transport: null,
   });
+  useProjectedTransport.mockReturnValue({
+    projectedBeats: 0,
+    projectedRatio: 0,
+    transport: null,
+  });
 });
 
 describe('ArrangementScreen diagnostics', () => {
@@ -78,10 +87,16 @@ describe('ArrangementScreen diagnostics', () => {
   };
 
   it('renders diagnostics summary when ready', async () => {
+    const transport = { ...baseTransport, isPlaying: true, playheadRatio: 0.5 };
+    useProjectedTransport.mockReturnValue({
+      projectedBeats: transport.lengthBeats * 0.5,
+      projectedRatio: 0.5,
+      transport,
+    });
     useSessionViewModel.mockReturnValue({
       status: 'ready',
       tracks: [baseTrack],
-      transport: { ...baseTransport, isPlaying: true, playheadRatio: 0.5 },
+      transport,
       diagnostics: baseDiagnostics,
       refresh: jest.fn(() => Promise.resolve()),
       pluginAlerts: [
@@ -119,6 +134,11 @@ describe('ArrangementScreen diagnostics', () => {
   });
 
   it('renders diagnostics error state', async () => {
+    useProjectedTransport.mockReturnValue({
+      projectedBeats: baseTransport.playheadBeats,
+      projectedRatio: baseTransport.playheadRatio,
+      transport: baseTransport,
+    });
     useSessionViewModel.mockReturnValue({
       status: 'ready',
       tracks: [baseTrack],
@@ -145,6 +165,11 @@ describe('ArrangementScreen diagnostics', () => {
   });
 
   it('renders diagnostics unavailable state', async () => {
+    useProjectedTransport.mockReturnValue({
+      projectedBeats: baseTransport.playheadBeats,
+      projectedRatio: baseTransport.playheadRatio,
+      transport: baseTransport,
+    });
     useSessionViewModel.mockReturnValue({
       status: 'ready',
       tracks: [baseTrack],
