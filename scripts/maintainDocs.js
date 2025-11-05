@@ -375,7 +375,7 @@ function runCommand(command, args, options = {}) {
     };
 
     const timeoutHandle =
-      typeof timeoutMs === 'number' && Number.isFinite(timeoutMs)
+      typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0
         ? setTimeout(() => {
             const error = new Error(
               `Command '${trimmedCommand}' timed out after ${timeoutMs}ms.`,
