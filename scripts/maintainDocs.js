@@ -387,6 +387,9 @@ function runCommand(command, args, options = {}) {
 
     if (child.stdout) {
       child.stdout.on('data', (chunk) => {
+        if (settled) {
+          return;
+        }
         const bufferChunk = Buffer.from(chunk);
         if (stdoutSize + bufferChunk.length > maxBuffer) {
           const error = new Error(
