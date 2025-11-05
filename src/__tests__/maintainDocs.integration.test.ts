@@ -166,15 +166,35 @@ describe('maintain:docs automation', () => {
   });
 
   it('surfaces interpreter resolution failures', async () => {
+  it('fails --check when documentation drift exists', async () => {
     const sandboxRoot = await createTempRoot();
-    await bootstrapSandbox(sandboxRoot);
-
-    const applyResult = await runMaintainDocs(sandboxRoot, ['--no-prettier'], {
-      MAINTAIN_DOCS_PYTHON: path.join(sandboxRoot, 'bin', 'python3'),
-      PATH: '',
+    await bootstrapSandbox(sandboxRoot, {
+      initialRoadmap: '# Roadmap\n\nNeeds synchronization.\n',
     });
 
-    expect(applyResult.code).toBe(1);
-    expect(applyResult.stderr).toContain('Unable to locate a Python interpreter');
+    const checkResult = await runMaintainDocs(sandboxRoot, ['--check', '--no-prettier']);
+
+    expect(checkResult.code).toBe(1);
+    expect(checkResult.stderr).toContain('Managed documentation drift detected');
+  });
+
+  it('shows changes but does not modify files in --dry-run mode', async () => {
+    const sandboxRoot = await createTempRoot();
+    const initialRoadmap = '# Roadmap\n\nNeeds synchronization.\n';
+    await bootstrapSandbox(sandboxRoot, {
+      initialRoadmap,
+    });
+
+    // Run with --dry-run
+    const dryRunResult = await runMaintainDocs(sandboxRoot, ['--dry-run', '--no-prettier']);
+
+    // Should indicate what would change
+    expect(dryRunResult.code).toBe(0);
+    expect(dryRunResult.stdout).toMatch(/would update/i);
+
+    // File should remain unchanged
+    const roadmapPath = path.join(sandboxRoot, 'docs', 'ROADMAP.md');
+    const roadmapAfter = await fs.readFile(roadmapPath, 'utf8');
+    expect(roadmapAfter).toBe(initialRoadmap);
   });
 });
