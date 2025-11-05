@@ -390,17 +390,21 @@ function runCommand(command, args, options = {}) {
         if (settled) {
           return;
         }
-        const bufferChunk = Buffer.from(chunk);
-        if (stdoutSize + bufferChunk.length > maxBuffer) {
-          const error = new Error(
-            `Command '${trimmedCommand}' exceeded stdout limit of ${maxBuffer} bytes.`,
-          );
-          error.code = 'MAX_BUFFER_EXCEEDED';
+        try {
+          const bufferChunk = Buffer.from(chunk);
+          if (stdoutSize + bufferChunk.length > maxBuffer) {
+            const error = new Error(
+              `Command '${trimmedCommand}' exceeded stdout limit of ${maxBuffer} bytes.`,
+            );
+            error.code = 'MAX_BUFFER_EXCEEDED';
+            fail(error);
+            return;
+          }
+          stdoutSize += bufferChunk.length;
+          stdout += bufferChunk.toString();
+        } catch (error) {
           fail(error);
-          return;
         }
-        stdoutSize += bufferChunk.length;
-        stdout += bufferChunk.toString();
       });
     }
     if (child.stderr) {
