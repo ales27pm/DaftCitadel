@@ -44,14 +44,25 @@ This roadmap captures the near-term delivery goals for Daft Citadel as we bring 
   - Refresh documentation in `docs/audio-engine.md` and `docs/plugin-hosting.md` after installer changes alter runtime assumptions.
 - **Done when**: Fresh installs boot with the assets, manifests, and plugin cache layout expected by the TypeScript layers.
 
+### Documentation automation resilience
+
+- **Objective**: Keep managed documentation accurate and low-risk by pairing hardened automation with a living survey of the production codebase.
+- **Scope**:
+  - Harden [`scripts/maintainDocs.js`](../scripts/maintainDocs.js) with explicit exit codes, buffer limits, and timeout controls so automation does not hang or swallow failures.
+  - Expand integration coverage in [`src/__tests__/maintainDocs.integration.test.ts`](../src/__tests__/maintainDocs.integration.test.ts) to cover dry-run behaviour, missing dependency failures, and interpreter resolution issues.
+  - Maintain [`docs/CODEBASE_SURVEY.md`](./CODEBASE_SURVEY.md) alongside feature work so roadmap items map directly to implemented modules and contributors can trace updates back to source files.
+  - Document recovery procedures in this roadmap and `docs/AGENT_GUIDE.md` so contributors know how to re-run automation locally when plan/apply steps fail.
+- **Done when**: CI emits actionable errors for documentation drift or automation failures, the codebase survey reflects the latest implementation, and local reruns succeed after addressing reported issues without manual clean-up.
+
 ## Milestone Tracking
 
-| Milestone                                 | Target     | Owner               | Status                                           |
-| ----------------------------------------- | ---------- | ------------------- | ------------------------------------------------ |
-| Session UI reads live projects            | 2025-11-15 | Core App            | 🔄 In progress (storage adapter wiring underway) |
-| Plugin crash recovery ready for beta      | 2025-11-29 | Audio Platform      | ⏳ Blocked (awaiting sandbox entitlement review) |
-| Collaboration patch streaming soft launch | 2025-12-06 | Collaboration Team  | 🟢 On track (integration tests passing locally)  |
-| Installer + asset packaging refresh       | 2025-12-13 | Release Engineering | 🟠 At risk (CI coverage gaps being scoped)       |
+| Milestone                                 | Target     | Owner                | Status                                           |
+| ----------------------------------------- | ---------- | -------------------- | ------------------------------------------------ |
+| Session UI reads live projects            | 2025-11-15 | Core App             | 🔄 In progress (storage adapter wiring underway) |
+| Plugin crash recovery ready for beta      | 2025-11-29 | Audio Platform       | ⏳ Blocked (awaiting sandbox entitlement review) |
+| Collaboration patch streaming soft launch | 2025-12-06 | Collaboration Team   | 🟢 On track (integration tests passing locally)  |
+| Installer + asset packaging refresh       | 2025-12-13 | Release Engineering  | 🟠 At risk (CI coverage gaps being scoped)       |
+| Documentation automation resilience       | 2025-11-22 | Developer Experience | 🟢 On track (automation hardened, survey live)   |
 
 ## Backlog
 
@@ -88,3 +99,5 @@ This roadmap captures the near-term delivery goals for Daft Citadel as we bring 
 ## Changelog
 
 - 2025-11-01 • Refocused the roadmap on session-connected UI, plugin resilience, collaboration streaming, and installer readiness with module-specific deliverables.
+- 2025-11-05 • Added documentation automation resilience track after hardening `scripts/maintainDocs.js` and expanding integration tests.
+- 2025-11-06 • Captured a repository-wide survey in `docs/CODEBASE_SURVEY.md` and linked the maintenance track to keeping it current.

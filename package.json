@@ -7,7 +7,8 @@
     "test": "npx --yes jest",
     "typecheck": "tsc --noEmit",
     "prettier": "prettier --write \"{src,docs}/**/*.{ts,tsx,md}\"",
-    "manage:agents": "node scripts/manageAgents.js"
+    "manage:agents": "node scripts/manageAgents.js",
+    "maintain:docs": "node scripts/maintainDocs.js"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.2.0",
