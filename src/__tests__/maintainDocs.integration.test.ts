@@ -137,7 +137,10 @@ describe('maintain:docs automation', () => {
       initialRoadmap,
     });
 
-    const dryRunResult = await runMaintainDocs(sandboxRoot, ['--dry-run', '--no-prettier']);
+    const dryRunResult = await runMaintainDocs(sandboxRoot, [
+      '--dry-run',
+      '--no-prettier',
+    ]);
 
     expect(dryRunResult.code).toBe(0);
     expect(dryRunResult.stdout).toContain(
@@ -166,14 +169,10 @@ describe('maintain:docs automation', () => {
     const sandboxRoot = await createTempRoot();
     await bootstrapSandbox(sandboxRoot);
 
-    const applyResult = await runMaintainDocs(
-      sandboxRoot,
-      ['--no-prettier'],
-      {
-        MAINTAIN_DOCS_PYTHON: path.join(sandboxRoot, 'bin', 'python3'),
-        PATH: '',
-      },
-    );
+    const applyResult = await runMaintainDocs(sandboxRoot, ['--no-prettier'], {
+      MAINTAIN_DOCS_PYTHON: path.join(sandboxRoot, 'bin', 'python3'),
+      PATH: '',
+    });
 
     expect(applyResult.code).toBe(1);
     expect(applyResult.stderr).toContain('Unable to locate a Python interpreter');
