@@ -178,23 +178,6 @@ describe('maintain:docs automation', () => {
     expect(checkResult.stderr).toContain('Managed documentation drift detected');
   });
 
-  it('shows changes but does not modify files in --dry-run mode', async () => {
-    const sandboxRoot = await createTempRoot();
-    const initialRoadmap = '# Roadmap\n\nNeeds synchronization.\n';
-    await bootstrapSandbox(sandboxRoot, {
-      initialRoadmap,
-    });
-
-    // Run with --dry-run
-    const dryRunResult = await runMaintainDocs(sandboxRoot, ['--dry-run', '--no-prettier']);
-
-    // Should indicate what would change
-    expect(dryRunResult.code).toBe(0);
-    expect(dryRunResult.stdout).toMatch(/would update/i);
-
-    // File should remain unchanged
-    const roadmapPath = path.join(sandboxRoot, 'docs', 'ROADMAP.md');
-    const roadmapAfter = await fs.readFile(roadmapPath, 'utf8');
-    expect(roadmapAfter).toBe(initialRoadmap);
-  });
+  // Remove this duplicate test case entirely, as the functionality is already covered by:
+  // it('shows planned changes but does not modify files in --dry-run mode', ...)
 });
