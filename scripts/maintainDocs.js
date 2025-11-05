@@ -23,6 +23,9 @@ const checkMode = args.has('--check');
 const dryRun = args.has('--dry-run') || checkMode;
 const verbose = args.has('--verbose');
 const skipPrettier = args.has('--no-prettier');
+const COMMAND_TIMEOUT_MS = 120000;
+const OUTPUT_MAX_BYTES = 10 * 1024 * 1024;
+const SAFE_COMMAND_PATTERN = /^[A-Za-z0-9_.:-]+$/;
 
 async function main() {
   await ensureDocsDirectory();
@@ -30,16 +33,14 @@ async function main() {
   const python = await resolvePythonExecutable();
 
   if (checkMode) {
-    await runCheck(python);
-    return;
+    return runCheck(python);
   }
 
   if (dryRun) {
-    await runDryRun(python);
-    return;
+    return runDryRun(python);
   }
 
-  await runApply(python);
+  return runApply(python);
 }
 
 async function ensureDocsDirectory() {
@@ -68,8 +69,12 @@ async function assertAgentsSyncExists() {
 
 async function runCheck(python) {
   const planResult = await runAgentsSyncPlan(python, { failOnChange: true });
-  const actionable = extractActionableArtifacts(planResult.plan);
+  if (planResult.code !== 0 && planResult.code !== 2) {
+    surfacePlanFailure('plan', planResult);
+    return planResult.code || 1;
+  }
 
+  const actionable = extractActionableArtifacts(planResult.plan);
   if (planResult.code === 2 || actionable.length > 0) {
     if (actionable.length > 0) {
       console.error('Managed documentation drift detected:');
@@ -77,27 +82,38 @@ async function runCheck(python) {
     } else {
       console.error('Managed documentation drift detected (no actionable details).');
     }
-    process.exit(1);
+    return 1;
   }
 
   console.log('Documentation is up to date.');
+  return 0;
 }
 
 async function runDryRun(python) {
   const planResult = await runAgentsSyncPlan(python, { failOnChange: false });
+  if (planResult.code !== 0 && planResult.code !== 2) {
+    surfacePlanFailure('plan', planResult);
+    return planResult.code || 1;
+  }
+
   const actionable = extractActionableArtifacts(planResult.plan);
 
   if (actionable.length === 0) {
     console.log('No documentation changes required.');
-    return;
+    return 0;
   }
 
   console.log('Documentation maintenance would apply the following changes:');
   actionable.forEach((item) => console.log(` - ${item}`));
+  return 0;
 }
 
 async function runApply(python) {
   const initialPlan = await runAgentsSyncPlan(python, { failOnChange: false });
+  if (initialPlan.code !== 0 && initialPlan.code !== 2) {
+    surfacePlanFailure('plan', initialPlan);
+    return initialPlan.code || 1;
+  }
   const actionable = extractActionableArtifacts(initialPlan.plan);
 
   if (actionable.length === 0) {
@@ -118,6 +134,10 @@ async function runApply(python) {
   }
 
   const verificationPlan = await runAgentsSyncPlan(python, { failOnChange: false });
+  if ((verificationPlan.code ?? 0) !== 0) {
+    surfacePlanFailure('verification', verificationPlan);
+    return verificationPlan.code || 1;
+  }
   const remaining = extractActionableArtifacts(verificationPlan.plan);
   if (remaining.length > 0) {
     const summary = remaining.map((item) => ` - ${item}`).join('\n');
@@ -127,6 +147,7 @@ async function runApply(python) {
   }
 
   console.log('Documentation maintenance complete.');
+  return 0;
 }
 
 async function runAgentsSyncPlan(python, options = {}) {
@@ -135,10 +156,14 @@ async function runAgentsSyncPlan(python, options = {}) {
   if (failOnChange) {
     args.push('--fail-on-change');
   }
-  const result = await runCommand(python, args, { cwd: rootDir });
+  const result = await runCommand(python, args, {
+    cwd: rootDir,
+    timeoutMs: COMMAND_TIMEOUT_MS,
+    maxBuffer: OUTPUT_MAX_BYTES,
+  });
 
   let plan = { artifacts: [] };
-  const trimmed = result.stdout.trim();
+  const trimmed = (result.stdout ?? '').trim();
   if (trimmed.length > 0) {
     try {
       plan = JSON.parse(trimmed);
@@ -147,21 +172,34 @@ async function runAgentsSyncPlan(python, options = {}) {
     }
   }
 
-  return { code: result.code ?? 0, plan };
+  return {
+    code: result.code ?? 0,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+    plan,
+  };
 }
 
 async function runAgentsSyncApply(python) {
   const result = await runCommand(
     python,
     [agentsSyncScriptPath, 'apply', '--allow-dirty', '--no-branch', '--no-commit'],
-    { cwd: rootDir },
+    {
+      cwd: rootDir,
+      timeoutMs: COMMAND_TIMEOUT_MS,
+      maxBuffer: OUTPUT_MAX_BYTES,
+    },
   );
 
   if ((result.code ?? 0) !== 0) {
     const stderr = result.stderr?.trim();
-    throw new Error(
-      stderr && stderr.length > 0 ? stderr : 'agents_sync.py apply failed.',
-    );
+    const stdout = result.stdout?.trim();
+    const message = stderr?.length
+      ? stderr
+      : stdout?.length
+        ? stdout
+        : 'agents_sync.py apply failed.';
+    throw new Error(message);
   }
 }
 
@@ -174,6 +212,8 @@ async function runPrettier() {
       {
         cwd: rootDir,
         env: { ...process.env, NPX_NODE_OPTIONS: '--no-warnings' },
+        timeoutMs: COMMAND_TIMEOUT_MS,
+        maxBuffer: OUTPUT_MAX_BYTES,
       },
     );
     if ((result.code ?? 0) !== 0) {
@@ -185,6 +225,8 @@ async function runPrettier() {
 
   const result = await runCommand(prettier.command, ['--write', 'docs/**/*.md'], {
     cwd: rootDir,
+    timeoutMs: COMMAND_TIMEOUT_MS,
+    maxBuffer: OUTPUT_MAX_BYTES,
   });
   if ((result.code ?? 0) !== 0) {
     const message = result.stderr?.trim() || 'Prettier formatting failed.';
@@ -215,7 +257,14 @@ function extractActionableArtifacts(plan) {
 async function resolvePythonExecutable() {
   const candidates = [];
   if (process.env.MAINTAIN_DOCS_PYTHON) {
-    candidates.push(process.env.MAINTAIN_DOCS_PYTHON);
+    const override = process.env.MAINTAIN_DOCS_PYTHON.trim();
+    if (path.isAbsolute(override)) {
+      candidates.push(override);
+    } else if (verbose) {
+      console.warn(
+        'Ignoring MAINTAIN_DOCS_PYTHON override because it is not an absolute path.',
+      );
+    }
   }
   candidates.push('python3', 'python');
 
@@ -268,38 +317,136 @@ async function resolvePrettierExecutable() {
 }
 
 function runCommand(command, args, options = {}) {
+  if (typeof command !== 'string' || command.trim().length === 0) {
+    return Promise.reject(new Error('Invalid command supplied to runCommand.'));
+  }
+  const trimmedCommand = command.trim();
+  if (!path.isAbsolute(trimmedCommand) && !SAFE_COMMAND_PATTERN.test(trimmedCommand)) {
+    return Promise.reject(
+      new Error(`Refusing to execute unsafe command string: ${trimmedCommand}`),
+    );
+  }
+
   return new Promise((resolve, reject) => {
-    const spawnOptions = { ...options };
+    const { timeoutMs = COMMAND_TIMEOUT_MS, maxBuffer = OUTPUT_MAX_BYTES, ...rest } = options;
+    const spawnOptions = { ...rest };
     if (!spawnOptions.stdio) {
       spawnOptions.stdio = ['ignore', 'pipe', 'pipe'];
     }
 
-    const child = spawn(command, args, spawnOptions);
+    const child = spawn(trimmedCommand, args, spawnOptions);
     let stdout = '';
     let stderr = '';
+    let stdoutSize = 0;
+    let stderrSize = 0;
+    let settled = false;
+
+    const clearTimer = (timer) => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    };
+
+    const finalize = (resolver) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimer(timeoutHandle);
+      resolver();
+    };
+
+    const fail = (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimer(timeoutHandle);
+      try {
+        child.kill('SIGKILL');
+      } catch (killError) {
+        if (verbose) {
+          console.warn(
+            `Failed to terminate child process for ${trimmedCommand}: ${killError.message}`,
+          );
+        }
+      }
+      reject(error);
+    };
+
+    const timeoutHandle =
+      typeof timeoutMs === 'number' && Number.isFinite(timeoutMs)
+        ? setTimeout(() => {
+            const error = new Error(
+              `Command '${trimmedCommand}' timed out after ${timeoutMs}ms.`,
+            );
+            error.code = 'COMMAND_TIMEOUT';
+            fail(error);
+          }, timeoutMs)
+        : null;
 
     if (child.stdout) {
       child.stdout.on('data', (chunk) => {
-        stdout += chunk.toString();
+        const bufferChunk = Buffer.from(chunk);
+        stdoutSize += bufferChunk.length;
+        if (stdoutSize > maxBuffer) {
+          const error = new Error(
+            `Command '${trimmedCommand}' exceeded stdout limit of ${maxBuffer} bytes.`,
+          );
+          error.code = 'MAX_BUFFER_EXCEEDED';
+          fail(error);
+          return;
+        }
+        stdout += bufferChunk.toString();
       });
     }
     if (child.stderr) {
       child.stderr.on('data', (chunk) => {
-        stderr += chunk.toString();
+        const bufferChunk = Buffer.from(chunk);
+        stderrSize += bufferChunk.length;
+        if (stderrSize > maxBuffer) {
+          const error = new Error(
+            `Command '${trimmedCommand}' exceeded stderr limit of ${maxBuffer} bytes.`,
+          );
+          error.code = 'MAX_BUFFER_EXCEEDED';
+          fail(error);
+          return;
+        }
+        stderr += bufferChunk.toString();
       });
     }
 
     child.on('error', (error) => {
-      reject(error);
+      fail(error);
     });
 
     child.on('close', (code) => {
-      resolve({ code, stdout, stderr });
+      finalize(() => {
+        resolve({ code, stdout, stderr });
+      });
     });
   });
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.stack || error.message : error);
-  process.exit(1);
-});
+main()
+  .then((code) => {
+    const exitCode = typeof code === 'number' ? code : 0;
+    if (exitCode !== 0) {
+      process.exit(exitCode);
+    }
+  })
+  .catch((error) => {
+    console.error(error instanceof Error ? error.stack || error.message : error);
+    process.exit(1);
+  });
+
+function surfacePlanFailure(stage, result) {
+  const stderr = result.stderr?.trim();
+  const stdout = result.stdout?.trim();
+  const details = stderr?.length
+    ? stderr
+    : stdout?.length
+      ? stdout
+      : `agents_sync.py ${stage} failed with exit code ${result.code ?? 'unknown'}.`;
+  console.error(details);
+}

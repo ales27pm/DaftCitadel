@@ -19,8 +19,9 @@ interface BootstrapOptions {
 }
 
 const tempRoots: string[] = [];
+const defaultTimeout = 60000;
 
-jest.setTimeout(60000);
+jest.setTimeout(defaultTimeout);
 
 async function createTempRoot(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'maintain-docs-test-'));
@@ -127,5 +128,54 @@ describe('maintain:docs automation', () => {
 
     expect(checkResult.code).toBe(1);
     expect(checkResult.stderr).toContain('Managed documentation drift detected');
+  });
+
+  it('shows planned changes but does not modify files in --dry-run mode', async () => {
+    const sandboxRoot = await createTempRoot();
+    const initialRoadmap = '# Roadmap\n\nNeeds synchronization.\n';
+    await bootstrapSandbox(sandboxRoot, {
+      initialRoadmap,
+    });
+
+    const dryRunResult = await runMaintainDocs(sandboxRoot, ['--dry-run', '--no-prettier']);
+
+    expect(dryRunResult.code).toBe(0);
+    expect(dryRunResult.stdout).toContain(
+      'Documentation maintenance would apply the following changes:',
+    );
+
+    const roadmapPath = path.join(sandboxRoot, 'docs', 'ROADMAP.md');
+    const roadmapAfter = await fs.readFile(roadmapPath, 'utf8');
+    expect(roadmapAfter).toBe(initialRoadmap);
+  });
+
+  it('fails fast when agents_sync.py is missing', async () => {
+    const sandboxRoot = await createTempRoot();
+    await bootstrapSandbox(sandboxRoot);
+
+    const stubPath = path.join(sandboxRoot, 'scripts', 'agents_sync.py');
+    await fs.rm(stubPath, { force: true });
+
+    const applyResult = await runMaintainDocs(sandboxRoot, ['--no-prettier']);
+
+    expect(applyResult.code).toBe(1);
+    expect(applyResult.stderr).toContain('agents_sync.py not found');
+  });
+
+  it('surfaces interpreter resolution failures', async () => {
+    const sandboxRoot = await createTempRoot();
+    await bootstrapSandbox(sandboxRoot);
+
+    const applyResult = await runMaintainDocs(
+      sandboxRoot,
+      ['--no-prettier'],
+      {
+        MAINTAIN_DOCS_PYTHON: path.join(sandboxRoot, 'bin', 'python3'),
+        PATH: '',
+      },
+    );
+
+    expect(applyResult.code).toBe(1);
+    expect(applyResult.stderr).toContain('Unable to locate a Python interpreter');
   });
 });
