@@ -176,13 +176,4 @@ describe('maintain:docs automation', () => {
     expect(applyResult.code).toBe(1);
     expect(applyResult.stderr).toContain('Unable to locate a Python interpreter');
   });
-
-    const checkResult = await runMaintainDocs(sandboxRoot, ['--check', '--no-prettier']);
-
-    expect(checkResult.code).toBe(1);
-    expect(checkResult.stderr).toContain('Managed documentation drift detected');
   });
-
-  // Remove this duplicate test case entirely, as the functionality is already covered by:
-  // it('shows planned changes but does not modify files in --dry-run mode', ...)
-});
