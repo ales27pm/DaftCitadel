@@ -405,17 +405,24 @@ function runCommand(command, args, options = {}) {
     }
     if (child.stderr) {
       child.stderr.on('data', (chunk) => {
-        const bufferChunk = Buffer.from(chunk);
-        if (stderrSize + bufferChunk.length > maxBuffer) {
-          const error = new Error(
-            `Command '${trimmedCommand}' exceeded stderr limit of ${maxBuffer} bytes.`,
-          );
-          error.code = 'MAX_BUFFER_EXCEEDED';
-          fail(error);
+        if (settled) {
           return;
         }
-        stderrSize += bufferChunk.length;
-        stderr += bufferChunk.toString();
+        try {
+          const bufferChunk = Buffer.from(chunk);
+          if (stderrSize + bufferChunk.length > maxBuffer) {
+            const error = new Error(
+              `Command '${trimmedCommand}' exceeded stderr limit of ${maxBuffer} bytes.`,
+            );
+            error.code = 'MAX_BUFFER_EXCEEDED';
+            fail(error);
+            return;
+          }
+          stderrSize += bufferChunk.length;
+          stderr += bufferChunk.toString();
+        } catch (error) {
+          fail(error);
+        }
       });
     }
 
