@@ -353,7 +353,8 @@ daftcitadel_normalize_level() {
 
 daftcitadel_set_log_level() {
     local requested="${1:-$DAFTCITADEL_LOG_LEVEL}"
-    local normalized=$(daftcitadel_normalize_level "$requested")
+    local normalized
+    normalized=$(daftcitadel_normalize_level "$requested")
     if [[ -z "$normalized" ]]; then
         normalized="INFO"
     fi
@@ -674,6 +675,7 @@ install_vital_suite() {
     local VITAL_CHECKSUM_CANDIDATES=()
     local __vital_known_shas=()
 
+    # Try to resolve from nixpkgs first (fresh metadata)
     if command -v python3 >/dev/null 2>&1; then
         if VITAL_DYNAMIC_OUTPUT=$(resolve_vital_manifest 2>/dev/null); then
             eval "$VITAL_DYNAMIC_OUTPUT"
@@ -689,10 +691,12 @@ install_vital_suite() {
         log "[INFO] python3 unavailable; using static Vital manifest fallback"
     fi
 
+    # Add dynamic checksum first if present
     if [[ -n "${VITAL_DYNAMIC_SHA256:-}" ]]; then
         VITAL_CHECKSUM_CANDIDATES+=("${VITAL_DYNAMIC_SHA256,,}")
     fi
 
+    # If URL is still empty, fall back to curated mapping
     if [[ -z "${VITAL_URL:-}" ]]; then
         if [[ -n "${VITAL_FALLBACK_URLS[$VITAL_DEFAULT_VERSION]:-}" ]]; then
             VITAL_VERSION_DISPLAY="$VITAL_DEFAULT_VERSION"
@@ -707,6 +711,7 @@ install_vital_suite() {
         fi
     fi
 
+    # Merge in known static SHAs for the resolved version
     if [[ -n "${VITAL_VERSION_DISPLAY:-}" && -n "${VITAL_KNOWN_SHAS[$VITAL_VERSION_DISPLAY]:-}" ]]; then
         read -r -a __vital_known_shas <<<"${VITAL_KNOWN_SHAS[$VITAL_VERSION_DISPLAY]}"
         for candidate in "${__vital_known_shas[@]}"; do
@@ -725,6 +730,7 @@ install_vital_suite() {
         done
     fi
 
+    # If we still have no checksum, fall back fully to the default pinned version
     if ((${#VITAL_CHECKSUM_CANDIDATES[@]} == 0)); then
         if [[ "${VITAL_VERSION_DISPLAY:-}" != "$VITAL_DEFAULT_VERSION" ]]; then
             log "[WARN] Missing checksum metadata for Vital ${VITAL_VERSION_DISPLAY:-unknown}; falling back to $VITAL_DEFAULT_VERSION"
@@ -752,9 +758,12 @@ install_vital_suite() {
     fi
 
     log "[PLUGINS] Installing Vital ${VITAL_VERSION_DISPLAY:-1.5.x}"
+
+    # Build candidate archive names and try to reuse cached copies
     local vital_version_for_name="${VITAL_VERSION_DISPLAY:-$VITAL_DEFAULT_VERSION}"
     local vital_sanitized_version
     vital_sanitized_version=$(sanitize_filename_component "$vital_version_for_name")
+
     local VITAL_ARCHIVE_CANDIDATES=()
     if [[ -n "$vital_sanitized_version" ]]; then
         VITAL_ARCHIVE_CANDIDATES+=("VitalInstaller_${vital_sanitized_version}.zip")
@@ -762,10 +771,13 @@ install_vital_suite() {
     fi
     VITAL_ARCHIVE_CANDIDATES+=("VitalInstaller.zip")
     VITAL_ARCHIVE_CANDIDATES+=("Vital.zip")
+
     local VITAL_ARCHIVE_PATH=""
     local candidate_name=""
+    local cached_path=""
+
     for candidate_name in "${VITAL_ARCHIVE_CANDIDATES[@]}"; do
-        local cached_path="$DEPS_DIR/$candidate_name"
+        cached_path="$DEPS_DIR/$candidate_name"
         if [[ -f "$cached_path" ]]; then
             if check_sha256 "$cached_path" "${VITAL_CHECKSUM_CANDIDATES[@]}"; then
                 log "[CACHE] Using cached Vital archive $candidate_name"
@@ -780,17 +792,18 @@ install_vital_suite() {
         fi
     done
 
+    # If no valid cache, download the primary candidate
     if [[ -z "$VITAL_ARCHIVE_PATH" ]]; then
         local VITAL_ARCHIVE_PRIMARY_NAME="${VITAL_ARCHIVE_CANDIDATES[0]}"
-        if [[ -z "$VITAL_ARCHIVE_PRIMARY_NAME" ]]; then
-            VITAL_ARCHIVE_PRIMARY_NAME="VitalInstaller.zip"
-        fi
+        [[ -z "$VITAL_ARCHIVE_PRIMARY_NAME" ]] && VITAL_ARCHIVE_PRIMARY_NAME="VitalInstaller.zip"
         VITAL_ARCHIVE_PATH="$DEPS_DIR/$VITAL_ARCHIVE_PRIMARY_NAME"
+
         if ! download_and_verify "$VITAL_URL" "$VITAL_ARCHIVE_PATH" "${VITAL_CHECKSUM_CANDIDATES[@]}"; then
             return 1
         fi
     fi
 
+    # Extract and install
     local VITAL_WORKDIR
     VITAL_WORKDIR=$(mktemp -d /tmp/vital.XXXXXX)
     if ! unzip -o "$VITAL_ARCHIVE_PATH" -d "$VITAL_WORKDIR" >/dev/null; then
@@ -802,6 +815,7 @@ install_vital_suite() {
     local VITAL_ROOT="$VITAL_WORKDIR"
     local VITAL_INSTALL_SCRIPT=""
     local candidate=""
+
     for candidate in \
         "$VITAL_ROOT/install.sh" \
         "$VITAL_ROOT/install" \
@@ -820,38 +834,45 @@ install_vital_suite() {
     if [[ -n "$VITAL_INSTALL_SCRIPT" ]]; then
         "$VITAL_INSTALL_SCRIPT" --no-register || true
     else
+        # Manual deployment fallback
         local VITAL_PAYLOAD
         VITAL_PAYLOAD=$(find "$VITAL_ROOT" -maxdepth 1 -type d -name 'VitalInstaller*' -print -quit)
         if [[ -n "$VITAL_PAYLOAD" && -d "$VITAL_PAYLOAD" ]]; then
             log "[PLUGINS] Vital installer script missing; performing manual deployment"
             install -d /usr/lib/vst /usr/lib/vst3 /usr/lib/clap /opt/vital
+
             local missing_components=()
             local VITAL_VST="$VITAL_PAYLOAD/lib/vst/Vital.so"
             local VITAL_VST3_DIR="$VITAL_PAYLOAD/lib/vst3/Vital.vst3"
             local VITAL_CLAP="$VITAL_PAYLOAD/lib/clap/Vital.clap"
             local VITAL_BIN="$VITAL_PAYLOAD/bin/Vital"
+
             if [[ -f "$VITAL_VST" ]]; then
                 install -m 644 "$VITAL_VST" /usr/lib/vst/Vital.so
             else
                 missing_components+=("VST plugin")
             fi
+
             if [[ -d "$VITAL_VST3_DIR" ]]; then
                 rm -rf /usr/lib/vst3/Vital.vst3
                 cp -r "$VITAL_VST3_DIR" /usr/lib/vst3/
             else
                 missing_components+=("VST3 plugin")
             fi
+
             if [[ -f "$VITAL_CLAP" ]]; then
                 install -m 755 "$VITAL_CLAP" /usr/lib/clap/Vital.clap
             else
                 missing_components+=("CLAP plugin")
             fi
+
             if [[ -f "$VITAL_BIN" ]]; then
                 install -m 755 "$VITAL_BIN" /opt/vital/Vital
                 ln -sf /opt/vital/Vital /usr/local/bin/Vital
             else
                 missing_components+=("standalone binary")
             fi
+
             if ((${#missing_components[@]})); then
                 log "[WARN] Vital manual install missing: ${missing_components[*]}"
             fi
@@ -2119,7 +2140,7 @@ chown -R "$USER_NAME:$USER_NAME" "$THEME_DIR"
 
 if $ENABLE_GUI; then
     log "[PY] Creating Python virtual environment and installing libraries"
-    run_step "Install Python build dependencies" apt_install python3 python3-venv python3-pip python3-dev build-essential libasound2-dev libsndfile1-dev libportmidi-dev imagemagick fonts-orbitron fonts-roboto fonts-jetbrains-mono
+    run_step "Install Python build dependencies" apt_install_available python3 python3-venv python3-pip python3-dev build-essential libasound2-dev libsndfile1-dev libportmidi-dev imagemagick fonts-orbitron fonts-roboto fonts-jetbrains-mono
     if command -v convert >/dev/null 2>&1; then
         if [[ -f "$THEME_DIR/icon.svg" ]]; then
             convert "$THEME_DIR/icon.svg" "$THEME_DIR/icon.png"
@@ -2157,7 +2178,10 @@ else
     log "[PY] GUI stack disabled for this profile"
 fi
 
-write_metadata_files
+# Make metadata generation non-fatal (especially in container builds)
+if ! write_metadata_files; then
+    log "[WARN] Metadata generation failed; continuing without citadel_profile.json and plugin_cache_hints.json"
+fi
 
 log "[ENV] Exporting DAW paths to user profile"
 PROFILE_BLOCK_START="# >>> DaftCitadel profile >>>"
@@ -2203,4 +2227,3 @@ elif confirm "Reboot system now?"; then
     log "[REBOOT] Rebooting to finalize configuration"
     reboot
 fi
-
