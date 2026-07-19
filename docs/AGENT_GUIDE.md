@@ -19,7 +19,7 @@ This guide explains how Daft Citadel uses automation agents to keep contributor 
 2. When you need a machine-readable snapshot, rerun `plan` with `--json`; this writes `.agents/reports/<timestamp>.plan.json`, which you can inspect locally or upload as a CI artifact.
 3. Apply the plan with `python3 scripts/agents_sync.py apply --auto-branch`. Use the new `--no-commit` flag when you want to review changes before committing, or omit it to let the tool capture a dedicated sync commit on a throwaway branch.
 4. Execute the required quality gates before opening a PR:
-   - `npm run prettier`
+   - `npm run format`
    - `npm run lint`
    - `npm run typecheck`
    - `npm run test`

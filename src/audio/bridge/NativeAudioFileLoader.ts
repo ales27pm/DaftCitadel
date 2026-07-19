@@ -44,10 +44,12 @@ export class NativeAudioFileLoader implements AudioFileLoader {
 }
 
 export const isNativeAudioFileLoaderAvailable = (): boolean =>
-  NativeModules[MODULE_NAME] != null;
+  (NativeModules as typeof NativeModules | undefined)?.[MODULE_NAME] != null;
 
 const getNativeLoaderModule = (): NativeAudioFileLoaderModule => {
-  const module = NativeModules[MODULE_NAME] as NativeAudioFileLoaderModule | undefined;
+  const module = (NativeModules as typeof NativeModules | undefined)?.[MODULE_NAME] as
+    | NativeAudioFileLoaderModule
+    | undefined;
   if (!module) {
     throw new Error('AudioSampleLoaderModule is unavailable');
   }

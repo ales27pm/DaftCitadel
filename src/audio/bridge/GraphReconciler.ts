@@ -1,4 +1,4 @@
-import type { AudioEngine, NodeConfiguration } from '../AudioEngine';
+import { OUTPUT_BUS, type AudioEngine, type NodeConfiguration } from '../AudioEngine';
 
 type Logger = Pick<typeof console, 'debug' | 'info' | 'warn' | 'error'>;
 
@@ -32,16 +32,40 @@ export class GraphReconciler {
   }
 
   async forceConfigureNode(node: NodeConfiguration): Promise<void> {
+    const connectionsToRestore = [...this.connectionState].filter((key) => {
+      const [source, destination] = this.parseConnectionKey(key);
+      return source === node.id || destination === node.id;
+    });
+    if (this.nodeState.has(node.id)) {
+      await this.removeTrackedNodes([node.id]);
+    }
     await this.audioEngine.configureNodes([node]);
     this.nodeState.set(node.id, node);
+    for (const key of connectionsToRestore) {
+      const [source, destination] = this.parseConnectionKey(key);
+      const otherNodeExists =
+        (source === node.id || this.nodeState.has(source)) &&
+        (destination === OUTPUT_BUS ||
+          destination === node.id ||
+          this.nodeState.has(destination));
+      if (!otherNodeExists) {
+        continue;
+      }
+      await this.audioEngine.connect(source, destination);
+      this.connectionState.add(key);
+    }
   }
 
   private async reconcileNodes(desired: Map<NodeId, NodeConfiguration>): Promise<void> {
     const toConfigure: NodeConfiguration[] = [];
+    const replacements: NodeId[] = [];
     desired.forEach((node) => {
       const existing = this.nodeState.get(node.id);
       if (!existing || !this.nodeConfigurationEquals(existing, node)) {
         toConfigure.push(node);
+        if (existing) {
+          replacements.push(node.id);
+        }
       }
     });
 
@@ -52,21 +76,29 @@ export class GraphReconciler {
       }
     });
 
-    if (toRemove.length > 0) {
-      this.logger.debug('Removing stale nodes', { nodeIds: toRemove });
-      await this.audioEngine.removeNodes(toRemove);
-      toRemove.forEach((nodeId) => {
-        this.nodeState.delete(nodeId);
-        [...this.connectionState]
-          .filter((key) => key.startsWith(`${nodeId}->`) || key.endsWith(`->${nodeId}`))
-          .forEach((key) => this.connectionState.delete(key));
-      });
+    const nodesToRemove = [...toRemove, ...replacements];
+    if (nodesToRemove.length > 0) {
+      this.logger.debug('Removing stale or changed nodes', { nodeIds: nodesToRemove });
+      await this.removeTrackedNodes(nodesToRemove);
     }
 
     if (toConfigure.length > 0) {
       this.logger.debug('Configuring nodes', { count: toConfigure.length });
       await this.audioEngine.configureNodes(toConfigure);
       toConfigure.forEach((node) => this.nodeState.set(node.id, node));
+    }
+  }
+
+  private async removeTrackedNodes(nodeIds: NodeId[]): Promise<void> {
+    for (const nodeId of nodeIds) {
+      await this.audioEngine.removeNodes([nodeId]);
+      this.nodeState.delete(nodeId);
+      [...this.connectionState].forEach((key) => {
+        const [source, destination] = this.parseConnectionKey(key);
+        if (source === nodeId || destination === nodeId) {
+          this.connectionState.delete(key);
+        }
+      });
     }
   }
 
@@ -83,13 +115,11 @@ export class GraphReconciler {
 
     if (toDisconnect.length > 0) {
       this.logger.debug('Disconnecting connections', { count: toDisconnect.length });
-      await Promise.all(
-        toDisconnect.map((key) => {
-          const [source, destination] = key.split('->');
-          return this.audioEngine.disconnect(source, destination);
-        }),
-      );
-      toDisconnect.forEach((key) => this.connectionState.delete(key));
+      for (const key of toDisconnect) {
+        const [source, destination] = this.parseConnectionKey(key);
+        await this.audioEngine.disconnect(source, destination);
+        this.connectionState.delete(key);
+      }
     }
 
     const toConnect: ConnectionKey[] = [];
@@ -97,9 +127,12 @@ export class GraphReconciler {
       if (this.connectionState.has(key)) {
         return;
       }
-      const [source, destination] = key.split('->');
+      const [source, destination] = this.parseConnectionKey(key);
       const hasSource = nodes.has(source) || this.nodeState.has(source);
-      const hasDestination = nodes.has(destination) || this.nodeState.has(destination);
+      const hasDestination =
+        destination === OUTPUT_BUS ||
+        nodes.has(destination) ||
+        this.nodeState.has(destination);
       if (!hasSource || !hasDestination) {
         return;
       }
@@ -108,14 +141,20 @@ export class GraphReconciler {
 
     if (toConnect.length > 0) {
       this.logger.debug('Connecting connections', { count: toConnect.length });
-      await Promise.all(
-        toConnect.map((key) => {
-          const [source, destination] = key.split('->');
-          return this.audioEngine.connect(source, destination);
-        }),
-      );
-      toConnect.forEach((key) => this.connectionState.add(key));
+      for (const key of toConnect) {
+        const [source, destination] = this.parseConnectionKey(key);
+        await this.audioEngine.connect(source, destination);
+        this.connectionState.add(key);
+      }
     }
+  }
+
+  private parseConnectionKey(key: ConnectionKey): [NodeId, NodeId] {
+    const separator = key.indexOf('->');
+    if (separator <= 0 || separator === key.length - 2) {
+      throw new Error(`Invalid connection key: ${key}`);
+    }
+    return [key.slice(0, separator), key.slice(separator + 2)];
   }
 
   private nodeConfigurationEquals(

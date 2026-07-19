@@ -168,9 +168,8 @@ final class CollabNetworkDiagnostics: RCTEventEmitter {
 
 #if canImport(CoreWLAN)
   private func fetchMetricsUsingCoreWLAN() throws -> [String: Any] {
-    guard let client = CWWiFiClient.shared(),
-          let interface = client.interface()
-    else {
+    let client = CWWiFiClient.shared()
+    guard let interface = client.interface() else {
       throw DiagnosticsError.interfaceUnavailable
     }
 
@@ -205,8 +204,9 @@ final class CollabNetworkDiagnostics: RCTEventEmitter {
     }
 
     if #available(macOS 11.0, macCatalyst 14.0, *) {
-      if let phyMode = interface.activePHYMode()?.rawValue {
-        payload["phyMode"] = phyMode
+      let phyMode = interface.activePHYMode()
+      if phyMode != .modeNone {
+        payload["phyMode"] = phyMode.rawValue
       }
     }
 

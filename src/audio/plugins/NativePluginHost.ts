@@ -56,9 +56,26 @@ export type PluginHostEventPayloads = {
 
 const moduleName = 'PluginHostModule';
 
-export const NativePluginHost: PluginHostSpec =
-  TurboModuleRegistry.getEnforcing<PluginHostSpec>(moduleName);
+const registry = TurboModuleRegistry as typeof TurboModuleRegistry | undefined;
+const modules = NativeModules as typeof NativeModules | undefined;
+const registeredModule =
+  (typeof registry?.get === 'function'
+    ? registry.get<PluginHostSpec>(moduleName)
+    : null) ??
+  (modules?.[moduleName] as PluginHostSpec | undefined) ??
+  null;
+
+const unavailableModule = new Proxy({} as PluginHostSpec, {
+  get: (_target, property) => () =>
+    Promise.reject(
+      new Error(
+        `${moduleName}.${String(property)} is unavailable because the native module is not linked`,
+      ),
+    ),
+});
+
+export const NativePluginHost: PluginHostSpec = registeredModule ?? unavailableModule;
 
 export const isPluginHostAvailable = (): boolean => {
-  return NativeModules[moduleName] != null;
+  return registeredModule != null;
 };

@@ -255,19 +255,25 @@ function extractActionableArtifacts(plan) {
 }
 
 async function resolvePythonExecutable() {
-  const candidates = [];
   if (process.env.MAINTAIN_DOCS_PYTHON) {
     const override = process.env.MAINTAIN_DOCS_PYTHON.trim();
-    if (path.isAbsolute(override)) {
-      candidates.push(override);
-    } else if (verbose) {
-      console.warn(
-        'Ignoring MAINTAIN_DOCS_PYTHON override because it is not an absolute path.',
-      );
+    if (!path.isAbsolute(override)) {
+      throw new Error('MAINTAIN_DOCS_PYTHON must be an absolute path.');
     }
+    try {
+      const result = await runCommand(override, ['--version']);
+      if ((result.code ?? 0) === 0) {
+        return override;
+      }
+    } catch (error) {
+      if (verbose) {
+        console.warn(`Failed to execute configured Python '${override}': ${error.message}`);
+      }
+    }
+    throw new Error('Unable to locate a Python interpreter for agents_sync.py.');
   }
-  candidates.push('python3', 'python');
 
+  const candidates = ['python3', 'python'];
   const seen = new Set();
   for (const candidate of candidates) {
     if (!candidate || seen.has(candidate)) {

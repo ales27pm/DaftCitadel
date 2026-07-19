@@ -18,6 +18,14 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import org.json.JSONObject
 
+private fun currentTimestamp(): String {
+  return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+    java.time.OffsetDateTime.now().toString()
+  } else {
+    SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US).format(Date())
+  }
+}
+
 @ReactModule(name = VST3PluginHostModule.NAME)
 class VST3PluginHostModule(private val reactContext: ReactApplicationContext) :
   ReactContextBaseJavaModule(reactContext), LifecycleEventListener {
@@ -26,7 +34,7 @@ class VST3PluginHostModule(private val reactContext: ReactApplicationContext) :
     sendEvent("pluginCrashed", Arguments.createMap().apply {
       putString("instanceId", instanceId)
       putMap("descriptor", descriptor.toWritableMap())
-      putString("timestamp", hostManager.timestamp())
+      putString("timestamp", currentTimestamp())
       putString("reason", reason)
       putBoolean("recovered", false)
       putString("restartToken", UUID.randomUUID().toString())
@@ -278,14 +286,6 @@ class Vst3HostManager(
   fun shutdown() {
     instances.values.forEach { it.dispose() }
     instances.clear()
-  }
-
-  fun timestamp(): String {
-    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      java.time.OffsetDateTime.now().toString()
-    } else {
-      SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US).format(Date())
-    }
   }
 
   private fun pluginRoots(): List<File> {

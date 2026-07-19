@@ -36,7 +36,7 @@ class PluginHostModule: RCTEventEmitter {
   ) {
     queue.async { [weak self] in
       guard let self else { return }
-      let components = self.componentManager.components(matching: nil)
+      let components = self.availableComponents()
       let filtered = components.filter { component in
         guard let format = format as String? else { return true }
         return format.lowercased() == "auv3" ? component.audioComponentDescription.componentType == kAudioUnitType_Effect : true
@@ -54,19 +54,24 @@ class PluginHostModule: RCTEventEmitter {
     rejecter: @escaping RCTPromiseRejectBlock
   ) {
     let identifierString = identifier as String
-    guard let component = componentManager.components(matchingIdentifier: identifierString).first else {
+    guard let component = availableComponents().first(where: {
+      $0.audioComponentDescription.identifierString == identifierString
+    }) else {
       rejecter("missing_component", "AUv3 component not found for \(identifierString)", nil)
       return
     }
 
     queue.async { [weak self] in
       guard let self else { return }
-      component.instantiate(with: component.audioComponentDescription, options: []) { audioUnit, error in
+      AVAudioUnit.instantiate(
+        with: component.audioComponentDescription,
+        options: []
+      ) { avAudioUnit, error in
         if let error {
           rejecter("instantiate_failed", "Failed to instantiate plugin: \(error.localizedDescription)", error)
           return
         }
-        guard let audioUnit else {
+        guard let audioUnit = avAudioUnit?.auAudioUnit else {
           rejecter("instantiate_failed", "Failed to instantiate plugin", nil)
           return
         }
@@ -79,32 +84,27 @@ class PluginHostModule: RCTEventEmitter {
           sandboxPath = try? self.sandboxCoordinator.ensureSandbox(identifier: sandboxIdentifier)
         }
 
-        let token = audioUnit.token(byAddingRenderObserver: { [weak self] _, _, status in
-          guard status != noErr, let self else { return }
-          self.emitCrashEvent(
-            instanceId: instanceId,
-            descriptor: descriptor,
-            reason: "render_error_status_\(status)",
-            sandboxPath: sandboxPath,
-            recovered: false
-          )
-        })
-
         let state = PluginInstanceState(
           identifier: identifierString,
           instanceId: instanceId,
           audioUnit: audioUnit,
           descriptor: descriptor,
           sandboxPath: sandboxPath,
-          renderObserverToken: token
+          // AURenderObserver reports render timing, not a reliable extension
+          // crash status. The embedding host must forward process/extension
+          // invalidation through emitCrashEvent when it owns that lifecycle.
+          renderObserverToken: nil
         )
         self.instances[instanceId] = state
 
         resolver([
           "instanceId": instanceId,
           "descriptor": descriptor,
-          "cpuLoadPercent": audioUnit.cpuLoad * 100.0,
-          "latencySamples": audioUnit.latency,
+          // AUAudioUnit exposes no supported instantaneous CPU-load metric.
+          "cpuLoadPercent": 0.0,
+          "latencySamples": Int(
+            (audioUnit.latency * (audioUnit.outputBusses.first?.format.sampleRate ?? 44_100)).rounded()
+          ),
           "sandboxPath": sandboxPath as Any,
         ])
       }
@@ -189,13 +189,10 @@ class PluginHostModule: RCTEventEmitter {
       rejecter("missing_parameter", "Parameter \(parameterId) not found", nil)
       return
     }
-    guard let scheduleBlock = state.audioUnit.scheduleParameterBlock else {
-      rejecter("missing_schedule", "Parameter scheduling unsupported", nil)
-      return
-    }
+    let scheduleBlock = state.audioUnit.scheduleParameterBlock
 
     let sampleRate = state.audioUnit.outputBusses.first?.format.sampleRate ?? 44100
-    let events: [AUParameterAutomationEvent] = curve.compactMap { element in
+    let events: [(sampleTime: AUEventSampleTime, value: AUValue)] = curve.compactMap { element in
       guard
         let dict = element as? [String: Any],
         let timeMs = dict["time"] as? Double,
@@ -204,18 +201,13 @@ class PluginHostModule: RCTEventEmitter {
         return nil
       }
       let sampleTime = AUEventSampleTime(timeMs * sampleRate / 1000.0)
-      return AUParameterAutomationEvent(
-        parameterID: parameter.address,
-        scope: 0,
-        element: 0,
-        value: Float(value),
-        start: sampleTime,
-        duration: 0
-      )
+      return (sampleTime: sampleTime, value: AUValue(value))
     }
 
     queue.async {
-      scheduleBlock(AUEventSampleTimeImmediate, 0, events.count, events)
+      for event in events.sorted(by: { $0.sampleTime < $1.sampleTime }) {
+        scheduleBlock(event.sampleTime, 0, parameter.address, event.value)
+      }
       resolver(NSNull())
     }
   }
@@ -292,6 +284,17 @@ class PluginHostModule: RCTEventEmitter {
     ]
   }
 
+  private func availableComponents() -> [AVAudioUnitComponent] {
+    let wildcard = AudioComponentDescription(
+      componentType: 0,
+      componentSubType: 0,
+      componentManufacturer: 0,
+      componentFlags: 0,
+      componentFlagsMask: 0
+    )
+    return componentManager.components(matching: wildcard)
+  }
+
   private func emitCrashEvent(
     instanceId: String,
     descriptor: [String: Any],
@@ -316,7 +319,7 @@ private class PluginSandboxCoordinator {
 
   func ensureSandbox(identifier: String) throws -> String {
     let baseURL = try pluginBaseDirectory()
-    let pluginURL = baseURL.appendingPathComponent(identifier, isDirectory: true)
+    var pluginURL = baseURL.appendingPathComponent(identifier, isDirectory: true)
     if !fileManager.fileExists(atPath: pluginURL.path) {
       try fileManager.createDirectory(at: pluginURL, withIntermediateDirectories: true)
       var resourceValues = URLResourceValues()

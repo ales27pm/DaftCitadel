@@ -28,28 +28,53 @@ export class SessionHistory {
     return this.redoStack.length > 0;
   }
 
-  undo(currentSession: Session): Session | null {
+  peekUndo(): Session | null {
+    const snapshot = this.undoStack.at(-1);
+    return snapshot ? cloneSession(snapshot.session) : null;
+  }
+
+  peekRedo(): Session | null {
+    const snapshot = this.redoStack.at(-1);
+    return snapshot ? cloneSession(snapshot.session) : null;
+  }
+
+  commitUndo(currentSession: Session): void {
     if (!this.canUndo()) {
+      throw new Error('Cannot commit undo without an undo snapshot');
+    }
+    const currentSnapshot = cloneSession(currentSession);
+    this.undoStack.pop();
+    this.redoStack.push({ session: currentSnapshot });
+  }
+
+  commitRedo(currentSession: Session): void {
+    if (!this.canRedo()) {
+      throw new Error('Cannot commit redo without a redo snapshot');
+    }
+    const currentSnapshot = cloneSession(currentSession);
+    this.redoStack.pop();
+    this.undoStack.push({ session: currentSnapshot });
+    if (this.undoStack.length > this.capacity) {
+      this.undoStack.shift();
+    }
+  }
+
+  undo(currentSession: Session): Session | null {
+    const session = this.peekUndo();
+    if (!session) {
       return null;
     }
-    const snapshot = this.undoStack.pop();
-    if (!snapshot) {
-      return null;
-    }
-    this.redoStack.push({ session: cloneSession(currentSession) });
-    return cloneSession(snapshot.session);
+    this.commitUndo(currentSession);
+    return session;
   }
 
   redo(currentSession: Session): Session | null {
-    if (!this.canRedo()) {
+    const session = this.peekRedo();
+    if (!session) {
       return null;
     }
-    const snapshot = this.redoStack.pop();
-    if (!snapshot) {
-      return null;
-    }
-    this.undoStack.push({ session: cloneSession(currentSession) });
-    return cloneSession(snapshot.session);
+    this.commitRedo(currentSession);
+    return session;
   }
 
   clear(): void {

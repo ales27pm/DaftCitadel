@@ -24,9 +24,47 @@ void GainNode::setParameter(const std::string& name, double value) {
   }
 }
 
+void TrackOutputNode::process(AudioBufferView buffer) {
+  const auto channels = buffer.channelCount();
+  for (std::size_t channel = 0; channel < channels; ++channel) {
+    double channelGain = gain_;
+    if (channels >= 2 && channel == 0 && pan_ > 0.0) {
+      channelGain *= 1.0 - pan_;
+    } else if (channels >= 2 && channel == 1 && pan_ < 0.0) {
+      channelGain *= 1.0 + pan_;
+    }
+    auto samples = buffer.channel(channel);
+    for (auto& sample : samples) {
+      sample *= static_cast<float>(channelGain);
+    }
+  }
+}
+
+void TrackOutputNode::setParameter(const std::string& name, double value) {
+  if (!std::isfinite(value)) {
+    return;
+  }
+  if (name == "gain") {
+    gain_ = std::max(0.0, value);
+    return;
+  }
+  if (name == "volume") {
+    gain_ = std::pow(10.0, value / 20.0);
+    return;
+  }
+  if (name == "pan") {
+    pan_ = std::clamp(value, -1.0, 1.0);
+  }
+}
+
 void SineOscillatorNode::prepare(double sampleRate) {
   DSPNode::prepare(sampleRate);
   phase_ = 0.0;
+}
+
+void SineOscillatorNode::locate(std::uint64_t frame) {
+  const double phaseDelta = (2.0 * std::numbers::pi * frequency_) / sampleRate();
+  phase_ = std::fmod(static_cast<double>(frame) * phaseDelta, 2.0 * std::numbers::pi);
 }
 
 void SineOscillatorNode::process(AudioBufferView buffer) {
@@ -53,11 +91,17 @@ void SineOscillatorNode::setParameter(const std::string& name, double value) {
 MixerNode::MixerNode(std::size_t inputCount) : inputs_(inputCount) {}
 
 void MixerNode::process(AudioBufferView buffer) {
+  // SceneGraph has already summed all connected sources into `buffer`. Preserve
+  // that graph input and apply the mixer's gain instead of clearing it.
   for (std::size_t ch = 0; ch < buffer.channelCount(); ++ch) {
     auto channelData = buffer.channel(ch);
-    std::fill(channelData.begin(), channelData.end(), 0.0F);
+    for (auto& sample : channelData) {
+      sample *= static_cast<float>(gain_);
+    }
   }
 
+  // Retain support for explicitly supplied inputs used by embedders outside the
+  // SceneGraph. These inputs are additive to graph-connected sources.
   for (const auto& input : inputs_) {
     if (input.size() != buffer.frameCount()) {
       continue;
@@ -90,6 +134,8 @@ void ClipPlayerNode::prepare(double sampleRate) {
 }
 
 void ClipPlayerNode::reset() { processedFrames_ = 0; }
+
+void ClipPlayerNode::locate(std::uint64_t frame) { processedFrames_ = frame; }
 
 void ClipPlayerNode::setClipBuffer(ClipBufferData data) {
   if (data.frameCount == 0 || data.channels.empty()) {

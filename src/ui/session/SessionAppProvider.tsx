@@ -12,6 +12,11 @@ import {
 } from './environment';
 
 const APP_ENVIRONMENT_CONTEXT = 'app session environment';
+const NATIVE_BRIDGE_DEV_FLAG = 'EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE';
+
+const isNativeBridgeDevelopmentOptInEnabled = (): boolean =>
+  typeof process !== 'undefined' &&
+  process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE === 'true';
 
 export const SessionAppProvider: React.FC<PropsWithChildren> = ({ children }) => {
   const [environment, setEnvironment] = useState<SessionEnvironment | null>(null);
@@ -23,8 +28,14 @@ export const SessionAppProvider: React.FC<PropsWithChildren> = ({ children }) =>
 
   useEffect(() => {
     let cancelled = false;
+    const isNativePlatform = Platform.OS === 'ios' || Platform.OS === 'android';
+    const nativeBridgeDevelopmentOptIn = isNativeBridgeDevelopmentOptInEnabled();
     const shouldUseProduction =
-      !__DEV__ && (Platform.OS === 'ios' || Platform.OS === 'android');
+      isNativePlatform && (!__DEV__ || nativeBridgeDevelopmentOptIn);
+
+    if (__DEV__ && shouldUseProduction) {
+      console.info(`Using production native bridge via ${NATIVE_BRIDGE_DEV_FLAG}.`);
+    }
 
     const bootstrap = async () => {
       try {

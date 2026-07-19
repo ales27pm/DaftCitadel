@@ -12,6 +12,7 @@ describe('useSessionEnvironmentLifecycle', () => {
     manager: {} as SessionManager,
     audioBridge: {
       applySessionUpdate: jest.fn(),
+      resetSession: jest.fn(),
     },
     sessionId: id,
   });

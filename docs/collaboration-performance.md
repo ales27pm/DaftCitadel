@@ -6,14 +6,15 @@ This document explains how the peer-to-peer collaboration stack in `src/services
 
 The collaboration service is built around `CollabSessionService` and helper modules exported from `src/services/collab/index.ts`.
 
-- **WebRTC transport** – `CollabSessionService` composes a `RTCPeerConnection` instance (via dependency injection for testability) and manages a reliable, ordered data channel labelled `daft-collab`. Offer/answer exchange is performed through an injected `PeerSignalingClient`, which can be backed by WebSockets, push notifications, or any custom signaling fabric.
-- **End-to-end encryption** – Each participant generates a Curve25519 identity key pair using `generateIdentityKeyPair`. A per-session shared secret is derived through `EncryptionContext`, which combines the Diffie-Hellman shared secret with an optional pre-shared key and encrypts payloads via XSalsa20-Poly1305 (`tweetnacl.secretbox`). Payloads are versioned (`schemaVersion`) and timestamped (`clock`) before being serialized.
+- **WebRTC transport** – `CollabSessionService` composes a `RTCPeerConnection` instance (via dependency injection for testability) and manages an ordered data channel labelled `daft-collab`. Application-level sequence numbers, acknowledgements, bounded retries, duplicate suppression, and history replay make edit delivery reliable even when a caller selects a partially reliable WebRTC channel configuration. Offer/answer exchange is performed through an injected `PeerSignalingClient`, which can be backed by WebSockets, push notifications, or any custom signaling fabric.
+- **Authenticated end-to-end encryption** – Each participant generates a Curve25519 identity key pair using `generateIdentityKeyPair`. A connection must provide either a session-bound shared authentication secret of at least 16 bytes or an explicit remote-public-key verifier. The handshake binds the protocol version, session ID, role, sender fingerprint, handshake ID, and public key before `EncryptionContext` derives a session-bound key and encrypts payloads via XSalsa20-Poly1305 (`tweetnacl.secretbox`). Both peers then complete encrypted key confirmation, proving private-key possession before either peer is published as authenticated. Unauthenticated key exchange and post-authentication re-handshakes are rejected.
+- **Validated collaboration protocol** – Encrypted messages carry the authenticated sender, session, schema version, timestamp, message ID, and monotonic sequence. The receiver rejects mismatched senders/sessions/schemas, unsafe clocks, malformed frames, and replayed updates before invoking application code. Inbound frame count and byte budgets, staged ICE limits, SDP/ICE size limits, and a bounded pending-acknowledgement window prevent untrusted peers from growing memory without limit. `broadcastUpdate()` resolves only after the remote peer applies and acknowledges the update.
 - **Latency compensation** – `LatencyCompensator` tracks the offset between local and remote clocks using an exponentially weighted moving average. Incoming messages are normalized before surfacing to the app to maintain temporal ordering even on lossy networks.
 - **Network-aware tuning** – `createNetworkDiagnostics` binds to the native `CollabNetworkDiagnostics` module, which should surface CoreWLAN metrics on iOS (RSSI, noise floor, transmit rate) and WifiManager readings on Android (link speed, RSSI). The service adjusts the data channel’s `bufferedAmountLowThreshold` based on the current link speed to keep pacing responsive during throughput changes.
 
 ### Extending the signaling layer
 
-`PeerSignalingClient` is an abstract interface. Implementations must relay events (`offer`, `answer`, `iceCandidate`, `publicKey`, and `shutdown`) to remote peers. The default service registers listeners in its constructor and cleans them up on `stop()`.
+`PeerSignalingClient` is an abstract interface. Implementations must relay events (`offer`, `answer`, `iceCandidate`, `publicKey`, and `shutdown`) to the intended remote peer. The `publicKey` value is now an opaque serialized authenticated-handshake envelope; signaling backends must preserve it byte-for-byte and must not extract or replace the contained key. Authentication prevents a signaling relay from substituting a usable key, but the backend remains responsible for session membership, rate limits, availability, and preventing cross-session message delivery. The service cleans listeners up on `stop()` and reinstalls them on a later `start()`.
 
 ## 2. Collaboration Handshake and Recovery Sequence
 
@@ -22,27 +23,40 @@ same deterministic handshake. `CollabSessionService` emits structured health sna
 UI can reflect connection state without polling low-level primitives.
 
 1. **Session bootstrapping**
-   - Instantiate `CollabSessionService` with a `PeerSignalingClient`, optional
-     `createNetworkDiagnostics()` instance, and a `remoteUpdateApplied` handler that points to
-     `createRemoteSessionPatchApplier(SessionManager)`.
+   - Instantiate `CollabSessionService` with a `PeerSignalingClient`, an `authentication`
+     configuration, an optional `createNetworkDiagnostics()` instance, and an
+     `onRemoteUpdateApplied` handler that points to
+     `createRemoteSessionPatchApplier(SessionManager)`. Provision shared authentication secrets
+     through a secure out-of-band channel and store them with platform keychain/keystore APIs; do
+     not send them through `PeerSignalingClient`.
    - Call `subscribeHealth(listener)` immediately after construction so the UI can present the
      initial `idle → connecting` state while the service negotiates keys.
 2. **Handshake progression**
-   - `start('initiator' | 'responder')` creates/accepts the data channel, broadcasts the Curve25519
-     public key, and begins sampling diagnostics. Health snapshots transition through
+   - `start('initiator' | 'responder')` creates/accepts the data channel, broadcasts the
+     authenticated Curve25519 handshake envelope, and begins sampling diagnostics. Health
+     snapshots transition through
      `connecting` until both the ICE and data-channel callbacks report `connected`.
    - The service records the last network metrics payload and exposes the current
      `RTCDataChannel.readyState` inside `CollabSessionHealthSnapshot` so the UI can surface
      channel quality indicators.
 3. **Remote edits and history**
-   - Remote payloads are timestamp-compensated and delegated to the injected
-     `onRemoteUpdateApplied`. When wired through `createRemoteSessionPatchApplier`, the patch is
-     applied via `SessionManager.updateSession`, ensuring an undo point is recorded before the
-     merged session is emitted.
+   - Remote payloads are validated, sequence-checked, timestamp-compensated, and delegated to the
+     injected `onRemoteUpdateApplied`. Its second argument contains an `AbortSignal`; application
+     handlers must stop before committing when that signal is aborted. When wired through
+     `createRemoteSessionPatchApplier`, the patch is applied via `SessionManager.updateSession`,
+     ensuring an undo point is recorded before the merged session is emitted.
+   - The receiver acknowledges only successfully applied edits. Missing acknowledgements trigger
+     bounded retransmission. Sequence gaps request a replay from bounded outbound history. Supply
+     `onResyncRequested` to return the current canonical session when a requested edit has aged out
+     of that history. Remote appliers should remain idempotent because a transport failure can occur
+     after application but before its acknowledgement arrives.
    - `CollabSessionService` updates `lastLatencyMs`, `averageLatencyMs`, and
      `lastUpdateReceivedAt` in the health snapshot after each frame, allowing the UI to render
      live latency readouts.
 4. **Recovery and teardown**
+   - The sender checks `RTCDataChannel.bufferedAmount` before every frame and waits for
+     `bufferedamountlow` (with a timeout) when the configured high-water mark is exceeded. Health
+     snapshots expose pending acknowledgement counts and the last acknowledged sequence.
    - On disconnection (ICE state `disconnected` or data channel `close`), health snapshots switch
      to `reconnecting`/`disconnected`. The UI should prompt the operator or attempt an automatic
      retry by calling `start` again once signaling reconnects.
@@ -128,8 +142,11 @@ Use `scripts/rvictl-capture.sh` to collect encrypted packets directly from a con
 
 1. Initialize platform diagnostics by calling `createNetworkDiagnostics()` and gating location permission requests on `requiresLocationPermission()`.
 2. Instantiate a `PeerSignalingClient` (WebSocket client recommended) and connect it before invoking `CollabSessionService.start(role)`.
-3. Persist the local public key (`getLocalPublicKey()`) alongside any session metadata to streamline reconnections.
-4. Log `collab.networkMetrics` and `collab.dataChannel.*` events to correlate throughput changes with user activity.
+3. Select one authentication mode:
+   - `shared-secret`: give both peers the same high-entropy secret and session ID through a trusted out-of-band invitation flow.
+   - `verified-key`: implement `verifyRemotePublicKey` against a key fingerprint obtained through a trusted directory, QR code, or an operator confirmation flow. The callback must verify the key for the supplied session ID and sender identity.
+4. Provide `onResyncRequested` when the application can serialize a canonical current session. Without it, recovery is limited to the configured `resyncHistorySize`.
+5. Log `collab.peerAuthenticated`, `collab.resync*`, `collab.acknowledgement*`, `collab.networkMetrics`, and `collab.dataChannel.*` events to correlate authentication and delivery failures with network conditions.
 
 ### Responding to performance regressions
 

@@ -18,4 +18,3 @@
 
 - When adding native-backed adapters, ensure platform entitlements and permissions are captured in docs/ along with build steps.
 - Avoid leaking implementation-specific exceptions; translate them to the shared error vocabulary exposed to session consumers.
-

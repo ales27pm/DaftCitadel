@@ -24,6 +24,11 @@ const setDevFlag = (value: boolean) => {
 describe('SessionAppProvider', () => {
   const originalDev = Boolean((globalThis as { __DEV__?: boolean }).__DEV__);
   const originalPlatform = Platform.OS;
+  const originalNativeBridgeFlag = process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE;
+
+  beforeEach(() => {
+    delete process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE;
+  });
 
   const createDeferred = <T,>() => {
     let resolve!: (value: T | PromiseLike<T>) => void;
@@ -59,6 +64,11 @@ describe('SessionAppProvider', () => {
     jest.resetAllMocks();
     Platform.OS = originalPlatform;
     setDevFlag(originalDev);
+    if (originalNativeBridgeFlag === undefined) {
+      delete process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE;
+    } else {
+      process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE = originalNativeBridgeFlag;
+    }
   });
 
   const renderWithConsumer = async () => {
@@ -130,6 +140,48 @@ describe('SessionAppProvider', () => {
     expect(productionSpy).not.toHaveBeenCalled();
     expect(status).toBe('ready');
     expect(name).toBe('Demo Performance');
+  });
+
+  it('uses the production bridge in a custom mobile dev build when opted in', async () => {
+    setDevFlag(true);
+    Platform.OS = 'android';
+    process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE = 'true';
+    const environment = await createTestEnvironment('native-dev-session');
+    const productionSpy = jest
+      .spyOn(environmentModule, 'createProductionSessionEnvironment')
+      .mockResolvedValue(environment);
+    const passiveSpy = jest
+      .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+      .mockImplementation(() => {
+        throw new Error('Passive environment should not be used');
+      });
+
+    const { status } = await renderWithConsumer();
+
+    expect(productionSpy).toHaveBeenCalledTimes(1);
+    expect(passiveSpy).not.toHaveBeenCalled();
+    expect(status).toBe('ready');
+  });
+
+  it('keeps web passive even when the native bridge flag is enabled', async () => {
+    setDevFlag(true);
+    Platform.OS = 'web';
+    process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE = 'true';
+    const environment = await createTestEnvironment('web-dev-session');
+    const passiveSpy = jest
+      .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+      .mockResolvedValue(environment);
+    const productionSpy = jest
+      .spyOn(environmentModule, 'createProductionSessionEnvironment')
+      .mockImplementation(() => {
+        throw new Error('Production environment should not be used on web');
+      });
+
+    const { status } = await renderWithConsumer();
+
+    expect(passiveSpy).toHaveBeenCalledTimes(1);
+    expect(productionSpy).not.toHaveBeenCalled();
+    expect(status).toBe('ready');
   });
 
   it('falls back to passive environment when native audio is unavailable', async () => {

@@ -235,7 +235,7 @@ const audioEngineModule = {
     sampleRate: number,
     channels: number,
     frames: number,
-    channelData: Array<ArrayBuffer | ArrayBufferView>,
+    channelData: Array<string | ArrayBuffer | ArrayBufferView>,
   ) => {
     const key = bufferKey.trim();
     if (!key) {
@@ -255,14 +255,19 @@ const audioEngineModule = {
     }
     const floatChannels = channelData.map((payload, index) => {
       let source: ArrayBuffer;
-      if (isArrayBufferLike(payload)) {
-        source = payload;
+      if (typeof payload === 'string') {
+        const decoded = Buffer.from(payload, 'base64');
+        source = Uint8Array.from(decoded).buffer;
+      } else if (isArrayBufferLike(payload)) {
+        const bytes = new Uint8Array(payload);
+        source = Uint8Array.from(bytes).buffer;
       } else if (ArrayBuffer.isView(payload)) {
         const view = payload as ArrayBufferView;
-        source = view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
+        const bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+        source = Uint8Array.from(bytes).buffer;
       } else {
         throw new Error(
-          `channelData[${index}] must be an ArrayBuffer or ArrayBufferView`,
+          `channelData[${index}] must be base64, an ArrayBuffer, or an ArrayBufferView`,
         );
       }
       const view = new Float32Array(source);

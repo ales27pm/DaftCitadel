@@ -74,7 +74,7 @@ This roadmap captures the near-term delivery goals for Daft Citadel as we bring 
 ## Operational Considerations
 
 - **Security posture**: Collaboration and plugin telemetry must respect encryption constraints defined in `src/services/collab/EncryptionManager.ts`; redact identifiers before emitting analytics.
-- **Testing**: Gate merges on `npm run lint`, `npm run test`, `npm run typecheck`, `npm run prettier`, and `npm run manage:agents` (which now refreshes managed docs such as this roadmap). Expand CI to execute the same checks on macOS and Linux runners.
+- **Testing**: Gate merges on `npm run lint`, `npm run test`, `npm run typecheck`, `npm run format`, and `npm run manage:agents` (which now refreshes managed docs such as this roadmap). Expand CI to execute the same checks on macOS and Linux runners.
 - **Support readiness**: Keep `TEST_SUMMARY.md` and `docs/collaboration-performance.md` updated so support staff can reproduce expected behaviour and diagnose reports quickly.
 
 ## Decision Log

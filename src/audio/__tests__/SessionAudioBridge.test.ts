@@ -375,14 +375,20 @@ describe('SessionAudioBridge', () => {
     expect(initialNodes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: expect.stringContaining('track-1:input') }),
-        expect.objectContaining({ id: expect.stringContaining('track-1:output') }),
+        expect.objectContaining({
+          id: expect.stringContaining('track-1:output'),
+          type: 'trackOutput',
+          options: expect.objectContaining({ gain: 1, pan: 0 }),
+        }),
         expect.objectContaining({ type: 'clipPlayer' }),
       ]),
     );
     expect(connect).toHaveBeenCalled();
     expect(disconnect).not.toHaveBeenCalled();
     expect(removeNodes).not.toHaveBeenCalled();
-    expect(publishAutomation).toHaveBeenCalledTimes(1);
+    // Clip gain and fades are rendered sample-by-sample by ClipPlayerNode; the
+    // discrete automation scheduler is reserved for explicit session curves.
+    expect(publishAutomation).not.toHaveBeenCalled();
 
     configureNodes.mockClear();
     connect.mockClear();
@@ -467,6 +473,35 @@ describe('SessionAudioBridge', () => {
     await expect(bridge.applySessionUpdate(sessionWithoutGraph)).rejects.toThrow(
       /missing a routing graph/,
     );
+  });
+
+  it('materializes routing connection gain as a native gain node', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine, configureNodes, connect } = createMockEngine(clock);
+    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    const graph = createDefaultTrackRoutingGraph('track-gain');
+    const connection = graph.connections[0];
+    connection.gain = 0.25;
+    const sourceId = connection.from.nodeId;
+    const destinationId = connection.to.nodeId;
+
+    await bridge.applySessionUpdate(
+      createSession({
+        tracks: [createTrack({ id: 'track-gain', clips: [], routing: { graph } })],
+      }),
+    );
+
+    const configuredNodes = configureNodes.mock.calls.flatMap(
+      ([batch]) => batch as Array<{ id: string; type: string; options?: object }>,
+    );
+    const gainNode = configuredNodes.find((node) => node.type === 'gain');
+    expect(gainNode).toEqual(
+      expect.objectContaining({ options: expect.objectContaining({ gain: 0.25 }) }),
+    );
+    expect(connect).toHaveBeenCalledWith(sourceId, gainNode?.id);
+    expect(connect).toHaveBeenCalledWith(gainNode?.id, destinationId);
+    expect(connect).not.toHaveBeenCalledWith(sourceId, destinationId);
   });
 
   it('logs errors when audio files fail to load or are invalid', async () => {
@@ -556,7 +591,7 @@ describe('SessionAudioBridge', () => {
 
     await bridge.applySessionUpdate(session);
 
-    expect(publishAutomation).toHaveBeenCalledTimes(4);
+    expect(publishAutomation).toHaveBeenCalledTimes(2);
     type LanePayload = ReturnType<AutomationLane['toPayload']>;
     const lanePayloads = publishAutomation.mock.calls.map(([, lane]) =>
       lane.toPayload(),
@@ -565,7 +600,6 @@ describe('SessionAudioBridge', () => {
       expect.arrayContaining([
         expect.objectContaining({ parameter: 'volume' }),
         expect.objectContaining({ parameter: 'pan' }),
-        expect.objectContaining({ parameter: 'gain' }),
       ]),
     );
     const allFrames = lanePayloads.flatMap((payload) =>
@@ -607,7 +641,16 @@ describe('SessionAudioBridge', () => {
 
     await bridge.applySessionUpdate(emptySession);
 
-    expect(removeNodes).toHaveBeenCalledTimes(2);
+    const removedNodeIds = removeNodes.mock.calls.flatMap(
+      ([nodeIds]) => nodeIds as string[],
+    );
+    expect(removedNodeIds).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('clip:'),
+        expect.stringContaining('track-1:input'),
+        expect.stringContaining('track-1:output'),
+      ]),
+    );
   });
 
   it('publishes clearing automation when curves are removed', async () => {
@@ -1356,6 +1399,28 @@ describe('SessionAudioBridge', () => {
     expect(releaseClipBuffer).toHaveBeenCalledWith(firstKey);
   });
 
+  it('resets active session state without destroying the audio engine', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine, stopTransport, removeNodes, releaseClipBuffer } =
+      createMockEngine(clock);
+    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+
+    await bridge.applySessionUpdate(createSession({ revision: 40 }));
+    stopTransport.mockClear();
+    removeNodes.mockClear();
+    releaseClipBuffer.mockClear();
+
+    await bridge.resetSession();
+
+    expect(stopTransport).toHaveBeenCalledTimes(1);
+    expect(removeNodes).toHaveBeenCalled();
+    expect(releaseClipBuffer).toHaveBeenCalledTimes(1);
+    await expect(
+      bridge.applySessionUpdate(createSession({ revision: 1, tracks: [] })),
+    ).resolves.toBeUndefined();
+  });
+
   it('reloads clip buffers when clip sources change and releases stale entries', async () => {
     const { loader } = createLoader(sampleRate, frames);
     const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
@@ -1481,7 +1546,7 @@ describe('SessionAudioBridge', () => {
       await bridge.dispose();
     });
 
-    it('stops polling when disposed', async () => {
+    it('starts polling lazily and stops each poller after its last unsubscribe', async () => {
       const { loader } = createLoader(observerSampleRate, observerSampleRate);
       const clock = new ClockSyncService(
         observerSampleRate,
@@ -1498,7 +1563,18 @@ describe('SessionAudioBridge', () => {
 
       await flushAsync();
 
+      expect(getTransportState).not.toHaveBeenCalled();
+      expect(getRenderDiagnostics).not.toHaveBeenCalled();
+
+      const unsubscribeTransport = bridge.subscribeTransport(jest.fn());
+      await flushAsync();
+
       expect(getTransportState).toHaveBeenCalledTimes(1);
+      expect(getRenderDiagnostics).not.toHaveBeenCalled();
+
+      const unsubscribeDiagnostics = bridge.subscribeDiagnostics(jest.fn());
+      await flushAsync();
+
       expect(getRenderDiagnostics).toHaveBeenCalledTimes(1);
 
       jest.advanceTimersByTime(800);
@@ -1510,13 +1586,56 @@ describe('SessionAudioBridge', () => {
       const transportCalls = getTransportState.mock.calls.length;
       const diagnosticsCalls = getRenderDiagnostics.mock.calls.length;
 
-      await bridge.dispose();
+      unsubscribeTransport();
 
       jest.advanceTimersByTime(800);
       await flushAsync();
 
       expect(getTransportState).toHaveBeenCalledTimes(transportCalls);
-      expect(getRenderDiagnostics).toHaveBeenCalledTimes(diagnosticsCalls);
+      expect(getRenderDiagnostics.mock.calls.length).toBeGreaterThan(diagnosticsCalls);
+
+      const diagnosticsCallsAfterTransportUnsubscribe =
+        getRenderDiagnostics.mock.calls.length;
+      unsubscribeDiagnostics();
+
+      jest.advanceTimersByTime(800);
+      await flushAsync();
+
+      expect(getTransportState).toHaveBeenCalledTimes(transportCalls);
+      expect(getRenderDiagnostics).toHaveBeenCalledTimes(
+        diagnosticsCallsAfterTransportUnsubscribe,
+      );
+
+      await bridge.dispose();
+    });
+
+    it('refreshes transport once after an update without starting a poller', async () => {
+      const { loader } = createLoader(observerSampleRate, observerSampleRate);
+      const clock = new ClockSyncService(
+        observerSampleRate,
+        observerFramesPerBuffer,
+        120,
+      );
+      const { engine, getTransportState, getRenderDiagnostics } = createMockEngine(clock);
+      const bridge = new SessionAudioBridge(engine, {
+        fileLoader: loader,
+        transportPollIntervalMs: 10,
+        diagnosticsPollIntervalMs: 10,
+      });
+
+      await bridge.applySessionUpdate(createSession({ revision: 70, tracks: [] }));
+      await flushAsync();
+
+      expect(getTransportState).toHaveBeenCalledTimes(1);
+      expect(getRenderDiagnostics).not.toHaveBeenCalled();
+
+      jest.advanceTimersByTime(800);
+      await flushAsync();
+
+      expect(getTransportState).toHaveBeenCalledTimes(1);
+      expect(getRenderDiagnostics).not.toHaveBeenCalled();
+
+      await bridge.dispose();
     });
 
     it('emits diagnostics error snapshots when polling fails', async () => {

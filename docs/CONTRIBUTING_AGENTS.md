@@ -18,7 +18,7 @@ Use this document when proposing changes to the automation agent configuration o
    - Run `python3 scripts/agents_sync.py plan --json` and verify that the plan contains only the intended changes.
    - Apply with `python3 scripts/agents_sync.py apply --auto-branch` or, if working on a feature branch, run without `--auto-branch` and commit manually.
 4. **Run mandatory quality gates**
-   - `npm run prettier`
+   - `npm run format`
    - `npm run lint`
    - `npm run typecheck`
    - `npm run test`

@@ -1,0 +1,37 @@
+{
+  "expo": {
+    "name": "Daft Citadel",
+    "slug": "daft-citadel",
+    "version": "1.0.0",
+    "orientation": "default",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "ios": {
+      "bundleIdentifier": "dev.daftcitadel.app",
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "dev.daftcitadel.app"
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      "./plugins/with-daft-citadel-native",
+      "expo-dev-client",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "15.1"
+          },
+          "android": {
+            "minSdkVersion": 24,
+            "compileSdkVersion": 36,
+            "targetSdkVersion": 36
+          }
+        }
+      ]
+    ]
+  }
+}

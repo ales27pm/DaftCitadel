@@ -13,7 +13,7 @@ import Animated, {
   useDerivedValue,
   useSharedValue,
 } from 'react-native-reanimated';
-import type { AnimatedScrollEvent } from 'react-native-reanimated';
+import type { ScrollEvent } from 'react-native-reanimated';
 
 import { ThemeIntent, mapIntentToColor } from '../../design-system/tokens';
 import { useTheme } from '../../design-system/theme';
@@ -59,7 +59,7 @@ export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
   });
 
   const onScroll = useAnimatedScrollHandler({
-    onScroll: (event: AnimatedScrollEvent) => {
+    onScroll: (event: ScrollEvent) => {
       scrollX.value = event.contentOffset.x;
     },
   });

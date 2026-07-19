@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToLong
+import kotlin.math.roundToInt
 import android.util.Base64
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -27,6 +28,7 @@ class AudioEngineModule(private val reactContext: ReactApplicationContext) :
   }
 
   private val maxFramesPerBuffer: Int by lazy { nativeMaxFramesPerBuffer() }
+  private val deviceDriver = AudioTrackDeviceDriver(::nativeRenderInterleaved)
 
   /**
  * The module's name as exposed to React Native.
@@ -53,6 +55,11 @@ override fun getName(): String = NAME
       promise.reject("invalid_arguments", "sampleRate must be positive and finite")
       return
     }
+    val deviceSampleRate = sampleRate.roundToInt()
+    if (abs(sampleRate - deviceSampleRate.toDouble()) > 1e-6) {
+      promise.reject("invalid_arguments", "sampleRate must be an integer value")
+      return
+    }
     if (!framesPerBuffer.isFinite() || framesPerBuffer <= 0.0) {
       promise.reject("invalid_arguments", "framesPerBuffer must be positive and finite")
       return
@@ -71,9 +78,13 @@ override fun getName(): String = NAME
       return
     }
     try {
+      deviceDriver.stop()
       nativeInitialize(sampleRate, framesInt)
+      deviceDriver.start(deviceSampleRate, framesInt)
       promise.resolve(null)
     } catch (error: Exception) {
+      deviceDriver.stop()
+      runCatching { nativeShutdown() }
       promise.reject("initialize_failed", error)
     }
   }
@@ -89,6 +100,7 @@ override fun getName(): String = NAME
   @ReactMethod
   fun shutdown(promise: Promise) {
     try {
+      deviceDriver.stop()
       nativeShutdown()
       promise.resolve(null)
     } catch (error: Exception) {
@@ -96,11 +108,17 @@ override fun getName(): String = NAME
     }
   }
 
+  override fun invalidate() {
+    deviceDriver.stop()
+    runCatching { nativeShutdown() }
+    super.invalidate()
+  }
+
   /**
    * Adds a node to the audio engine graph using the provided identifier, type, and options.
    *
    * The `nodeId` and `nodeType` are trimmed and must be non-empty. The `options` map is sanitized into
-   * a String-to-Double map where numeric, boolean, and parseable-string values are converted to `Double`.
+   * a normalized map while preserving string identifiers required by clip and plugin nodes.
    * On success the provided `promise` is resolved; on failure it is rejected with an error code.
    *
    * @param nodeId Unique identifier for the node (trimmed; required).
@@ -321,7 +339,7 @@ override fun getName(): String = NAME
     promise: Promise
   ) {
     val sanitizedNodeId = nodeId.trim()
-    val sanitizedParameter = parameter.trim()
+    val sanitizedParameter = parameter.trim().lowercase(Locale.US)
     if (sanitizedNodeId.isEmpty() || sanitizedParameter.isEmpty()) {
       promise.reject("invalid_arguments", "nodeId and parameter are required")
       return
@@ -344,6 +362,59 @@ override fun getName(): String = NAME
       promise.resolve(null)
     } catch (error: Exception) {
       promise.reject("automation_failed", error)
+    }
+  }
+
+  @ReactMethod
+  fun startTransport(promise: Promise) {
+    try {
+      nativeStartTransport()
+      promise.resolve(null)
+    } catch (error: Exception) {
+      promise.reject("transport_start_failed", error)
+    }
+  }
+
+  @ReactMethod
+  fun stopTransport(promise: Promise) {
+    try {
+      nativeStopTransport()
+      promise.resolve(null)
+    } catch (error: Exception) {
+      promise.reject("transport_stop_failed", error)
+    }
+  }
+
+  @ReactMethod
+  fun locateTransport(frame: Double, promise: Promise) {
+    if (!frame.isFinite() || frame < 0.0) {
+      promise.reject("invalid_arguments", "frame must be a non-negative integer")
+      return
+    }
+    val frameTicks = frame.roundToLong()
+    if (abs(frame - frameTicks.toDouble()) > 1e-6) {
+      promise.reject("invalid_arguments", "frame must be a non-negative integer")
+      return
+    }
+    try {
+      nativeLocateTransport(frameTicks)
+      promise.resolve(null)
+    } catch (error: Exception) {
+      promise.reject("transport_locate_failed", error)
+    }
+  }
+
+  @ReactMethod
+  fun getTransportState(promise: Promise) {
+    try {
+      val state = nativeGetTransportState()
+      val payload = Arguments.createMap().apply {
+        putDouble("currentFrame", state[0])
+        putBoolean("isPlaying", state[1] != 0.0)
+      }
+      promise.resolve(payload)
+    } catch (error: Exception) {
+      promise.reject("transport_state_failed", error)
     }
   }
 
@@ -390,13 +461,13 @@ private external fun nativeInitialize(sampleRate: Double, framesPerBuffer: Int)
  */
 private external fun nativeShutdown()
   /**
- * Adds a new node to the native audio engine graph with the specified identifier, type, and numeric options.
+ * Adds a new node to the native audio engine graph with the specified identifier, type, and options.
  *
  * @param nodeId The node's unique identifier (expected to be a trimmed, non-empty string).
  * @param nodeType The node's type name (expected to be a trimmed, non-empty string).
- * @param options A map of option names to numeric values to configure the node; keys should be normalized lowercase strings.
+ * @param options A map of normalized option names to numeric or string values.
  */
-private external fun nativeAddNode(nodeId: String, nodeType: String, options: Map<String, Double>)
+private external fun nativeAddNode(nodeId: String, nodeType: String, options: Map<String, Any>)
   /**
  * Removes the audio graph node identified by `nodeId` from the native audio engine.
  *
@@ -426,6 +497,11 @@ private external fun nativeDisconnectNodes(source: String, destination: String)
  * @param value The value to apply to the parameter at the specified frame.
  */
 private external fun nativeScheduleAutomation(nodeId: String, parameter: String, frame: Long, value: Double)
+private external fun nativeStartTransport()
+private external fun nativeStopTransport()
+private external fun nativeLocateTransport(frame: Long)
+private external fun nativeGetTransportState(): DoubleArray
+private external fun nativeRenderInterleaved(output: FloatArray, channels: Int, frames: Int)
   /**
    * Registers a multi-channel Float32 clip buffer with the native audio engine.
    *
@@ -460,16 +536,19 @@ private external fun nativeGetDiagnostics(): DoubleArray
 private external fun nativeMaxFramesPerBuffer(): Int
 
   /**
-   * Convert and normalize option entries into numeric values keyed by normalized names.
+   * Convert and normalize option entries while retaining native node identifiers.
    *
    * @param options A map of option entries whose values may be numbers, booleans, strings, or null.
-   * @return A map whose keys are trimmed and lowercased, and whose values are `Double`. Numbers are converted to `Double`, booleans map to `1.0` (true) or `0.0` (false), and strings are interpreted as boolean tokens (`"true"|"yes"|"on"` → `1.0`, `"false"|"no"|"off"` → `0.0`) or parsed as numeric values. Entries with empty keys, empty strings, nulls, or unparseable string values are omitted.
+   * @return A map whose keys are trimmed and lowercased. Numbers and booleans
+   * are represented as `Double`; non-empty strings are preserved so JNI can
+   * retain values such as `bufferKey` and `hostInstanceId` while also parsing
+   * numeric/boolean string tokens where appropriate.
    */
-  private fun sanitizeOptions(options: Map<String, Any?>): Map<String, Double> {
+  private fun sanitizeOptions(options: Map<String, Any?>): Map<String, Any> {
     if (options.isEmpty()) {
       return emptyMap()
     }
-    val sanitized = HashMap<String, Double>(options.size)
+    val sanitized = HashMap<String, Any>(options.size)
     options.forEach { (rawKey, rawValue) ->
       val key = rawKey.trim().lowercase(Locale.US)
       if (key.isEmpty()) {
@@ -483,18 +562,7 @@ private external fun nativeMaxFramesPerBuffer(): Int
           if (trimmed.isEmpty()) {
             return@forEach
           }
-          val lowered = trimmed.lowercase(Locale.US)
-          when (lowered) {
-            "true", "yes", "on" -> {
-              sanitized[key] = 1.0
-              return@forEach
-            }
-            "false", "no", "off" -> {
-              sanitized[key] = 0.0
-              return@forEach
-            }
-          }
-          trimmed.toDoubleOrNull()?.let { sanitized[key] = it }
+          sanitized[key] = trimmed
         }
       }
     }
