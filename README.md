@@ -110,9 +110,10 @@ npm run web               # passive-environment browser shell
 ```
 
 This app requires a custom development build; Expo Go cannot load its local
-native modules. The CI workflow compiles an Android debug app and an unsigned
-iOS Simulator app on every pull request, and separately runs the C++ engine under
-AddressSanitizer and UndefinedBehaviorSanitizer. See
+native modules. Run `npm run verify` before pushing to execute the portable
+repository and native-core checks locally; `npm run verify:sanitize` adds the
+AddressSanitizer and UndefinedBehaviorSanitizer pass. Platform builds remain
+explicit local steps on machines with the Android or iOS SDK. See
 [`docs/native-mobile.md`](docs/native-mobile.md) for prerequisites, entitlements,
 and native verification commands.
 
@@ -120,8 +121,8 @@ and native verification commands.
 
 The React Native shell mounts `SessionAppProvider` (`src/ui/session/SessionAppProvider.tsx`) as the root session boundary. The provider selects the correct environment at runtime:
 
-- **Production (iOS/Android release builds)** &mdash; Initializes the native `AudioEngine`, loads the persisted session via the platform storage adapter, provisions the plugin host, and streams updates through `SessionAudioBridge`.
-- **Passive fallback (development, simulators, web)** &mdash; Uses the in-memory audio bridge so transport and editor flows remain testable when native audio is unavailable.
+- **Native mobile builds (development and release)** &mdash; Attempt to initialize the native `AudioEngine`, load the persisted session via the platform storage adapter, provision supported plugin hosts, and stream updates through `SessionAudioBridge`.
+- **Passive fallback (Expo Go and web)** &mdash; Uses the in-memory audio bridge so transport and editor flows remain testable when native audio is unavailable.
 - **Native audio fallback** &mdash; Automatically falls back to the passive environment if the native engine or sample loader is unavailable, or if the device cannot initialise the requested audio configuration, while logging the failure for diagnostics.
 
 `SessionViewModelProvider` consumes the environment and loads the active session. Persistent environments seed an empty `Untitled Session` on first launch so a clean install never depends on fixture-only WAV paths; the full demo project remains available through the explicit demo environment used by previews and tests. When the React tree unmounts, both the audio bridge and plugin host dispose cleanly so rerenders or fast-refresh cycles do not leak native resources.

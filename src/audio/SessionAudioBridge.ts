@@ -423,9 +423,12 @@ export class SessionAudioBridge implements AudioEngineBridge {
     await attempt('clear plugin automation', () =>
       this.applyPluginAutomations(new Map<string, PluginAutomationRequest>()),
     );
-    await attempt('clear graph', () =>
-      this.graph.apply(new Map<string, NodeConfiguration>(), new Set<ConnectionKey>()),
-    );
+    await attempt('clear graph', async () => {
+      await this.graph.apply(
+        new Map<string, NodeConfiguration>(),
+        new Set<ConnectionKey>(),
+      );
+    });
     await attempt('release plugins', () =>
       this.releaseStalePluginInstances(new Set<string>()),
     );
@@ -484,8 +487,11 @@ export class SessionAudioBridge implements AudioEngineBridge {
       pluginNodes: desiredState.pluginNodes,
     });
 
-    await this.graph.apply(desiredState.nodes, desiredState.connections);
-    await this.automationPublisher.applyChanges(desiredState.automations);
+    const graphChanges = await this.graph.apply(
+      desiredState.nodes,
+      desiredState.connections,
+    );
+    await this.automationPublisher.applyChanges(desiredState.automations, graphChanges);
     await this.applyPluginAutomations(desiredState.pluginAutomations);
     await this.releaseStalePluginInstances(desiredState.activePluginInstances);
     await this.reconcileClipBuffers(desiredState.clipBuffers);

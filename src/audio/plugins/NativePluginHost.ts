@@ -14,6 +14,11 @@ export interface PluginAutomationPoint {
 }
 
 export interface PluginHostSpec extends TurboModule {
+  /**
+   * Native hosts must set this only after their render callback is connected to
+   * the audio engine. Merely linking the discovery/control bridge is not enough.
+   */
+  readonly runtimeReady?: boolean;
   queryAvailablePlugins(format?: string): Promise<PluginDescriptor[]>;
   instantiatePlugin(
     identifier: string,
@@ -77,5 +82,5 @@ const unavailableModule = new Proxy({} as PluginHostSpec, {
 export const NativePluginHost: PluginHostSpec = registeredModule ?? unavailableModule;
 
 export const isPluginHostAvailable = (): boolean => {
-  return registeredModule != null;
+  return registeredModule?.runtimeReady === true;
 };

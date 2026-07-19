@@ -17,6 +17,8 @@ type NativeAudioFileLoaderModule = {
 };
 
 const MODULE_NAME = 'AudioSampleLoaderModule';
+const MAX_MOBILE_CHANNELS = 8;
+const MAX_DECODED_PCM_BYTES = 64 * 1024 * 1024;
 
 export class NativeAudioFileLoader implements AudioFileLoader {
   private readonly nativeModule: NativeAudioFileLoaderModule;
@@ -63,11 +65,25 @@ const validateDecodedPayload = (sample: NativeAudioSample, filePath: string): vo
   if (!Number.isFinite(sample.sampleRate) || sample.sampleRate <= 0) {
     throw new Error(`AudioSampleLoader returned invalid sampleRate for ${filePath}`);
   }
-  if (!Number.isInteger(sample.channels) || sample.channels <= 0) {
+  if (
+    !Number.isInteger(sample.channels) ||
+    sample.channels <= 0 ||
+    sample.channels > MAX_MOBILE_CHANNELS
+  ) {
     throw new Error(`AudioSampleLoader returned invalid channel count for ${filePath}`);
   }
-  if (!Number.isInteger(sample.frames) || sample.frames <= 0) {
+  if (!Number.isSafeInteger(sample.frames) || sample.frames <= 0) {
     throw new Error(`AudioSampleLoader returned invalid frame count for ${filePath}`);
+  }
+  const decodedByteCount =
+    sample.frames * sample.channels * Float32Array.BYTES_PER_ELEMENT;
+  if (
+    !Number.isSafeInteger(decodedByteCount) ||
+    decodedByteCount > MAX_DECODED_PCM_BYTES
+  ) {
+    throw new Error(
+      `AudioSampleLoader returned audio larger than the mobile PCM budget for ${filePath}`,
+    );
   }
   if (
     !Array.isArray(sample.channelData) ||

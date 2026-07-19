@@ -175,8 +175,9 @@ void ClipPlayerNode::process(AudioBufferView buffer) {
   const std::uint64_t bufferFrameCount = static_cast<std::uint64_t>(clipBuffer_.frameCount);
   const std::uint64_t effectiveEnd = std::min<std::uint64_t>(endFrame, startFrame + bufferFrameCount);
   const std::uint64_t playbackFrames = effectiveEnd > startFrame ? (effectiveEnd - startFrame) : 0;
-  const std::uint64_t fadeOutStart =
-      (fadeOutFrames_ >= playbackFrames || playbackFrames == 0) ? startFrame : (effectiveEnd - fadeOutFrames_);
+  const std::uint64_t fadeInFrames = std::min(fadeInFrames_, playbackFrames);
+  const std::uint64_t fadeOutFrames = std::min(fadeOutFrames_, playbackFrames);
+  const std::uint64_t fadeOutStart = effectiveEnd - fadeOutFrames;
 
   for (std::size_t frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
     const std::uint64_t absoluteFrame = processedFrames_ + frameIndex;
@@ -190,14 +191,18 @@ void ClipPlayerNode::process(AudioBufferView buffer) {
     }
 
     double amplitude = gain_;
-    if (fadeInFrames_ > 0 && absoluteFrame < startFrame + fadeInFrames_) {
+    if (fadeInFrames > 0 && absoluteFrame < startFrame + fadeInFrames) {
       const std::uint64_t offset = absoluteFrame - startFrame;
-      amplitude *= static_cast<double>(offset + 1) / static_cast<double>(fadeInFrames_);
+      amplitude *= fadeInFrames == 1
+                       ? 0.0
+                       : static_cast<double>(offset) / static_cast<double>(fadeInFrames - 1);
     }
-    if (fadeOutFrames_ > 0 && absoluteFrame >= fadeOutStart) {
-      const std::uint64_t remaining = effectiveEnd > absoluteFrame ? (effectiveEnd - absoluteFrame) : 0;
-      const auto divisor = std::max<std::uint64_t>(1, std::min(fadeOutFrames_, playbackFrames));
-      amplitude *= static_cast<double>(remaining) / static_cast<double>(divisor);
+    if (fadeOutFrames > 0 && absoluteFrame >= fadeOutStart) {
+      const std::uint64_t remaining = effectiveEnd - absoluteFrame - 1;
+      amplitude *= fadeOutFrames == 1
+                       ? 0.0
+                       : static_cast<double>(remaining) /
+                             static_cast<double>(fadeOutFrames - 1);
     }
 
     for (std::size_t channel = 0; channel < outputChannels; ++channel) {

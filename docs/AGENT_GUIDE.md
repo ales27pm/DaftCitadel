@@ -8,15 +8,15 @@ This guide explains how Daft Citadel uses automation agents to keep contributor 
 
 ## Agent Tooling Basics
 
-- `scripts/agents_sync.py plan` — Reads `agents.config.json`, compares desired instructions with the workspace, and prints proposed changes. Use the `--json` flag when you need machine-readable output for CI annotations.
+- `scripts/agents_sync.py plan` — Reads `agents.config.json`, compares desired instructions with the workspace, and prints proposed changes. Use the `--json` flag when you need a machine-readable local review report.
 - `scripts/agents_sync.py apply` — Applies the planned changes, writing Markdown files and committing them if `--auto-branch` is provided.
-- `npm run manage:agents` — Convenience script that regenerates all AGENTS.md files and then runs `agents_sync.py apply --no-commit` so docs/ROADMAP.md and other managed guides stay synchronized; the command re-runs `agents_sync.py plan` afterward and fails fast if drift remains, and CI also executes it to ensure changes do not reach `main`.
+- `npm run manage:agents` — Convenience script that regenerates all AGENTS.md files and then runs `agents_sync.py apply --no-commit` so docs/ROADMAP.md and other managed guides stay synchronized; the command re-runs `agents_sync.py plan` afterward and fails fast if drift remains. Run it locally before changes reach `main`.
 - `npm run maintain:docs` — Self-contained documentation maintenance workflow that invokes `agents_sync.py` directly for roadmap and guide updates, formats everything under `docs/` with Prettier, and exits non-zero if any managed artifact still needs manual intervention; accepts `--no-prettier` and `--check` just like `scripts/maintainDocs.js`.
 
 ## Daily Workflow
 
 1. Run `python3 scripts/agents_sync.py plan` from the repository root to preview upcoming changes. The command prints a human-readable summary to stdout.
-2. When you need a machine-readable snapshot, rerun `plan` with `--json`; this writes `.agents/reports/<timestamp>.plan.json`, which you can inspect locally or upload as a CI artifact.
+2. When you need a machine-readable snapshot, rerun `plan` with `--json`; this writes `.agents/reports/<timestamp>.plan.json`, which you can inspect locally or attach to the pull-request review.
 3. Apply the plan with `python3 scripts/agents_sync.py apply --auto-branch`. Use the new `--no-commit` flag when you want to review changes before committing, or omit it to let the tool capture a dedicated sync commit on a throwaway branch.
 4. Execute the required quality gates before opening a PR:
    - `npm run format`
@@ -38,7 +38,7 @@ This guide explains how Daft Citadel uses automation agents to keep contributor 
 
 - **Unexpected placeholders**: If the plan introduces generic “Candidate Sections” headers, re-run `plan --json` to inspect which content was detected. Update `agents.config.json` to include a curated template, then apply again.
 - **Merge conflicts**: When rebasing, regenerate documentation after resolving conflicts to ensure the managed files reflect the merged state.
-- **CI failures**: The CI job surfaces report paths in the log. Download the referenced `.report.json` artifact to review the failure, then reproduce locally.
+- **Local verification failures**: Read the report path printed by the failing command, inspect the referenced `.report.json`, and rerun the smallest failing check after remediation.
 
 ## Automation Testing
 

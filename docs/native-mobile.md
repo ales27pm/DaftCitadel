@@ -22,8 +22,8 @@ npx expo prebuild --clean --no-install
 
 Run that command after changing bundle identifiers, native dependencies,
 deployment targets, permissions, or module registration. Review the native diff
-before committing it. CI repeats the clean prebuild and fails if either committed
-host drifts, then the platform jobs compile those checked-in projects directly.
+before committing it. A whitespace-only line-ending difference may be ignored,
+but every semantic host change must be committed with its source configuration.
 
 ## Run a development build
 
@@ -32,12 +32,15 @@ npm run android
 npm run ios
 ```
 
-These commands build a custom development client. Expo Go is not sufficient
-because `AudioEngineModule`, `AudioSampleLoaderModule`, `CollabConnectionModule`,
-and the platform plugin hosts are compiled locally. `npm run web` remains useful
-for UI work and deliberately uses the passive audio/session environment. Web
-sessions use browser storage when available and fall back to failure-atomic
-in-memory storage in restricted browser contexts.
+These commands build a custom development client. On iOS and Android,
+`SessionAppProvider` detects the locally linked `AudioEngineModule` and attempts
+the production/native environment in both debug and release builds. If the
+module is missing or cannot initialize, it safely falls back to the passive
+environment. Expo Go therefore remains usable for passive UI/session work, but
+cannot exercise `AudioEngineModule`, `AudioSampleLoaderModule`, or
+`CollabNetworkDiagnostics`. `npm run web` always stays passive. Set
+`EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE=false` only when a custom client must
+be forced into passive mode for debugging.
 
 ## Native module layout
 
@@ -49,40 +52,51 @@ in-memory storage in restricted browser contexts.
 - `plugins/with-daft-citadel-native.js` registers the legacy React Native package
   alongside Expo's automatically linked health module.
 - `AudioSampleLoaderModule` decodes bounded WAV/PCM data off the render path and
-  returns planar Float32 payloads for the native clip registry.
+  returns planar Float32 payloads for the native clip registry. Mobile decodes
+  are limited to 8 channels and 64 MiB of decoded PCM; Android also caps the
+  encoded input at 64 MiB. Larger assets require a future streaming loader.
 
-Android declares Wi-Fi discovery permissions in the local module manifest.
-Device collaboration on iOS also requires the Wi-Fi information and local
-network capabilities to be enabled for the app's signing profile; Simulator CI
-does not add production entitlements.
+Android declares version-scoped Wi-Fi discovery permissions in the local module
+manifest. The JavaScript diagnostics adapter requests `NEARBY_WIFI_DEVICES` on
+Android 13+ or fine/coarse location on older releases before starting native
+polling. On iOS, app config includes the Wi-Fi information entitlement and a
+when-in-use location description; the native module requests authorization
+before reading the current network. These APIs still require a signed physical
+device for meaningful verification.
 
-## Compilation and safety gates
+The AUv3 and VST3 control/discovery sources are compiled, but plugin capability
+is deliberately disabled. Neither platform currently connects
+`PluginHostBridge::SetRenderCallback` to the audio device path, and Android also
+lacks the packaged `vst3sandbox` executable. Native modules report
+`runtimeReady: false`, discovery returns no descriptors, and instantiation fails
+closed until those runtime pieces are implemented.
 
-The GitHub Actions workflow has four independent jobs:
+## Local compilation and safety gates
 
-1. repository formatting, lint, types, Jest, documentation, and production
-   dependency audit;
-2. host C++ tests compiled with AddressSanitizer and UndefinedBehaviorSanitizer;
-3. an Android `assembleDebug` build of the committed host; and
-4. an unsigned iOS Simulator `xcodebuild` of the committed host after CocoaPods
-   installation.
-
-Run the portable gates locally with:
+Run the portable repository gates locally with:
 
 ```bash
-npm run format:check
-npm run lint
-npm run typecheck
-npm run test:ci
-npm run native:core:test:sanitize
-npm run expo:doctor
+npm run verify
+npm run verify:sanitize
 ```
 
-The platform compilation jobs remain authoritative for JNI/Kotlin and
-Objective-C++/Swift integration because they require their respective SDKs.
+Then compile the checked-in Android host with JDK 17/Android SDK 36 and the iOS
+host with Xcode/CocoaPods on macOS. Those local platform builds are the only way
+to validate JNI/Kotlin and Objective-C++/Swift integration in this repository.
+
+```bash
+(cd android && ./gradlew app:assembleDebug)
+(cd ios && pod install && xcodebuild \
+  -workspace DaftCitadel.xcworkspace \
+  -scheme DaftCitadel \
+  -sdk iphonesimulator \
+  -configuration Debug \
+  CODE_SIGNING_ALLOWED=NO build)
+```
 
 Expo Doctor's native-config sync warning is disabled because this repository
-intentionally commits native hosts and enforces prebuild drift itself. Its
-React Native Directory check excludes the in-repository module and
-`react-native-webrtc`; both are reviewed and compiled by this project's own
-native jobs instead of relying on third-party metadata.
+intentionally commits native hosts. Validate drift locally with the clean
+prebuild command above and review `git diff -- android ios`. Its React Native
+Directory check excludes the in-repository module and
+`react-native-webrtc`; both must be reviewed and compiled with the project's
+local platform toolchains instead of relying on third-party metadata.

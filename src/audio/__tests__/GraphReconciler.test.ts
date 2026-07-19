@@ -51,14 +51,45 @@ describe('GraphReconciler', () => {
     removeNodes.mockClear();
     connect.mockClear();
 
-    await reconciler.apply(new Map([[changed.id, changed]]), connections);
+    const result = await reconciler.apply(new Map([[changed.id, changed]]), connections);
 
     expect(removeNodes).toHaveBeenCalledWith([changed.id]);
     expect(configureNodes).toHaveBeenCalledWith([changed]);
     expect(connect).toHaveBeenCalledWith(changed.id, OUTPUT_BUS);
+    expect([...result.replacedNodeIds]).toEqual([changed.id]);
+    expect([...result.removedNodeIds]).toEqual([]);
     expect(removeNodes.mock.invocationCallOrder[0]).toBeLessThan(
       configureNodes.mock.invocationCallOrder[0],
     );
+  });
+
+  it('reports nodes removed without replacement', async () => {
+    const { reconciler, removeNodes } = createHarness();
+    const node = { id: 'track:output', type: 'trackOutput' };
+
+    await reconciler.apply(new Map([[node.id, node]]), new Set());
+    const result = await reconciler.apply(new Map(), new Set());
+
+    expect(removeNodes).toHaveBeenCalledWith([node.id]);
+    expect([...result.removedNodeIds]).toEqual([node.id]);
+    expect([...result.replacedNodeIds]).toEqual([]);
+  });
+
+  it('preserves replacement changes when connection reconciliation fails', async () => {
+    const { reconciler, connect } = createHarness();
+    const initial = { id: 'track:output', type: 'trackOutput', options: { gain: 1 } };
+    const changed = { id: 'track:output', type: 'trackOutput', options: { gain: 0.5 } };
+    const connections = new Set([reconciler.getConnectionKey(changed.id, OUTPUT_BUS)]);
+
+    await reconciler.apply(new Map([[initial.id, initial]]), connections);
+    connect.mockRejectedValueOnce(new Error('Connection unavailable'));
+
+    await expect(
+      reconciler.apply(new Map([[changed.id, changed]]), connections),
+    ).rejects.toThrow('Connection unavailable');
+
+    const result = await reconciler.apply(new Map([[changed.id, changed]]), connections);
+    expect([...result.replacedNodeIds]).toEqual([changed.id]);
   });
 
   it('replaces an existing node during forced plugin recovery', async () => {

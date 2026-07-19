@@ -20,6 +20,10 @@
     "maintain:docs": "node scripts/maintainDocs.js",
     "docs:check": "node scripts/maintainDocs.js --check --no-prettier",
     "audit:prod": "npm audit --omit=dev --audit-level=high",
+    "verify": "node scripts/verifyLocal.js",
+    "verify:sanitize": "node scripts/verifyLocal.js --sanitize",
+    "native:core:test:direct": "node scripts/verifyNativeCore.js",
+    "native:core:test:direct:sanitize": "node scripts/verifyNativeCore.js --sanitize",
     "native:core:test": "cmake -S audio-engine -B audio-engine/build -DDAFT_AUDIO_ENGINE_BUILD_TESTS=ON && cmake --build audio-engine/build --parallel && ctest --test-dir audio-engine/build --output-on-failure",
     "native:core:test:sanitize": "cmake -S audio-engine -B audio-engine/build-sanitize -DDAFT_AUDIO_ENGINE_BUILD_TESTS=ON -DDAFT_AUDIO_ENGINE_ENABLE_SANITIZERS=ON -DCMAKE_BUILD_TYPE=Debug && cmake --build audio-engine/build-sanitize --parallel && ctest --test-dir audio-engine/build-sanitize --output-on-failure"
   },

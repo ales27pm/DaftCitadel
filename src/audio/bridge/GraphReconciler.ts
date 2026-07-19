@@ -6,6 +6,11 @@ type NodeId = string;
 
 type ConnectionKey = string;
 
+export type GraphReconciliationResult = {
+  removedNodeIds: ReadonlySet<string>;
+  replacedNodeIds: ReadonlySet<string>;
+};
+
 const connectionKey = (source: NodeId, destination: NodeId): ConnectionKey =>
   `${source}->${destination}`;
 
@@ -13,6 +18,10 @@ export class GraphReconciler {
   private readonly nodeState = new Map<NodeId, NodeConfiguration>();
 
   private readonly connectionState = new Set<ConnectionKey>();
+
+  private readonly pendingRemovedNodeIds = new Set<NodeId>();
+
+  private readonly pendingReplacedNodeIds = new Set<NodeId>();
 
   constructor(
     private readonly audioEngine: AudioEngine,
@@ -26,9 +35,16 @@ export class GraphReconciler {
   async apply(
     nodes: Map<NodeId, NodeConfiguration>,
     connections: Set<ConnectionKey>,
-  ): Promise<void> {
+  ): Promise<GraphReconciliationResult> {
     await this.reconcileNodes(nodes);
     await this.reconcileConnections(connections, nodes);
+    const result: GraphReconciliationResult = {
+      removedNodeIds: new Set(this.pendingRemovedNodeIds),
+      replacedNodeIds: new Set(this.pendingReplacedNodeIds),
+    };
+    this.pendingRemovedNodeIds.clear();
+    this.pendingReplacedNodeIds.clear();
+    return result;
   }
 
   async forceConfigureNode(node: NodeConfiguration): Promise<void> {
@@ -75,6 +91,9 @@ export class GraphReconciler {
         toRemove.push(nodeId);
       }
     });
+
+    toRemove.forEach((nodeId) => this.pendingRemovedNodeIds.add(nodeId));
+    replacements.forEach((nodeId) => this.pendingReplacedNodeIds.add(nodeId));
 
     const nodesToRemove = [...toRemove, ...replacements];
     if (nodesToRemove.length > 0) {

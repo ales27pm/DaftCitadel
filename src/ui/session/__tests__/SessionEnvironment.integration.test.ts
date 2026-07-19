@@ -5,7 +5,13 @@ import path from 'path';
 import { NativeModules } from 'react-native';
 
 import { JsonSessionStorageAdapter } from '../../../session';
-import type { AudioFileLoader, AudioFileData } from '../../../audio';
+import type { SessionStorageAdapter } from '../../../session';
+import {
+  PluginHost,
+  SessionAudioBridge,
+  type AudioFileLoader,
+  type AudioFileData,
+} from '../../../audio';
 import { demoSession } from '../../../session/fixtures/demoSession';
 import {
   NativeAudioUnavailableError,
@@ -138,6 +144,33 @@ describe('Session environments', () => {
       name: 'NativeAudioUnavailableError',
       cause: initializationError,
     });
+    expect(shutdownSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('disposes every acquired native resource once when late bootstrap fails', async () => {
+    const bootstrapError = new Error('Storage initialization failed');
+    const storage = new JsonSessionStorageAdapter(tempDir);
+    jest.spyOn(storage, 'initialize').mockRejectedValueOnce(bootstrapError);
+    const bridgeDisposeSpy = jest
+      .spyOn(SessionAudioBridge.prototype, 'dispose')
+      .mockResolvedValue(undefined);
+    const pluginDisposeSpy = jest
+      .spyOn(PluginHost.prototype, 'dispose')
+      .mockImplementation(() => undefined);
+    const engineModule = NativeModules.AudioEngineModule as {
+      shutdown(): Promise<void>;
+    };
+    const shutdownSpy = jest.spyOn(engineModule, 'shutdown');
+
+    await expect(
+      createProductionSessionEnvironment({
+        storageAdapter: storage as SessionStorageAdapter,
+        fileLoader: createTestAudioFileLoader(),
+      }),
+    ).rejects.toBe(bootstrapError);
+
+    expect(bridgeDisposeSpy).toHaveBeenCalledTimes(1);
+    expect(pluginDisposeSpy).toHaveBeenCalledTimes(1);
     expect(shutdownSpy).toHaveBeenCalledTimes(1);
   });
 

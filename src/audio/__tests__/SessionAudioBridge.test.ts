@@ -703,6 +703,94 @@ describe('SessionAudioBridge', () => {
     expect(payload.points).toEqual([{ frame: 0, value: 0.75 }]);
   });
 
+  it('republishes unchanged automation when its native node is replaced', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine, publishAutomation, removeNodes } = createMockEngine(clock);
+    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    const automationCurve: AutomationCurve = {
+      id: 'curve-replaced-node',
+      parameter: 'volume',
+      interpolation: 'linear',
+      points: [
+        { time: 0, value: 0.25 },
+        { time: 128, value: 0.75 },
+      ],
+    };
+
+    await bridge.applySessionUpdate(
+      createSession({
+        revision: 11,
+        tracks: [
+          createTrack({
+            id: 'track-automation',
+            automationCurves: [automationCurve],
+          }),
+        ],
+      }),
+    );
+    publishAutomation.mockClear();
+    removeNodes.mockClear();
+
+    await bridge.applySessionUpdate(
+      createSession({
+        revision: 12,
+        tracks: [
+          createTrack({
+            id: 'track-automation',
+            volume: -6,
+            automationCurves: [automationCurve],
+          }),
+        ],
+      }),
+    );
+
+    expect(removeNodes).toHaveBeenCalledWith(['track-automation:output:main']);
+    expect(publishAutomation).toHaveBeenCalledTimes(1);
+    expect(publishAutomation).toHaveBeenCalledWith(
+      'track-automation:output:main',
+      expect.any(AutomationLane),
+    );
+  });
+
+  it('forgets automation for deleted nodes without publishing a clear lane', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine, publishAutomation, removeNodes } = createMockEngine(clock);
+    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    const automationCurve: AutomationCurve = {
+      id: 'curve-deleted-node',
+      parameter: 'volume',
+      interpolation: 'linear',
+      points: [
+        { time: 0, value: 0.25 },
+        { time: 128, value: 0.75 },
+      ],
+    };
+
+    await bridge.applySessionUpdate(
+      createSession({
+        revision: 13,
+        tracks: [
+          createTrack({
+            id: 'track-automation',
+            automationCurves: [automationCurve],
+          }),
+        ],
+      }),
+    );
+    publishAutomation.mockClear();
+    publishAutomation.mockRejectedValue(new Error('Node not found'));
+    removeNodes.mockClear();
+
+    await expect(
+      bridge.applySessionUpdate(createSession({ revision: 14, tracks: [] })),
+    ).resolves.toBeUndefined();
+
+    expect(removeNodes).toHaveBeenCalledWith(['track-automation:output:main']);
+    expect(publishAutomation).not.toHaveBeenCalled();
+  });
+
   it('resamples audio when loader sample rate differs from engine sample rate', async () => {
     const mismatchRate = 44100;
     const loaderFrames = Math.floor((frames * mismatchRate) / sampleRate);

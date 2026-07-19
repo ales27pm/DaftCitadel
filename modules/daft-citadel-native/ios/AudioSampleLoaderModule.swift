@@ -37,6 +37,22 @@ public final class AudioSampleLoaderModule: NSObject {
         guard file.length > 0, file.length <= Self.maxFrames else {
           throw DecodeError.invalidFrameCount(file.length)
         }
+        let channelCount = Int(file.processingFormat.channelCount)
+        guard channelCount > 0, channelCount <= Self.maxChannels else {
+          throw DecodeError.invalidChannelCount(channelCount)
+        }
+        let frameCount = Int(file.length)
+        let (sampleCount, sampleCountOverflow) = frameCount.multipliedReportingOverflow(
+          by: channelCount
+        )
+        let (decodedByteCount, byteCountOverflow) = sampleCount.multipliedReportingOverflow(
+          by: MemoryLayout<Float>.size
+        )
+        guard !sampleCountOverflow,
+              !byteCountOverflow,
+              decodedByteCount <= Self.maxDecodedPCMBytes else {
+          throw DecodeError.decodedAudioTooLarge
+        }
         let capacity = AVAudioFrameCount(file.length)
         guard let buffer = AVAudioPCMBuffer(
           pcmFormat: file.processingFormat,
@@ -48,10 +64,8 @@ public final class AudioSampleLoaderModule: NSObject {
         guard buffer.frameLength > 0, let floatData = buffer.floatChannelData else {
           throw DecodeError.unsupportedPCMFormat
         }
-
-        let channelCount = Int(buffer.format.channelCount)
-        let frameCount = Int(buffer.frameLength)
-        let byteCount = frameCount * MemoryLayout<Float>.size
+        let decodedFrameCount = Int(buffer.frameLength)
+        let byteCount = decodedFrameCount * MemoryLayout<Float>.size
         var channels: [String] = []
         channels.reserveCapacity(channelCount)
         for channel in 0..<channelCount {
@@ -62,7 +76,7 @@ public final class AudioSampleLoaderModule: NSObject {
         resolve([
           "sampleRate": buffer.format.sampleRate,
           "channels": channelCount,
-          "frames": frameCount,
+          "frames": decodedFrameCount,
           "channelData": channels,
         ])
       } catch {
@@ -97,6 +111,8 @@ public final class AudioSampleLoaderModule: NSObject {
 
   private enum DecodeError: LocalizedError {
     case invalidFrameCount(AVAudioFramePosition)
+    case invalidChannelCount(Int)
+    case decodedAudioTooLarge
     case bufferAllocationFailed
     case unsupportedPCMFormat
 
@@ -104,6 +120,10 @@ public final class AudioSampleLoaderModule: NSObject {
       switch self {
       case .invalidFrameCount(let frames):
         return "Audio frame count \(frames) is outside engine limits"
+      case .invalidChannelCount(let channels):
+        return "Audio channel count \(channels) is outside the 1...\(AudioSampleLoaderModule.maxChannels) mobile limit"
+      case .decodedAudioTooLarge:
+        return "Decoded audio exceeds the \(AudioSampleLoaderModule.maxDecodedPCMBytes / 1_048_576) MB mobile PCM budget"
       case .bufferAllocationFailed:
         return "Unable to allocate an audio decode buffer"
       case .unsupportedPCMFormat:
@@ -113,4 +133,6 @@ public final class AudioSampleLoaderModule: NSObject {
   }
 
   private static let maxFrames: AVAudioFramePosition = 10_000_000
+  private static let maxChannels = 8
+  private static let maxDecodedPCMBytes = 64 * 1024 * 1024
 }

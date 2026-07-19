@@ -18,7 +18,7 @@ Pod::Spec.new do |s|
   s.dependency 'ExpoModulesCore'
   s.dependency 'React-Core'
 
-  s.frameworks = 'AVFoundation', 'AudioToolbox', 'NetworkExtension'
+  s.frameworks = 'AVFoundation', 'AudioToolbox', 'CoreLocation', 'NetworkExtension'
 
   s.source_files = [
     '*.{h,m,mm,swift,hpp,cpp}',

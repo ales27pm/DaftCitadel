@@ -208,6 +208,7 @@ interface ProductionEnvironmentOptions {
   framesPerBuffer?: number;
   bpm?: number;
   fileLoader?: AudioFileLoader;
+  storageAdapter?: SessionStorageAdapter;
 }
 
 interface PassiveEnvironmentOptions {
@@ -271,37 +272,16 @@ export const createProductionSessionEnvironment = async (
   const sessionId = options.sessionId ?? DEMO_SESSION_ID;
 
   const audioEngine = new AudioEngine({ sampleRate, framesPerBuffer, bpm });
-  try {
-    await audioEngine.init();
-  } catch (error) {
-    try {
-      await audioEngine.dispose();
-    } catch (disposeError) {
-      console.error('Failed to clean up audio engine after initialization failure', {
-        error: disposeError,
-      });
-    }
-    throw new NativeAudioUnavailableError('Audio engine initialization failed', error);
-  }
-  const fileLoader = options.fileLoader ?? new NativeAudioFileLoader();
-  const pluginHost = instantiatePluginHost();
-  const resolvePluginDescriptor = pluginHost
-    ? createPluginDescriptorResolver(pluginHost)
-    : undefined;
-  const bridge = new SessionAudioBridge(audioEngine, {
-    fileLoader,
-    pluginHost: pluginHost ?? undefined,
-    resolvePluginDescriptor,
-  });
-  const storage = createSessionStorageAdapter(
-    await resolveStorageDirectory(options.storageDirectory),
-  );
-  await storage.initialize();
-  const manager = new SessionManager(storage, bridge);
-  await bootstrapSessionIfNeeded(manager, storage, sessionId);
-
+  let bridge: SessionAudioBridge | undefined;
+  let pluginHost: PluginHost | null = null;
+  let disposed = false;
   const dispose = async () => {
-    if (typeof bridge.dispose === 'function') {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+
+    if (bridge && typeof bridge.dispose === 'function') {
       try {
         await bridge.dispose();
       } catch (error) {
@@ -320,13 +300,44 @@ export const createProductionSessionEnvironment = async (
     }
   };
 
-  return {
-    manager,
-    audioBridge: bridge,
-    sessionId,
-    pluginHost: pluginHost ?? undefined,
-    dispose,
-  };
+  try {
+    await audioEngine.init();
+  } catch (error) {
+    await dispose();
+    throw new NativeAudioUnavailableError('Audio engine initialization failed', error);
+  }
+
+  try {
+    const fileLoader = options.fileLoader ?? new NativeAudioFileLoader();
+    pluginHost = instantiatePluginHost();
+    const resolvePluginDescriptor = pluginHost
+      ? createPluginDescriptorResolver(pluginHost)
+      : undefined;
+    bridge = new SessionAudioBridge(audioEngine, {
+      fileLoader,
+      pluginHost: pluginHost ?? undefined,
+      resolvePluginDescriptor,
+    });
+    const storage =
+      options.storageAdapter ??
+      createSessionStorageAdapter(
+        await resolveStorageDirectory(options.storageDirectory),
+      );
+    await storage.initialize();
+    const manager = new SessionManager(storage, bridge);
+    await bootstrapSessionIfNeeded(manager, storage, sessionId);
+
+    return {
+      manager,
+      audioBridge: bridge,
+      sessionId,
+      pluginHost: pluginHost ?? undefined,
+      dispose,
+    };
+  } catch (error) {
+    await dispose();
+    throw error;
+  }
 };
 
 const bootstrapSessionIfNeeded = async (

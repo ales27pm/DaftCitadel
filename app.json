@@ -8,10 +8,20 @@
     "newArchEnabled": true,
     "ios": {
       "bundleIdentifier": "dev.daftcitadel.app",
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Daft Citadel uses Wi-Fi signal quality to keep collaboration sessions reliable."
+      },
+      "entitlements": {
+        "com.apple.developer.networking.wifi-info": true
+      }
     },
     "android": {
-      "package": "dev.daftcitadel.app"
+      "package": "dev.daftcitadel.app",
+      "blockedPermissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ]
     },
     "web": {
       "bundler": "metro"

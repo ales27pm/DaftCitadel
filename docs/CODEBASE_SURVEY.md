@@ -49,7 +49,7 @@ This survey summarises the production code that currently lives in the Daft Cita
 ## Tooling and Automation (`scripts/`)
 
 - [`scripts/maintainDocs.js`](../scripts/maintainDocs.js) orchestrates managed documentation updates, executes `agents_sync.py` plan/apply cycles with timeouts and buffer limits, and optionally runs Prettier across Markdown files.
-- [`scripts/manageAgents.js`](../scripts/manageAgents.js) coordinates repository-wide AGENTS.md regeneration through `agents_sync.py` and validates there is no drift before returning control to CI.
+- [`scripts/manageAgents.js`](../scripts/manageAgents.js) coordinates repository-wide AGENTS.md regeneration through `agents_sync.py` and returns non-zero when local verification finds drift.
 - Installer wrappers [`daft_apex_citadel.sh`](../daft_apex_citadel.sh) and [`daft_apex_allinone.sh`](../daft_apex_allinone.sh) select profiles for the consolidated installer, which provisions audio assets, profile manifests, and plugin cache hints required by the runtime.
 
 ## Audio Engine Assets (`audio-engine/` and `assets/`)

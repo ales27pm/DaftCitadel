@@ -2,6 +2,7 @@ import {
   COLLAB_PROTOCOL_VERSION,
   createHandshakeId,
   createMessageId,
+  createPeerEncryptionBinding,
   createPublicKeySignal,
   parsePublicKeySignal,
   serializePublicKeySignal,
@@ -11,6 +12,30 @@ import {
 import { generateIdentityKeyPair } from '../encryption';
 
 describe('collaboration protocol validation', () => {
+  it('uses protocol v2 and rejects legacy wire frames explicitly', () => {
+    expect(COLLAB_PROTOCOL_VERSION).toBe(2);
+    const legacySignal = createPublicKeySignal({
+      sessionId: 'session-a',
+      role: 'initiator',
+      publicKey: generateIdentityKeyPair().publicKey,
+      sharedSecret: new Uint8Array(32).fill(9),
+      handshakeId: createHandshakeId(),
+    });
+    expect(() =>
+      parsePublicKeySignal(JSON.stringify({ ...legacySignal, protocolVersion: 1 })),
+    ).toThrow(/Unsupported collaboration handshake protocol version/);
+    expect(() =>
+      validateWireMessage({
+        protocolVersion: 1,
+        sessionId: 'session-a',
+        senderId: 'legacy-peer',
+        kind: 'ack',
+        messageId: 'legacy-peer:1',
+        sequence: 1,
+      }),
+    ).toThrow(/Unsupported collaboration wire protocol version/);
+  });
+
   it('binds authenticated key proofs to the session and full handshake claim', () => {
     const sharedSecret = new Uint8Array(32).fill(7);
     const signal = createPublicKeySignal({
@@ -31,6 +56,41 @@ describe('collaboration protocol validation', () => {
     expect(
       verifySharedSecretPublicKeySignal({ ...signal, role: 'responder' }, sharedSecret),
     ).toBe(false);
+  });
+
+  it('orders encryption transcript peers by deterministic code-unit order', () => {
+    const binding = createPeerEncryptionBinding({
+      sessionId: 'session-a',
+      localSenderId: 'a-peer',
+      localHandshakeId: 'handshake-a',
+      remoteSenderId: 'B-peer',
+      remoteHandshakeId: 'handshake-b',
+    });
+    const transcript = JSON.parse(Buffer.from(binding).toString('utf8')) as {
+      peers: Array<{ senderId: string; handshakeId: string }>;
+    };
+
+    expect(transcript.peers).toEqual([
+      { senderId: 'B-peer', handshakeId: 'handshake-b' },
+      { senderId: 'a-peer', handshakeId: 'handshake-a' },
+    ]);
+
+    const collisionForward = createPeerEncryptionBinding({
+      sessionId: 'session-a',
+      localSenderId: 'same-peer',
+      localHandshakeId: 'handshake-b',
+      remoteSenderId: 'same-peer',
+      remoteHandshakeId: 'handshake-a',
+    });
+    const collisionReverse = createPeerEncryptionBinding({
+      sessionId: 'session-a',
+      localSenderId: 'same-peer',
+      localHandshakeId: 'handshake-a',
+      remoteSenderId: 'same-peer',
+      remoteHandshakeId: 'handshake-b',
+    });
+
+    expect(collisionForward).toEqual(collisionReverse);
   });
 
   it('rejects a signaling sender id that is not derived from the public key', () => {

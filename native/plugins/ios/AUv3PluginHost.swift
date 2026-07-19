@@ -5,6 +5,8 @@ import React
 
 @objc(PluginHostModule)
 class PluginHostModule: RCTEventEmitter {
+  private let runtimeUnavailableMessage =
+    "AUv3 hosting is disabled because its render callback is not connected to the audio engine"
   private struct PluginInstanceState {
     let identifier: String
     let instanceId: String
@@ -24,6 +26,10 @@ class PluginHostModule: RCTEventEmitter {
     false
   }
 
+  override func constantsToExport() -> [AnyHashable: Any]! {
+    ["runtimeReady": false]
+  }
+
   override func supportedEvents() -> [String]! {
     ["pluginCrashed", "sandboxPermissionRequired"]
   }
@@ -34,16 +40,9 @@ class PluginHostModule: RCTEventEmitter {
     resolver: @escaping RCTPromiseResolveBlock,
     rejecter: @escaping RCTPromiseRejectBlock
   ) {
-    queue.async { [weak self] in
-      guard let self else { return }
-      let components = self.availableComponents()
-      let filtered = components.filter { component in
-        guard let format = format as String? else { return true }
-        return format.lowercased() == "auv3" ? component.audioComponentDescription.componentType == kAudioUnitType_Effect : true
-      }
-      let descriptors = filtered.map { self.makeDescriptor(component: $0) }
-      resolver(descriptors)
-    }
+    // A linked control bridge is not an audio capability. Do not advertise
+    // components until PluginHostBridge has a real-time render callback.
+    resolver([])
   }
 
   @objc(instantiatePlugin:options:resolver:rejecter:)
@@ -53,62 +52,7 @@ class PluginHostModule: RCTEventEmitter {
     resolver: @escaping RCTPromiseResolveBlock,
     rejecter: @escaping RCTPromiseRejectBlock
   ) {
-    let identifierString = identifier as String
-    guard let component = availableComponents().first(where: {
-      $0.audioComponentDescription.identifierString == identifierString
-    }) else {
-      rejecter("missing_component", "AUv3 component not found for \(identifierString)", nil)
-      return
-    }
-
-    queue.async { [weak self] in
-      guard let self else { return }
-      AVAudioUnit.instantiate(
-        with: component.audioComponentDescription,
-        options: []
-      ) { avAudioUnit, error in
-        if let error {
-          rejecter("instantiate_failed", "Failed to instantiate plugin: \(error.localizedDescription)", error)
-          return
-        }
-        guard let audioUnit = avAudioUnit?.auAudioUnit else {
-          rejecter("instantiate_failed", "Failed to instantiate plugin", nil)
-          return
-        }
-
-        let descriptor = self.makeDescriptor(component: component)
-        let instanceId = UUID().uuidString
-        let sandboxIdentifier = options["sandboxIdentifier"] as? String
-        var sandboxPath: String?
-        if let sandboxIdentifier {
-          sandboxPath = try? self.sandboxCoordinator.ensureSandbox(identifier: sandboxIdentifier)
-        }
-
-        let state = PluginInstanceState(
-          identifier: identifierString,
-          instanceId: instanceId,
-          audioUnit: audioUnit,
-          descriptor: descriptor,
-          sandboxPath: sandboxPath,
-          // AURenderObserver reports render timing, not a reliable extension
-          // crash status. The embedding host must forward process/extension
-          // invalidation through emitCrashEvent when it owns that lifecycle.
-          renderObserverToken: nil
-        )
-        self.instances[instanceId] = state
-
-        resolver([
-          "instanceId": instanceId,
-          "descriptor": descriptor,
-          // AUAudioUnit exposes no supported instantaneous CPU-load metric.
-          "cpuLoadPercent": 0.0,
-          "latencySamples": Int(
-            (audioUnit.latency * (audioUnit.outputBusses.first?.format.sampleRate ?? 44_100)).rounded()
-          ),
-          "sandboxPath": sandboxPath as Any,
-        ])
-      }
-    }
+    rejecter("runtime_unavailable", runtimeUnavailableMessage, nil)
   }
 
   @objc(releasePlugin:resolver:rejecter:)
@@ -226,7 +170,9 @@ class PluginHostModule: RCTEventEmitter {
       } catch {
         self.sendEvent(withName: "sandboxPermissionRequired", body: [
           "identifier": identifier,
-          "requiredEntitlements": ["com.apple.security.network.client"],
+          // Application Support is inside the app container and needs no
+          // additional entitlement. The underlying file error is actionable.
+          "requiredEntitlements": [],
           "reason": error.localizedDescription,
         ])
         rejecter("sandbox_error", error.localizedDescription, error)

@@ -7,7 +7,7 @@ import {
   verifyAuthenticationProof,
 } from './encryption';
 
-export const COLLAB_PROTOCOL_VERSION = 1 as const;
+export const COLLAB_PROTOCOL_VERSION = 2 as const;
 
 export type CollabProtocolRole = 'initiator' | 'responder';
 
@@ -127,7 +127,21 @@ export function createPeerEncryptionBinding({
       senderId: requireIdentifier(remoteSenderId, 'remote sender id'),
       handshakeId: requireIdentifier(remoteHandshakeId, 'remote handshake id'),
     },
-  ].sort((left, right) => left.senderId.localeCompare(right.senderId));
+  ].sort((left, right) => {
+    if (left.senderId < right.senderId) {
+      return -1;
+    }
+    if (left.senderId > right.senderId) {
+      return 1;
+    }
+    if (left.handshakeId < right.handshakeId) {
+      return -1;
+    }
+    if (left.handshakeId > right.handshakeId) {
+      return 1;
+    }
+    return 0;
+  });
   return new Uint8Array(
     Buffer.from(
       JSON.stringify({

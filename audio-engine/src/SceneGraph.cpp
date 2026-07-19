@@ -18,6 +18,7 @@ bool SceneGraph::addNode(const std::string& id, std::unique_ptr<DSPNode> node) {
     return false;
   }
   node->prepare(sampleRate_);
+  node->locate(clock_.frameTime());
   const auto result = nodes_.emplace(id, std::move(node));
   if (result.second) {
     nodeIncarnations_[id] = nextNodeIncarnation_++;

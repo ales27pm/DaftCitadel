@@ -690,12 +690,12 @@ export class CollabSessionService<T = unknown> {
 
       const queuedSignals = this.pendingPublicKeySignals.splice(0);
       for (const signal of queuedSignals) {
-        try {
-          await this.handlePublicKeySignal(signal, generation, false);
-        } catch (error) {
+        // Verification can be application-defined and indefinitely asynchronous.
+        // Treat queued signals like live signaling events so an unresponsive
+        // verifier cannot hold the lifecycle startup path.
+        this.handlePublicKeySignal(signal, generation, false).catch((error) => {
           this.logger('collab.publicKeyRejected', { error: String(error) });
-          throw error;
-        }
+        });
       }
       this.assertGenerationActive(generation);
 
@@ -1016,33 +1016,28 @@ export class CollabSessionService<T = unknown> {
       throw new Error('Collaboration public key has an invalid peer role');
     }
 
-    if (this.authenticatedRemoteSenderId || this.authenticatedRemoteHandshakeId) {
-      if (
-        this.authenticatedRemoteSenderId === signal.senderId &&
-        this.authenticatedRemoteHandshakeId === signal.handshakeId
-      ) {
-        return;
-      }
-      throw new Error(
-        'Collaboration rejected an unsolicited peer re-handshake; restart the lifecycle first',
-      );
+    const existingHandshake = this.getExistingPublicKeyHandshakeState(signal);
+    if (existingHandshake === 'authenticated') {
+      return;
     }
-    if (this.pendingRemoteSenderId || this.pendingRemoteHandshakeId) {
-      if (
-        this.pendingRemoteSenderId === signal.senderId &&
-        this.pendingRemoteHandshakeId === signal.handshakeId
-      ) {
-        await this.sendKeyConfirmationIfReady(generation);
-        return;
-      }
-      throw new Error('Collaboration peer handshake changed before key confirmation');
-    }
-    if (this.seenRemoteHandshakeIds.has(signal.handshakeId)) {
-      throw new Error('Collaboration rejected a stale peer handshake');
+    if (existingHandshake === 'pending') {
+      await this.sendKeyConfirmationIfReady(generation);
+      return;
     }
 
     await this.verifyPublicKeySignal(signal);
     this.assertGenerationActive(generation);
+    // Another queued or live signal may have completed its asynchronous verifier
+    // while this one was pending. This check and the state assignments below stay
+    // synchronous so only one accepted verifier can claim the handshake.
+    const verifiedHandshake = this.getExistingPublicKeyHandshakeState(signal);
+    if (verifiedHandshake === 'authenticated') {
+      return;
+    }
+    if (verifiedHandshake === 'pending') {
+      await this.sendKeyConfirmationIfReady(generation);
+      return;
+    }
 
     this.pendingRemoteSenderId = signal.senderId;
     this.pendingRemoteHandshakeId = signal.handshakeId;
@@ -1063,6 +1058,35 @@ export class CollabSessionService<T = unknown> {
       await this.broadcastPublicKey(generation);
     }
     await this.sendKeyConfirmationIfReady(generation);
+  }
+
+  private getExistingPublicKeyHandshakeState(
+    signal: AuthenticatedPublicKeySignal,
+  ): 'authenticated' | 'pending' | undefined {
+    if (this.authenticatedRemoteSenderId || this.authenticatedRemoteHandshakeId) {
+      if (
+        this.authenticatedRemoteSenderId === signal.senderId &&
+        this.authenticatedRemoteHandshakeId === signal.handshakeId
+      ) {
+        return 'authenticated';
+      }
+      throw new Error(
+        'Collaboration rejected an unsolicited peer re-handshake; restart the lifecycle first',
+      );
+    }
+    if (this.pendingRemoteSenderId || this.pendingRemoteHandshakeId) {
+      if (
+        this.pendingRemoteSenderId === signal.senderId &&
+        this.pendingRemoteHandshakeId === signal.handshakeId
+      ) {
+        return 'pending';
+      }
+      throw new Error('Collaboration peer handshake changed before key confirmation');
+    }
+    if (this.seenRemoteHandshakeIds.has(signal.handshakeId)) {
+      throw new Error('Collaboration rejected a stale peer handshake');
+    }
+    return undefined;
   }
 
   private async sendKeyConfirmationIfReady(generation: number): Promise<void> {
@@ -1191,8 +1215,7 @@ export class CollabSessionService<T = unknown> {
       );
     }
     const sequence = this.nextOutboundSequence;
-    this.nextOutboundSequence += 1;
-    const message: UpdateWireMessage<T> = {
+    const message = this.snapshotUpdateWireMessage({
       protocolVersion: COLLAB_PROTOCOL_VERSION,
       sessionId: this.authentication.sessionId,
       senderId: this.localSenderId,
@@ -1201,7 +1224,12 @@ export class CollabSessionService<T = unknown> {
       sequence,
       payload,
       resync: resync || undefined,
-    };
+    });
+    // Complete every payload-dependent operation before reserving a sequence or
+    // adding the update to reliability state. A circular, BigInt, or oversized
+    // payload must not leave a gap that resynchronization can never replay.
+    const serialized = this.serializeWireMessage(message);
+    this.nextOutboundSequence += 1;
     const pending = createPendingAcknowledgement(message);
     this.pendingAcknowledgements.set(message.messageId, pending);
     this.outboundHistory.set(message.sequence, message);
@@ -1209,7 +1237,7 @@ export class CollabSessionService<T = unknown> {
     this.updateHealth({ pendingAcknowledgements: this.pendingAcknowledgements.size });
 
     try {
-      await this.sendPendingAcknowledgement(pending, generation);
+      await this.sendPendingAcknowledgement(pending, generation, serialized);
       await pending.promise;
     } catch (error) {
       this.removePendingAcknowledgement(message.messageId);
@@ -1217,16 +1245,37 @@ export class CollabSessionService<T = unknown> {
     }
   }
 
+  private snapshotUpdateWireMessage(message: UpdateWireMessage<T>): UpdateWireMessage<T> {
+    // JSON round-tripping captures the exact value the peer can observe while
+    // severing all references to caller-owned mutable objects. It also invokes
+    // stateful toJSON implementations only once, before reliability state is
+    // committed.
+    const serialized = JSON.stringify(message);
+    if (serialized === undefined) {
+      throw new Error('Collaboration update cannot be represented as JSON');
+    }
+    const snapshot = validateWireMessage<T>(JSON.parse(serialized));
+    if (snapshot.kind !== 'update') {
+      throw new Error('Collaboration update snapshot has an invalid message kind');
+    }
+    return snapshot;
+  }
+
   private async sendPendingAcknowledgement(
     pending: PendingAcknowledgement<T>,
     generation: number,
+    serialized?: string,
   ): Promise<void> {
     if (!this.pendingAcknowledgements.has(pending.message.messageId)) {
       return;
     }
     this.assertChannelReady(generation);
     pending.attempts += 1;
-    await this.sendWireMessage(pending.message, generation);
+    if (serialized !== undefined) {
+      await this.sendSerializedFrame(serialized, generation);
+    } else {
+      await this.sendWireMessage(pending.message, generation);
+    }
     if (!this.pendingAcknowledgements.has(pending.message.messageId)) {
       return;
     }
@@ -1264,6 +1313,14 @@ export class CollabSessionService<T = unknown> {
   ): Promise<void> {
     await this.encryptionManager.waitUntilReady();
     this.assertChannelReady(generation);
+    const serialized = this.serializeWireMessage(message, clock);
+    await this.sendSerializedFrame(serialized, generation);
+  }
+
+  private serializeWireMessage(
+    message: CollabWireMessage<T>,
+    clock = Date.now(),
+  ): string {
     const encrypted = this.encryptionManager.requireContext().encrypt({
       clock,
       schemaVersion: this.schemaVersion,
@@ -1273,6 +1330,13 @@ export class CollabSessionService<T = unknown> {
     if (Buffer.byteLength(serialized, 'utf8') > this.maxFrameBytes) {
       throw new Error('Collaboration frame exceeds the configured size limit');
     }
+    return serialized;
+  }
+
+  private async sendSerializedFrame(
+    serialized: string,
+    generation: number,
+  ): Promise<void> {
     const sendOperation = this.sendQueue.then(async () => {
       this.assertChannelReady(generation);
       const channel = this.dataChannel as BackpressureDataChannel;
@@ -1621,18 +1685,39 @@ export class CollabSessionService<T = unknown> {
 
     this.assertGenerationActive(generation);
     if (this.externalUpdateListener) {
-      try {
-        await this.externalUpdateListener(normalizedPayload);
+      if (this.remoteUpdateAppliedHandler) {
+        // Once the authoritative handler commits, the legacy callback is an
+        // observer. Do not let a slow, hung, or failing observer hold the ACK and
+        // block the ordered inbound queue after state has already changed.
+        try {
+          Promise.resolve(this.externalUpdateListener(normalizedPayload)).catch(
+            (error) => {
+              this.logger('collab.remoteUpdate.listenerError', {
+                ...baseLogContext,
+                error: String(error),
+              });
+            },
+          );
+        } catch (error) {
+          this.logger('collab.remoteUpdate.listenerError', {
+            ...baseLogContext,
+            error: String(error),
+          });
+        }
+      } else {
+        try {
+          await this.externalUpdateListener(normalizedPayload);
+        } catch (error) {
+          this.logger('collab.remoteUpdate.listenerError', {
+            ...baseLogContext,
+            error: String(error),
+          });
+          return false;
+        }
         this.assertGenerationActive(generation);
         if (signal.aborted) {
           return false;
         }
-      } catch (error) {
-        this.logger('collab.remoteUpdate.listenerError', {
-          ...baseLogContext,
-          error: String(error),
-        });
-        return false;
       }
     }
     this.recordLatency(latencyMs, receiveTime, clock);

@@ -29,6 +29,15 @@ class ConstantNode final : public DSPNode {
   float value_;
 };
 
+class LocationTrackingNode final : public DSPNode {
+ public:
+  void locate(std::uint64_t frame) override { locatedFrame = frame; }
+  void process(AudioBufferView) override {}
+  void setParameter(const std::string&, double) override {}
+
+  std::uint64_t locatedFrame = 0;
+};
+
 AudioBufferView MakeMonoView(std::array<float, 64>& samples) {
   static std::array<float*, 1> channels{};
   channels[0] = samples.data();
@@ -109,6 +118,32 @@ void TestGraphClockCanLocate() {
   }
 }
 
+void TestNewNodesLocateToCurrentGraphFrame() {
+  SceneGraph graph(48000.0, 64);
+  std::array<float, 64> samples{};
+  graph.render(MakeMonoView(samples));
+
+  auto node = std::make_unique<LocationTrackingNode>();
+  auto* nodePtr = node.get();
+  if (!graph.addNode("late", std::move(node))) {
+    throw std::runtime_error("Failed to add node after the graph clock advanced");
+  }
+  if (nodePtr->locatedFrame != 64) {
+    throw std::runtime_error("New node did not locate to the current graph frame");
+  }
+
+  graph.removeNode("late");
+  graph.locate(4096);
+  auto replacement = std::make_unique<LocationTrackingNode>();
+  auto* replacementPtr = replacement.get();
+  if (!graph.addNode("late", std::move(replacement))) {
+    throw std::runtime_error("Failed to add replacement node");
+  }
+  if (replacementPtr->locatedFrame != 4096) {
+    throw std::runtime_error("Replacement node did not locate to the current graph frame");
+  }
+}
+
 void TestGraphRejectsCycles() {
   SceneGraph graph(48000.0, 64);
   graph.addNode("source", std::make_unique<ConstantNode>(0.25F));
@@ -166,6 +201,7 @@ void RunSceneGraphTests() {
   TestAutomationDoesNotTargetReusedId();
   TestMixerProcessesGraphInputs();
   TestGraphClockCanLocate();
+  TestNewNodesLocateToCurrentGraphFrame();
   TestGraphRejectsCycles();
   TestTrackOutputAppliesGainAndPan();
 }

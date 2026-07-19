@@ -118,7 +118,9 @@ class AudioSampleLoaderModule(
     }
 
     require(formatTag == 1 || formatTag == 3) { "Unsupported WAVE encoding $formatTag" }
-    require(channelCount in 1..64) { "WAVE channel count must be between 1 and 64" }
+    require(channelCount in 1..MAX_CHANNELS) {
+      "WAVE channel count must be between 1 and $MAX_CHANNELS"
+    }
     require(sampleRate in 1..384_000) { "WAVE sample rate is invalid" }
     require(bitsPerSample in setOf(8, 16, 24, 32)) { "Unsupported WAVE bit depth $bitsPerSample" }
     require(formatTag != 3 || bitsPerSample == 32) { "IEEE-float WAVE must use 32-bit samples" }
@@ -127,6 +129,11 @@ class AudioSampleLoaderModule(
     require(blockAlign == channelCount * bytesPerSample) { "Unsupported packed WAVE layout" }
     val frameCount = dataSize / blockAlign
     require(frameCount in 1..MAX_FRAMES) { "WAVE frame count is outside engine limits" }
+    val decodedPcmBytes =
+      frameCount.toLong() * channelCount.toLong() * Float.SIZE_BYTES.toLong()
+    require(decodedPcmBytes <= MAX_DECODED_PCM_BYTES) {
+      "Decoded audio exceeds the ${MAX_DECODED_PCM_BYTES / 1_048_576} MB mobile PCM budget"
+    }
 
     val channels = Array(channelCount) {
       ByteBuffer.allocate(frameCount * Float.SIZE_BYTES).order(ByteOrder.LITTLE_ENDIAN)
@@ -191,7 +198,9 @@ class AudioSampleLoaderModule(
 
   companion object {
     const val NAME = "AudioSampleLoaderModule"
-    private const val MAX_FILE_BYTES = 512 * 1024 * 1024
+    private const val MAX_FILE_BYTES = 64 * 1024 * 1024
+    private const val MAX_DECODED_PCM_BYTES = 64L * 1024L * 1024L
+    private const val MAX_CHANNELS = 8
     private const val MAX_FRAMES = 10_000_000
   }
 }
