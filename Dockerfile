@@ -111,7 +111,9 @@ RUN set -euo pipefail \
     && echo "${TARGET_USER} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/${TARGET_USER}
 
 WORKDIR /workspace
-COPY . /workspace
+COPY scripts /workspace/scripts
+COPY assets /workspace/assets
+RUN mkdir -p /workspace/deps
 RUN chmod +x scripts/daftcitadel.sh
 
 RUN /workspace/scripts/daftcitadel.sh \

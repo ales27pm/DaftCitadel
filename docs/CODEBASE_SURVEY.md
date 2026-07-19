@@ -20,7 +20,7 @@ This survey summarises the production code that currently lives in the Daft Cita
 - [`src/session/storage/`](../src/session/storage) contains JSON and SQLite adapters that satisfy the `SessionStorageAdapter` contract, including transactional writes and optimistic concurrency checks.
 - [`src/session/models.ts`](../src/session/models.ts) normalises session payloads (tracks, clips, automation, routing) and validates structural integrity before persistence or playback.
 - [`src/session/history.ts`](../src/session/history.ts) implements bounded undo/redo stacks that the manager consults when rolling back failed edits.
-- [`src/session/environment.ts`](../src/session/environment.ts) bootstraps passive vs. production environments, wiring `SessionAudioBridge`, native diagnostics polling, and plugin host lifecycles.
+- [`src/ui/session/environment.ts`](../src/ui/session/environment.ts) bootstraps passive vs. production environments, wiring `SessionAudioBridge`, native diagnostics polling, and plugin host lifecycles.
 
 ## Audio and Plugin Runtime (`src/audio/`)
 
@@ -34,11 +34,11 @@ This survey summarises the production code that currently lives in the Daft Cita
 
 - [`src/services/collab/`](../src/services/collab) supplies encryption primitives, patch serialisation helpers, and latency monitors that feed into the collaboration roadmap track.
 - [`src/services/platform/`](../src/services/platform) encapsulates environment detection, permission gating, and logging bridges shared across the app shell.
-- [`src/services/logging/`](../src/services/logging) routes structured logs with contextual metadata so automation and support tooling can correlate incidents.
+- [`src/services/collab/protocol.ts`](../src/services/collab/protocol.ts) defines authenticated collaboration envelopes, replay windows, acknowledgements, and bounded flow-control messages.
 
 ## Typings and Shared Utilities (`src/types/`)
 
-- Public TypeScript interfaces for audio engines, plugin manifests, and session models live under [`src/types/`](../src/types). Modules such as [`src/types/audio.ts`](../src/types/audio.ts) mirror the `NativeAudioEngine` contract, while [`src/types/plugins.ts`](../src/types/plugins.ts) describe sandbox descriptors and restart tokens used across UI and session layers.
+- Public TypeScript interfaces and stubs live under [`src/types/`](../src/types), while [`src/audio/NativeAudioEngine.ts`](../src/audio/NativeAudioEngine.ts) defines the native engine contract and [`src/audio/plugins/types.ts`](../src/audio/plugins/types.ts) describes plugin manifests and restart state.
 - Utility definitions (feature flags, analytics payloads, diagnostic snapshots) centralise cross-module typing to keep hooks and services strongly typed without importing deep implementation details.
 
 ## Testing Infrastructure (`src/__tests__/`)
@@ -49,8 +49,8 @@ This survey summarises the production code that currently lives in the Daft Cita
 ## Tooling and Automation (`scripts/`)
 
 - [`scripts/maintainDocs.js`](../scripts/maintainDocs.js) orchestrates managed documentation updates, executes `agents_sync.py` plan/apply cycles with timeouts and buffer limits, and optionally runs Prettier across Markdown files.
-- [`scripts/manageAgents.js`](../scripts/manageAgents.js) coordinates repository-wide AGENTS.md regeneration through `agents_sync.py` and validates there is no drift before returning control to CI.
-- Installer utilities like [`scripts/daft_apex_citadel.sh`](../scripts/daft_apex_citadel.sh) and [`scripts/daft_apex_allinone.sh`](../scripts/daft_apex_allinone.sh) provision audio assets, profile manifests, and plugin cache hints required by the React Native runtime.
+- [`scripts/manageAgents.js`](../scripts/manageAgents.js) coordinates repository-wide AGENTS.md regeneration through `agents_sync.py` and returns non-zero when local verification finds drift.
+- Installer wrappers [`daft_apex_citadel.sh`](../daft_apex_citadel.sh) and [`daft_apex_allinone.sh`](../daft_apex_allinone.sh) select profiles for the consolidated installer, which provisions audio assets, profile manifests, and plugin cache hints required by the runtime.
 
 ## Audio Engine Assets (`audio-engine/` and `assets/`)
 

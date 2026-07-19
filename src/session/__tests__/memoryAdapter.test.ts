@@ -87,4 +87,30 @@ describe('InMemorySessionStorageAdapter', () => {
     const loaded = await adapter.read(session.id);
     expect(loaded).toBeNull();
   });
+
+  it('does not partially commit when a later staged revision conflicts', async () => {
+    const adapter = new InMemorySessionStorageAdapter();
+    const first = createSession({ id: 'session-first', name: 'First', revision: 1 });
+    const second = createSession({ id: 'session-second', name: 'Second', revision: 1 });
+    await adapter.write(first, { expectedRevision: 0 });
+    await adapter.write(second, { expectedRevision: 0 });
+
+    const tx = await adapter.beginTransaction();
+    await tx.write(
+      { ...first, name: 'First staged', revision: 2 },
+      { expectedRevision: 1 },
+    );
+    await tx.write(
+      { ...second, name: 'Second staged', revision: 2 },
+      { expectedRevision: 1 },
+    );
+    await adapter.write(
+      { ...second, name: 'Second external', revision: 2 },
+      { expectedRevision: 1 },
+    );
+
+    await expect(tx.commit()).rejects.toBeInstanceOf(RevisionConflictError);
+    expect(await adapter.read(first.id)).toEqual(first);
+    expect((await adapter.read(second.id))?.name).toBe('Second external');
+  });
 });

@@ -14,6 +14,11 @@ export interface PluginAutomationPoint {
 }
 
 export interface PluginHostSpec extends TurboModule {
+  /**
+   * Native hosts must set this only after their render callback is connected to
+   * the audio engine. Merely linking the discovery/control bridge is not enough.
+   */
+  readonly runtimeReady?: boolean;
   queryAvailablePlugins(format?: string): Promise<PluginDescriptor[]>;
   instantiatePlugin(
     identifier: string,
@@ -56,9 +61,26 @@ export type PluginHostEventPayloads = {
 
 const moduleName = 'PluginHostModule';
 
-export const NativePluginHost: PluginHostSpec =
-  TurboModuleRegistry.getEnforcing<PluginHostSpec>(moduleName);
+const registry = TurboModuleRegistry as typeof TurboModuleRegistry | undefined;
+const modules = NativeModules as typeof NativeModules | undefined;
+const registeredModule =
+  (typeof registry?.get === 'function'
+    ? registry.get<PluginHostSpec>(moduleName)
+    : null) ??
+  (modules?.[moduleName] as PluginHostSpec | undefined) ??
+  null;
+
+const unavailableModule = new Proxy({} as PluginHostSpec, {
+  get: (_target, property) => () =>
+    Promise.reject(
+      new Error(
+        `${moduleName}.${String(property)} is unavailable because the native module is not linked`,
+      ),
+    ),
+});
+
+export const NativePluginHost: PluginHostSpec = registeredModule ?? unavailableModule;
 
 export const isPluginHostAvailable = (): boolean => {
-  return NativeModules[moduleName] != null;
+  return registeredModule?.runtimeReady === true;
 };

@@ -18,8 +18,10 @@ bool SceneGraph::addNode(const std::string& id, std::unique_ptr<DSPNode> node) {
     return false;
   }
   node->prepare(sampleRate_);
+  node->locate(clock_.frameTime());
   const auto result = nodes_.emplace(id, std::move(node));
   if (result.second) {
+    nodeIncarnations_[id] = nextNodeIncarnation_++;
     nodeBuffers_.try_emplace(id);
     rebuildTopology();
   }
@@ -28,6 +30,7 @@ bool SceneGraph::addNode(const std::string& id, std::unique_ptr<DSPNode> node) {
 
 void SceneGraph::removeNode(const std::string& id) {
   nodes_.erase(id);
+  nodeIncarnations_.erase(id);
   nodeBuffers_.erase(id);
   connections_.erase(std::remove_if(connections_.begin(), connections_.end(),
                                     [&](const auto& conn) {
@@ -51,9 +54,41 @@ bool SceneGraph::connect(const std::string& source, const std::string& destinati
   if (duplicate) {
     return false;
   }
+  if (wouldIntroduceCycle(source, destination)) {
+    return false;
+  }
   connections_.push_back({source, destination});
   rebuildTopology();
   return true;
+}
+
+bool SceneGraph::wouldIntroduceCycle(const std::string& source,
+                                     const std::string& destination) const {
+  if (destination == kOutputBusId) {
+    return false;
+  }
+  if (source == destination) {
+    return true;
+  }
+
+  std::vector<std::string> pending{destination};
+  std::unordered_set<std::string> visited;
+  while (!pending.empty()) {
+    auto current = std::move(pending.back());
+    pending.pop_back();
+    if (!visited.insert(current).second) {
+      continue;
+    }
+    if (current == source) {
+      return true;
+    }
+    for (const auto& connection : connections_) {
+      if (connection.source == current && connection.destination != kOutputBusId) {
+        pending.push_back(connection.destination);
+      }
+    }
+  }
+  return false;
 }
 
 void SceneGraph::disconnect(const std::string& source, const std::string& destination) {
@@ -111,16 +146,39 @@ void SceneGraph::render(AudioBufferView outputBuffer) {
   clock_.advanceBy(static_cast<std::uint32_t>(frameCount));
 }
 
+void SceneGraph::locate(std::uint64_t frame) {
+  clock_.locate(frame);
+  for (auto& [_, node] : nodes_) {
+    node->locate(frame);
+  }
+}
+
 void SceneGraph::scheduleAutomation(const std::string& nodeId, std::function<void(DSPNode&)> cb,
                                     std::uint64_t frame) {
   auto it = nodes_.find(nodeId);
   if (it == nodes_.end()) {
     throw std::runtime_error("Node not found");
   }
+  const auto incarnationIt = nodeIncarnations_.find(nodeId);
+  if (incarnationIt == nodeIncarnations_.end()) {
+    throw std::runtime_error("Node incarnation not found");
+  }
+  const auto incarnation = incarnationIt->second;
 
-  const bool ok = scheduler_.schedule({frame, [node = it->second.get(), cb = std::move(cb)]() mutable {
-                                          cb(*node);
-                                        }});
+  const bool ok = scheduler_.schedule({
+      frame,
+      [this, nodeId, incarnation, cb = std::move(cb)]() mutable {
+        const auto currentIncarnation = nodeIncarnations_.find(nodeId);
+        if (currentIncarnation == nodeIncarnations_.end() ||
+            currentIncarnation->second != incarnation) {
+          return;
+        }
+        const auto node = nodes_.find(nodeId);
+        if (node != nodes_.end()) {
+          cb(*node->second);
+        }
+      },
+  });
   if (!ok) {
     throw std::runtime_error("Scheduler queue is full");
   }
@@ -169,6 +227,10 @@ void SceneGraph::rebuildTopology() {
       queue.push_back(id);
     }
   }
+  std::sort(queue.begin(), queue.end());
+  for (auto& [_, destinations] : adjacency) {
+    std::sort(destinations.begin(), destinations.end());
+  }
 
   std::size_t index = 0;
   while (index < queue.size()) {
@@ -188,14 +250,16 @@ void SceneGraph::rebuildTopology() {
     }
   }
 
-  for (const auto& [id, degree] : indegree) {
-    if (degree > 0U && std::find(renderOrder_.begin(), renderOrder_.end(), id) == renderOrder_.end()) {
-      renderOrder_.push_back(id);
-    }
+  if (renderOrder_.size() != nodes_.size()) {
+    renderOrder_.clear();
+    inboundEdges_.clear();
+    outputSources_.clear();
+    return;
   }
 
   if (!sourcesFeedingOutput.empty()) {
     outputSources_.assign(sourcesFeedingOutput.begin(), sourcesFeedingOutput.end());
+    std::sort(outputSources_.begin(), outputSources_.end());
   } else {
     outputSources_.clear();
     for (const auto& [id, _] : nodes_) {
@@ -203,6 +267,7 @@ void SceneGraph::rebuildTopology() {
         outputSources_.push_back(id);
       }
     }
+    std::sort(outputSources_.begin(), outputSources_.end());
   }
 }
 

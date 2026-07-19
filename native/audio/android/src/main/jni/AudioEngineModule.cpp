@@ -1,6 +1,7 @@
 #include <jni.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -418,6 +419,93 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeScheduleAutomation(JNIEnv* en
   } catch (const std::exception& ex) {
     ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
   }
+}
+
+JNIEXPORT void JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeStartTransport(JNIEnv* env, jobject /*thiz*/) {
+  try {
+    AudioEngineBridge::startTransport();
+  } catch (const std::exception& ex) {
+    ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeStopTransport(JNIEnv* env, jobject /*thiz*/) {
+  try {
+    AudioEngineBridge::stopTransport();
+  } catch (const std::exception& ex) {
+    ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeLocateTransport(JNIEnv* env, jobject /*thiz*/, jlong frame) {
+  if (frame < 0) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException", "frame must be non-negative");
+    return;
+  }
+  try {
+    AudioEngineBridge::locateTransport(static_cast<std::uint64_t>(frame));
+  } catch (const std::exception& ex) {
+    ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
+  }
+}
+
+JNIEXPORT jdoubleArray JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeGetTransportState(JNIEnv* env, jobject /*thiz*/) {
+  const auto state = AudioEngineBridge::getTransportState();
+  jdoubleArray result = env->NewDoubleArray(2);
+  if (result == nullptr) {
+    return nullptr;
+  }
+  const jdouble payload[2] = {
+      static_cast<jdouble>(state.currentFrame),
+      state.isPlaying ? 1.0 : 0.0,
+  };
+  env->SetDoubleArrayRegion(result, 0, 2, payload);
+  return result;
+}
+
+JNIEXPORT void JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeRenderInterleaved(JNIEnv* env, jobject /*thiz*/,
+                                                                     jfloatArray output, jint channels,
+                                                                     jint frames) {
+  if (output == nullptr || channels <= 0 || frames <= 0 ||
+      static_cast<std::size_t>(channels) > daft::audio::SceneGraph::maxSupportedChannels() ||
+      static_cast<std::size_t>(frames) > daft::audio::SceneGraph::maxSupportedFramesPerBuffer()) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException", "Invalid render buffer dimensions");
+    return;
+  }
+  const auto requiredSamples = static_cast<jsize>(channels * frames);
+  if (env->GetArrayLength(output) < requiredSamples) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException", "Render buffer is too small");
+    return;
+  }
+
+  using PlanarBuffer = std::array<
+      std::array<float, daft::audio::SceneGraph::maxSupportedFramesPerBuffer()>,
+      daft::audio::SceneGraph::maxSupportedChannels()>;
+  thread_local PlanarBuffer planar{};
+  std::array<float*, daft::audio::SceneGraph::maxSupportedChannels()> channelPointers{};
+  for (jint channel = 0; channel < channels; ++channel) {
+    channelPointers[static_cast<std::size_t>(channel)] = planar[static_cast<std::size_t>(channel)].data();
+  }
+  AudioEngineBridge::render(channelPointers.data(), static_cast<std::size_t>(channels),
+                            static_cast<std::size_t>(frames));
+
+  jboolean isCopy = JNI_FALSE;
+  jfloat* interleaved = env->GetFloatArrayElements(output, &isCopy);
+  if (interleaved == nullptr) {
+    return;
+  }
+  for (jint frame = 0; frame < frames; ++frame) {
+    for (jint channel = 0; channel < channels; ++channel) {
+      interleaved[frame * channels + channel] =
+          planar[static_cast<std::size_t>(channel)][static_cast<std::size_t>(frame)];
+    }
+  }
+  env->ReleaseFloatArrayElements(output, interleaved, 0);
 }
 
 /**

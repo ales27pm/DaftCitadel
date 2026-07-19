@@ -95,6 +95,11 @@ class AudioEngineBridge {
     std::size_t clipBufferBytes;
   };
 
+  struct TransportState {
+    std::uint64_t currentFrame;
+    bool isPlaying;
+  };
+
   struct ClipBuffer {
     double sampleRate = 0.0;
     std::size_t frameCount = 0;
@@ -112,6 +117,10 @@ class AudioEngineBridge {
   static void initialize(JNIEnv* env, double sampleRate, std::uint32_t framesPerBuffer);
   static void shutdown();
   static void render(float** outputs, std::size_t channelCount, std::size_t frameCount);
+  static void startTransport();
+  static void stopTransport();
+  static void locateTransport(std::uint64_t frame);
+  static TransportState getTransportState();
 
   static bool addNode(const std::string& id, std::unique_ptr<DSPNode> node);
   static void removeNode(const std::string& id);
@@ -136,6 +145,7 @@ class AudioEngineBridge {
   static std::mutex mutex_;
   static std::atomic<std::uint64_t> xruns_;
   static std::atomic<double> lastRenderDurationMicros_;
+  static bool isPlaying_;
   static std::unordered_map<std::string, ClipBufferEntry> clipBuffers_;
 };
 

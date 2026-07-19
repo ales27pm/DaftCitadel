@@ -1,6 +1,6 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { Platform } from 'react-native';
+import { NativeModules, Platform } from 'react-native';
 
 import {
   NativeAudioUnavailableError,
@@ -24,6 +24,12 @@ const setDevFlag = (value: boolean) => {
 describe('SessionAppProvider', () => {
   const originalDev = Boolean((globalThis as { __DEV__?: boolean }).__DEV__);
   const originalPlatform = Platform.OS;
+  const originalNodeEnv = process.env.NODE_ENV;
+  const originalNativeBridgeFlag = process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE;
+
+  beforeEach(() => {
+    delete process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE;
+  });
 
   const createDeferred = <T,>() => {
     let resolve!: (value: T | PromiseLike<T>) => void;
@@ -59,6 +65,12 @@ describe('SessionAppProvider', () => {
     jest.resetAllMocks();
     Platform.OS = originalPlatform;
     setDevFlag(originalDev);
+    process.env.NODE_ENV = originalNodeEnv;
+    if (originalNativeBridgeFlag === undefined) {
+      delete process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE;
+    } else {
+      process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE = originalNativeBridgeFlag;
+    }
   });
 
   const renderWithConsumer = async () => {
@@ -111,7 +123,7 @@ describe('SessionAppProvider', () => {
     expect(name).toBe('Demo Performance');
   });
 
-  it('prefers the passive environment when running in development', async () => {
+  it('keeps the Jest runtime passive by default', async () => {
     setDevFlag(true);
     Platform.OS = 'ios';
     const passiveEnvironment = await createTestEnvironment('dev-session');
@@ -130,6 +142,117 @@ describe('SessionAppProvider', () => {
     expect(productionSpy).not.toHaveBeenCalled();
     expect(status).toBe('ready');
     expect(name).toBe('Demo Performance');
+  });
+
+  it('uses the production bridge by default in a custom mobile dev client', async () => {
+    setDevFlag(true);
+    process.env.NODE_ENV = 'development';
+    Platform.OS = 'android';
+    const environment = await createTestEnvironment('native-dev-default-session');
+    const productionSpy = jest
+      .spyOn(environmentModule, 'createProductionSessionEnvironment')
+      .mockResolvedValue(environment);
+    const passiveSpy = jest
+      .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+      .mockImplementation(() => {
+        throw new Error('Passive environment should not be used');
+      });
+
+    const { status } = await renderWithConsumer();
+
+    expect(productionSpy).toHaveBeenCalledTimes(1);
+    expect(passiveSpy).not.toHaveBeenCalled();
+    expect(status).toBe('ready');
+  });
+
+  it('keeps Expo Go passive when the local audio module is absent', async () => {
+    setDevFlag(true);
+    process.env.NODE_ENV = 'development';
+    Platform.OS = 'ios';
+    const modules = NativeModules as Record<string, unknown>;
+    const originalAudioModule = modules.AudioEngineModule;
+    delete modules.AudioEngineModule;
+
+    try {
+      const passiveEnvironment = await createTestEnvironment('expo-go-session');
+      const passiveSpy = jest
+        .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+        .mockResolvedValue(passiveEnvironment);
+      const productionSpy = jest.spyOn(
+        environmentModule,
+        'createProductionSessionEnvironment',
+      );
+      const { status } = await renderWithConsumer();
+
+      expect(productionSpy).not.toHaveBeenCalled();
+      expect(passiveSpy).toHaveBeenCalledTimes(1);
+      expect(status).toBe('ready');
+    } finally {
+      modules.AudioEngineModule = originalAudioModule;
+    }
+  });
+
+  it('allows native audio to be disabled explicitly in a custom dev client', async () => {
+    setDevFlag(true);
+    process.env.NODE_ENV = 'development';
+    Platform.OS = 'android';
+    process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE = 'false';
+    const environment = await createTestEnvironment('native-dev-disabled-session');
+    const passiveSpy = jest
+      .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+      .mockResolvedValue(environment);
+    const productionSpy = jest.spyOn(
+      environmentModule,
+      'createProductionSessionEnvironment',
+    );
+
+    const { status } = await renderWithConsumer();
+
+    expect(passiveSpy).toHaveBeenCalledTimes(1);
+    expect(productionSpy).not.toHaveBeenCalled();
+    expect(status).toBe('ready');
+  });
+
+  it('uses the production bridge in a custom mobile dev build when opted in', async () => {
+    setDevFlag(true);
+    Platform.OS = 'android';
+    process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE = 'true';
+    const environment = await createTestEnvironment('native-dev-session');
+    const productionSpy = jest
+      .spyOn(environmentModule, 'createProductionSessionEnvironment')
+      .mockResolvedValue(environment);
+    const passiveSpy = jest
+      .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+      .mockImplementation(() => {
+        throw new Error('Passive environment should not be used');
+      });
+
+    const { status } = await renderWithConsumer();
+
+    expect(productionSpy).toHaveBeenCalledTimes(1);
+    expect(passiveSpy).not.toHaveBeenCalled();
+    expect(status).toBe('ready');
+  });
+
+  it('keeps web passive even when the native bridge flag is enabled', async () => {
+    setDevFlag(true);
+    Platform.OS = 'web';
+    process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE = 'true';
+    const environment = await createTestEnvironment('web-dev-session');
+    const passiveSpy = jest
+      .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+      .mockResolvedValue(environment);
+    const productionSpy = jest
+      .spyOn(environmentModule, 'createProductionSessionEnvironment')
+      .mockImplementation(() => {
+        throw new Error('Production environment should not be used on web');
+      });
+
+    const { status } = await renderWithConsumer();
+
+    expect(passiveSpy).toHaveBeenCalledTimes(1);
+    expect(productionSpy).not.toHaveBeenCalled();
+    expect(status).toBe('ready');
   });
 
   it('falls back to passive environment when native audio is unavailable', async () => {

@@ -407,7 +407,14 @@ exports[`ArrangementScreen diagnostics renders diagnostics error state 1`] = `
             Fixture Track • 0 clips • 120 BPM 4/4
           </Text>
           <Canvas
-            onLayout={[Function]}
+            onSize={
+              {
+                "value": {
+                  "height": 160,
+                  "width": 640,
+                },
+              }
+            }
             style={
               [
                 {
@@ -1087,7 +1094,14 @@ exports[`ArrangementScreen diagnostics renders diagnostics summary when ready 1`
             Fixture Track • 0 clips • 120 BPM 4/4
           </Text>
           <Canvas
-            onLayout={[Function]}
+            onSize={
+              {
+                "value": {
+                  "height": 160,
+                  "width": 640,
+                },
+              }
+            }
             style={
               [
                 {
@@ -1689,7 +1703,14 @@ exports[`ArrangementScreen diagnostics renders diagnostics unavailable state 1`]
             Fixture Track • 0 clips • 120 BPM 4/4
           </Text>
           <Canvas
-            onLayout={[Function]}
+            onSize={
+              {
+                "value": {
+                  "height": 160,
+                  "width": 640,
+                },
+              }
+            }
             style={
               [
                 {

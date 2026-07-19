@@ -1,7 +1,7 @@
 #import "AudioEngineModule.h"
+#import "AudioDeviceDriver.h"
 
 #import <React/RCTConvert.h>
-#import <ReactCommon/RCTTurboModule.h>
 #import <os/log.h>
 
 #include <algorithm>
@@ -99,6 +99,10 @@ void RejectPromise(RCTPromiseRejectBlock reject, NSString* code, const std::stri
 }
 }  // namespace
 
+@interface AudioEngineModule ()
+@property(nonatomic, strong) DaftAudioDeviceDriver* deviceDriver;
+@end
+
 @implementation AudioEngineModule
 
 RCT_EXPORT_MODULE();
@@ -107,10 +111,12 @@ RCT_EXPORT_MODULE();
   return NO;
 }
 
-- (std::shared_ptr<facebook::react::TurboModule>)getTurboModuleWithJsInvoker:(std::shared_ptr<facebook::react::CallInvoker>)jsInvoker
-                                                                nativeInvoker:(std::shared_ptr<facebook::react::CallInvoker>)nativeInvoker
-                                                                   perfLogger:(id<RCTTurboModulePerformanceLogger>)perfLogger {
-  return std::make_shared<facebook::react::ObjCTurboModule>(self, jsInvoker, nativeInvoker, perfLogger);
+- (instancetype)init {
+  self = [super init];
+  if (self != nil) {
+    _deviceDriver = [[DaftAudioDeviceDriver alloc] init];
+  }
+  return self;
 }
 
 RCT_EXPORT_METHOD(initialize:(double)sampleRate
@@ -139,7 +145,16 @@ RCT_EXPORT_METHOD(initialize:(double)sampleRate
     return;
   }
   try {
+    [self.deviceDriver stop];
     AudioEngineBridge::initialize(sampleRate, framesUnsigned);
+    NSError* deviceError = nil;
+    if (![self.deviceDriver startWithSampleRate:sampleRate
+                               framesPerBuffer:framesUnsigned
+                                         error:&deviceError]) {
+      AudioEngineBridge::shutdown();
+      reject(@"initialize_failed", @"Unable to start the iOS audio device", deviceError);
+      return;
+    }
     resolve(nil);
   } catch (const std::exception& ex) {
     os_log_error(ModuleLogger(), "Initialize failed: %{public}s", ex.what());
@@ -150,11 +165,30 @@ RCT_EXPORT_METHOD(initialize:(double)sampleRate
 RCT_EXPORT_METHOD(shutdown:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
   try {
+    [self.deviceDriver stop];
     AudioEngineBridge::shutdown();
     resolve(nil);
   } catch (const std::exception& ex) {
     os_log_error(ModuleLogger(), "Shutdown failed: %{public}s", ex.what());
     RejectPromise(reject, @"shutdown_failed", ex.what());
+  }
+}
+
+- (void)invalidate {
+  [self.deviceDriver stop];
+  try {
+    AudioEngineBridge::shutdown();
+  } catch (...) {
+    os_log_error(ModuleLogger(), "Audio engine shutdown failed during invalidation");
+  }
+}
+
+- (void)dealloc {
+  [self.deviceDriver stop];
+  try {
+    AudioEngineBridge::shutdown();
+  } catch (...) {
+    os_log_error(ModuleLogger(), "Audio engine shutdown failed during deallocation");
   }
 }
 
@@ -257,11 +291,17 @@ RCT_EXPORT_METHOD(registerClipBuffer:(NSString*)bufferKey
 
   for (NSUInteger index = 0; index < channelCountUnsigned; ++index) {
     id entry = channelData[index];
-    if (![entry isKindOfClass:[NSData class]]) {
-      RejectPromise(reject, @"invalid_arguments", "channelData entries must be ArrayBuffer instances");
+    NSData* data = nil;
+    if ([entry isKindOfClass:[NSData class]]) {
+      data = (NSData*)entry;
+    } else if ([entry isKindOfClass:[NSString class]]) {
+      data = [[NSData alloc] initWithBase64EncodedString:(NSString*)entry
+                                                options:NSDataBase64DecodingIgnoreUnknownCharacters];
+    }
+    if (data == nil) {
+      RejectPromise(reject, @"invalid_arguments", "channelData entries must be base64 Float32 PCM strings");
       return;
     }
-    NSData* data = (NSData*)entry;
     if (data.length < requiredBytes) {
       RejectPromise(reject, @"invalid_arguments", "channelData entry is smaller than the expected frame count");
       return;
@@ -375,11 +415,61 @@ RCT_EXPORT_METHOD(scheduleParameterAutomation:(NSString*)nodeId
     return;
   }
   try {
-    AudioEngineBridge::scheduleParameterAutomation([nodeId UTF8String], [parameter UTF8String], frameTicks, value);
+    AudioEngineBridge::scheduleParameterAutomation([nodeId UTF8String], [[parameter lowercaseString] UTF8String],
+                                                   frameTicks, value);
     resolve(nil);
   } catch (const std::exception& ex) {
     os_log_error(ModuleLogger(), "scheduleParameterAutomation failed: %{public}s", ex.what());
     RejectPromise(reject, @"automation_failed", ex.what());
+  }
+}
+
+RCT_EXPORT_METHOD(startTransport:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+  try {
+    AudioEngineBridge::startTransport();
+    resolve(nil);
+  } catch (const std::exception& ex) {
+    RejectPromise(reject, @"transport_start_failed", ex.what());
+  }
+}
+
+RCT_EXPORT_METHOD(stopTransport:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+  try {
+    AudioEngineBridge::stopTransport();
+    resolve(nil);
+  } catch (const std::exception& ex) {
+    RejectPromise(reject, @"transport_stop_failed", ex.what());
+  }
+}
+
+RCT_EXPORT_METHOD(locateTransport:(nonnull NSNumber*)frame
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+  if (frame == nil || !std::isfinite(frame.doubleValue) || frame.doubleValue < 0.0 ||
+      std::floor(frame.doubleValue) != frame.doubleValue) {
+    RejectPromise(reject, @"invalid_arguments", "frame must be a non-negative integer");
+    return;
+  }
+  try {
+    AudioEngineBridge::locateTransport(frame.unsignedLongLongValue);
+    resolve(nil);
+  } catch (const std::exception& ex) {
+    RejectPromise(reject, @"transport_locate_failed", ex.what());
+  }
+}
+
+RCT_EXPORT_METHOD(getTransportState:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+  try {
+    const auto state = AudioEngineBridge::getTransportState();
+    resolve(@{
+      @"currentFrame" : @(static_cast<unsigned long long>(state.currentFrame)),
+      @"isPlaying" : @(state.isPlaying),
+    });
+  } catch (const std::exception& ex) {
+    RejectPromise(reject, @"transport_state_failed", ex.what());
   }
 }
 

@@ -69,6 +69,10 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => {
+  jest.restoreAllMocks();
+});
+
 describe('ArrangementScreen diagnostics', () => {
   const renderScreen = async () => {
     let renderer: TestRenderer.ReactTestRenderer | undefined;
@@ -87,6 +91,7 @@ describe('ArrangementScreen diagnostics', () => {
   };
 
   it('renders diagnostics summary when ready', async () => {
+    jest.spyOn(Date.prototype, 'toLocaleString').mockReturnValue('1/1/2024, 12:00:00 AM');
     const transport = { ...baseTransport, isPlaying: true, playheadRatio: 0.5 };
     useProjectedTransport.mockReturnValue({
       projectedBeats: transport.lengthBeats * 0.5,

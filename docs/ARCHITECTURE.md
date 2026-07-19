@@ -21,7 +21,7 @@ Daft Citadel combines a React Native shell, a TypeScript session core, and a nat
 3. **Audio and plugin integration (`src/audio/`)**
    - [`AudioEngine`](../src/audio/AudioEngine.ts) wraps the native module contract (`NativeAudioEngine`) and enforces buffer semantics before delegating to platform code.
    - [`SessionAudioBridge`](../src/audio/SessionAudioBridge.ts) diff-compares session routing graphs, provisions plugin sandboxes, and calls into the engine to realise the desired node graph while preserving the last working plugin binding whenever descriptor resolution fails or reloads error out.
-   - The plugin host (`src/audio/plugins/`) instantiates AUv3/VST3 components through `PluginHost`, translating crash notifications into retry hooks consumed by the session provider.
+   - The plugin host facade (`src/audio/plugins/`) requires an explicit native `runtimeReady` capability before exposing AUv3/VST3 components. Current mobile bridges fail closed until their audio render callbacks are implemented.
    - Automation helpers in [`src/audio/Automation.ts`](../src/audio/Automation.ts) maintain tempo-aligned scheduling for clip buffers and plugin envelopes.
 4. **Supporting services (`src/services/`)**
    - Collaboration services under `src/services/collab/` manage encryption, signalling payloads, and latency monitoring for remote sessions.
@@ -33,7 +33,7 @@ Daft Citadel combines a React Native shell, a TypeScript session core, and a nat
 ## Runtime Flow
 
 1. **Application bootstrap**
-   - The React entry point mounts `AppNavigator` inside `SessionAppProvider`, which constructs a `SessionManager` with the active storage adapter and optional cloud provider. The provider automatically selects the native audio-backed environment on mobile release builds and falls back to the passive bridge for development, simulators, or when native audio cannot be initialised.
+   - The React entry point mounts `AppNavigator` inside `SessionAppProvider`, which constructs a `SessionManager` with the active storage adapter and optional cloud provider. Mobile release builds and custom development clients with the local audio module attempt the native environment; Expo Go, web, tests, and native initialization failures use the passive bridge.
    - `SessionViewModelProvider` derives memoised view state (tracks, transport, diagnostics, plugin alerts) and exposes helper hooks like `useTransportControls`.
 2. **Session hydration**
    - On first render, `SessionViewModelProvider` calls `SessionManager.loadSession`. When no session exists, it can seed one through the optional `bootstrapSession` callback.

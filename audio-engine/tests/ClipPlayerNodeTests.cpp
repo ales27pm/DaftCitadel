@@ -80,8 +80,28 @@ void TestFades() {
   node.setParameter("gain", 0.5);
 
   const auto rendered = RenderBlock(node, 4);
-  const std::vector<float> expected{0.25F, 0.5F, 0.5F, 0.25F};
+  const std::vector<float> expected{0.0F, 0.5F, 0.5F, 0.0F};
   AssertSamples(rendered, expected, 1e-6F, "Clip fades");
+}
+
+void TestSingleFrameFadesReachSilence() {
+  ClipPlayerNode fadeIn;
+  fadeIn.prepare(44100.0);
+  fadeIn.setClipBuffer(CreateClipBuffer({{1.0F, 1.0F}}, 44100.0));
+  fadeIn.setParameter("startframe", 0.0);
+  fadeIn.setParameter("endframe", 2.0);
+  fadeIn.setParameter("fadeinframes", 1.0);
+  AssertSamples(RenderBlock(fadeIn, 2), std::vector<float>{0.0F, 1.0F}, 1e-6F,
+                "Single-frame fade in");
+
+  ClipPlayerNode fadeOut;
+  fadeOut.prepare(44100.0);
+  fadeOut.setClipBuffer(CreateClipBuffer({{1.0F, 1.0F}}, 44100.0));
+  fadeOut.setParameter("startframe", 0.0);
+  fadeOut.setParameter("endframe", 2.0);
+  fadeOut.setParameter("fadeoutframes", 1.0);
+  AssertSamples(RenderBlock(fadeOut, 2), std::vector<float>{1.0F, 0.0F}, 1e-6F,
+                "Single-frame fade out");
 }
 
 void TestResetAllowsReplay() {
@@ -109,6 +129,7 @@ void TestResetAllowsReplay() {
 void RunClipPlayerNodeTests() {
   TestPlaybackScheduling();
   TestFades();
+  TestSingleFrameFadesReachSilence();
   TestResetAllowsReplay();
 }
 

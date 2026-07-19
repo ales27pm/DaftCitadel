@@ -513,14 +513,14 @@ async function buildMarkdown({
   }
   lines.push('');
   if (!Array.isArray(protocols) || protocols.length === 0) {
-    return lines.join('\n') + '\n';
+    return ensureTrailingNewline(lines.join('\n'));
   }
   const base = lines.join('\n');
   return ensureTrailingNewline(appendProtocols(base, protocols));
 }
 
 function ensureTrailingNewline(text) {
-  return text.endsWith('\n') ? text : `${text}\n`;
+  return `${text.replace(/\s+$/u, '')}\n`;
 }
 
 function appendProtocols(content, protocols) {

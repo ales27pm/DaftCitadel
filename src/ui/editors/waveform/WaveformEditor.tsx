@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { LayoutChangeEvent, StyleProp, ViewStyle } from 'react-native';
+import { StyleProp, ViewStyle } from 'react-native';
 import { Canvas, Path, Skia } from '@shopify/react-native-skia';
 import {
   SharedValue,
@@ -33,6 +33,7 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
   const theme = useTheme();
   const [canvasWidth, setCanvasWidth] = useState(width);
   const internalPlayhead = useSharedValue(0);
+  const canvasSize = useSharedValue({ width, height });
   const playheadValue = playhead ?? internalPlayhead;
   const canvasStyle = useMemo(
     () => [{ width: canvasWidth, height }, style],
@@ -61,12 +62,19 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
     [onPlayheadChange],
   );
 
-  const handleLayout = (event: LayoutChangeEvent) => {
-    const newWidth = event.nativeEvent.layout.width;
-    if (Number.isFinite(newWidth) && newWidth > 0 && newWidth !== canvasWidth) {
-      setCanvasWidth(newWidth);
-    }
-  };
+  useAnimatedReaction<number>(
+    () => canvasSize.value.width,
+    (measuredWidth, previous) => {
+      if (
+        Number.isFinite(measuredWidth) &&
+        measuredWidth > 0 &&
+        measuredWidth !== previous
+      ) {
+        runOnJS(setCanvasWidth)(measuredWidth);
+      }
+    },
+    [canvasSize],
+  );
 
   const progressPath = useMemo(() => {
     const x = progress * canvasWidth;
@@ -82,7 +90,7 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
   );
 
   return (
-    <Canvas style={canvasStyle} onLayout={handleLayout}>
+    <Canvas style={canvasStyle} onSize={canvasSize}>
       <Path
         path={waveformPath}
         color={theme.colors.waveform}

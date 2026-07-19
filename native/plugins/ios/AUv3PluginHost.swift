@@ -5,6 +5,8 @@ import React
 
 @objc(PluginHostModule)
 class PluginHostModule: RCTEventEmitter {
+  private let runtimeUnavailableMessage =
+    "AUv3 hosting is disabled because its render callback is not connected to the audio engine"
   private struct PluginInstanceState {
     let identifier: String
     let instanceId: String
@@ -24,6 +26,10 @@ class PluginHostModule: RCTEventEmitter {
     false
   }
 
+  override func constantsToExport() -> [AnyHashable: Any]! {
+    ["runtimeReady": false]
+  }
+
   override func supportedEvents() -> [String]! {
     ["pluginCrashed", "sandboxPermissionRequired"]
   }
@@ -34,16 +40,9 @@ class PluginHostModule: RCTEventEmitter {
     resolver: @escaping RCTPromiseResolveBlock,
     rejecter: @escaping RCTPromiseRejectBlock
   ) {
-    queue.async { [weak self] in
-      guard let self else { return }
-      let components = self.componentManager.components(matching: nil)
-      let filtered = components.filter { component in
-        guard let format = format as String? else { return true }
-        return format.lowercased() == "auv3" ? component.audioComponentDescription.componentType == kAudioUnitType_Effect : true
-      }
-      let descriptors = filtered.map { self.makeDescriptor(component: $0) }
-      resolver(descriptors)
-    }
+    // A linked control bridge is not an audio capability. Do not advertise
+    // components until PluginHostBridge has a real-time render callback.
+    resolver([])
   }
 
   @objc(instantiatePlugin:options:resolver:rejecter:)
@@ -53,62 +52,7 @@ class PluginHostModule: RCTEventEmitter {
     resolver: @escaping RCTPromiseResolveBlock,
     rejecter: @escaping RCTPromiseRejectBlock
   ) {
-    let identifierString = identifier as String
-    guard let component = componentManager.components(matchingIdentifier: identifierString).first else {
-      rejecter("missing_component", "AUv3 component not found for \(identifierString)", nil)
-      return
-    }
-
-    queue.async { [weak self] in
-      guard let self else { return }
-      component.instantiate(with: component.audioComponentDescription, options: []) { audioUnit, error in
-        if let error {
-          rejecter("instantiate_failed", "Failed to instantiate plugin: \(error.localizedDescription)", error)
-          return
-        }
-        guard let audioUnit else {
-          rejecter("instantiate_failed", "Failed to instantiate plugin", nil)
-          return
-        }
-
-        let descriptor = self.makeDescriptor(component: component)
-        let instanceId = UUID().uuidString
-        let sandboxIdentifier = options["sandboxIdentifier"] as? String
-        var sandboxPath: String?
-        if let sandboxIdentifier {
-          sandboxPath = try? self.sandboxCoordinator.ensureSandbox(identifier: sandboxIdentifier)
-        }
-
-        let token = audioUnit.token(byAddingRenderObserver: { [weak self] _, _, status in
-          guard status != noErr, let self else { return }
-          self.emitCrashEvent(
-            instanceId: instanceId,
-            descriptor: descriptor,
-            reason: "render_error_status_\(status)",
-            sandboxPath: sandboxPath,
-            recovered: false
-          )
-        })
-
-        let state = PluginInstanceState(
-          identifier: identifierString,
-          instanceId: instanceId,
-          audioUnit: audioUnit,
-          descriptor: descriptor,
-          sandboxPath: sandboxPath,
-          renderObserverToken: token
-        )
-        self.instances[instanceId] = state
-
-        resolver([
-          "instanceId": instanceId,
-          "descriptor": descriptor,
-          "cpuLoadPercent": audioUnit.cpuLoad * 100.0,
-          "latencySamples": audioUnit.latency,
-          "sandboxPath": sandboxPath as Any,
-        ])
-      }
-    }
+    rejecter("runtime_unavailable", runtimeUnavailableMessage, nil)
   }
 
   @objc(releasePlugin:resolver:rejecter:)
@@ -189,13 +133,10 @@ class PluginHostModule: RCTEventEmitter {
       rejecter("missing_parameter", "Parameter \(parameterId) not found", nil)
       return
     }
-    guard let scheduleBlock = state.audioUnit.scheduleParameterBlock else {
-      rejecter("missing_schedule", "Parameter scheduling unsupported", nil)
-      return
-    }
+    let scheduleBlock = state.audioUnit.scheduleParameterBlock
 
     let sampleRate = state.audioUnit.outputBusses.first?.format.sampleRate ?? 44100
-    let events: [AUParameterAutomationEvent] = curve.compactMap { element in
+    let events: [(sampleTime: AUEventSampleTime, value: AUValue)] = curve.compactMap { element in
       guard
         let dict = element as? [String: Any],
         let timeMs = dict["time"] as? Double,
@@ -204,18 +145,13 @@ class PluginHostModule: RCTEventEmitter {
         return nil
       }
       let sampleTime = AUEventSampleTime(timeMs * sampleRate / 1000.0)
-      return AUParameterAutomationEvent(
-        parameterID: parameter.address,
-        scope: 0,
-        element: 0,
-        value: Float(value),
-        start: sampleTime,
-        duration: 0
-      )
+      return (sampleTime: sampleTime, value: AUValue(value))
     }
 
     queue.async {
-      scheduleBlock(AUEventSampleTimeImmediate, 0, events.count, events)
+      for event in events.sorted(by: { $0.sampleTime < $1.sampleTime }) {
+        scheduleBlock(event.sampleTime, 0, parameter.address, event.value)
+      }
       resolver(NSNull())
     }
   }
@@ -234,7 +170,9 @@ class PluginHostModule: RCTEventEmitter {
       } catch {
         self.sendEvent(withName: "sandboxPermissionRequired", body: [
           "identifier": identifier,
-          "requiredEntitlements": ["com.apple.security.network.client"],
+          // Application Support is inside the app container and needs no
+          // additional entitlement. The underlying file error is actionable.
+          "requiredEntitlements": [],
           "reason": error.localizedDescription,
         ])
         rejecter("sandbox_error", error.localizedDescription, error)
@@ -292,6 +230,17 @@ class PluginHostModule: RCTEventEmitter {
     ]
   }
 
+  private func availableComponents() -> [AVAudioUnitComponent] {
+    let wildcard = AudioComponentDescription(
+      componentType: 0,
+      componentSubType: 0,
+      componentManufacturer: 0,
+      componentFlags: 0,
+      componentFlagsMask: 0
+    )
+    return componentManager.components(matching: wildcard)
+  }
+
   private func emitCrashEvent(
     instanceId: String,
     descriptor: [String: Any],
@@ -316,7 +265,7 @@ private class PluginSandboxCoordinator {
 
   func ensureSandbox(identifier: String) throws -> String {
     let baseURL = try pluginBaseDirectory()
-    let pluginURL = baseURL.appendingPathComponent(identifier, isDirectory: true)
+    var pluginURL = baseURL.appendingPathComponent(identifier, isDirectory: true)
     if !fileManager.fileExists(atPath: pluginURL.path) {
       try fileManager.createDirectory(at: pluginURL, withIntermediateDirectories: true)
       var resourceValues = URLResourceValues()

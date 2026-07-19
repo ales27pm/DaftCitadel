@@ -1,6 +1,7 @@
 import React, { PropsWithChildren, useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 
+import { isNativeModuleAvailable } from '../../audio';
 import { SessionViewModelProvider } from './SessionViewModelProvider';
 import {
   NativeAudioUnavailableError,
@@ -12,6 +13,46 @@ import {
 } from './environment';
 
 const APP_ENVIRONMENT_CONTEXT = 'app session environment';
+const NATIVE_BRIDGE_DEV_FLAG = 'EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE';
+
+const getNativeBridgeDevelopmentOverride = (): boolean | undefined => {
+  if (typeof process === 'undefined') {
+    return undefined;
+  }
+  const value = process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE;
+  if (value === 'true') {
+    return true;
+  }
+  if (value === 'false') {
+    return false;
+  }
+  return undefined;
+};
+
+const isTestRuntime = (): boolean =>
+  typeof process !== 'undefined' && process.env.NODE_ENV === 'test';
+
+const shouldAttemptProductionEnvironment = (): boolean => {
+  const isNativePlatform = Platform.OS === 'ios' || Platform.OS === 'android';
+  if (!isNativePlatform) {
+    return false;
+  }
+
+  const developmentOverride = getNativeBridgeDevelopmentOverride();
+  if (developmentOverride === false) {
+    return false;
+  }
+
+  // Release builds always exercise the production bootstrap so a missing native
+  // binding is reported through its normal fallback. In development, the local
+  // AudioEngine module is the reliable distinction between a custom dev client
+  // and Expo Go. Jest remains passive unless a test explicitly opts in.
+  return (
+    !__DEV__ ||
+    developmentOverride === true ||
+    (!isTestRuntime() && isNativeModuleAvailable())
+  );
+};
 
 export const SessionAppProvider: React.FC<PropsWithChildren> = ({ children }) => {
   const [environment, setEnvironment] = useState<SessionEnvironment | null>(null);
@@ -23,8 +64,16 @@ export const SessionAppProvider: React.FC<PropsWithChildren> = ({ children }) =>
 
   useEffect(() => {
     let cancelled = false;
-    const shouldUseProduction =
-      !__DEV__ && (Platform.OS === 'ios' || Platform.OS === 'android');
+    const shouldUseProduction = shouldAttemptProductionEnvironment();
+
+    if (__DEV__ && shouldUseProduction) {
+      const override = getNativeBridgeDevelopmentOverride();
+      console.info(
+        override === true
+          ? `Using production native bridge via ${NATIVE_BRIDGE_DEV_FLAG}.`
+          : 'Using production native bridge from the custom development client.',
+      );
+    }
 
     const bootstrap = async () => {
       try {
@@ -80,7 +129,9 @@ const bootstrapEnvironment = async (
     if (Platform.OS === 'web') {
       console.info('Using passive session environment for web platform.');
     } else if (__DEV__) {
-      console.info('Using passive session environment for development build.');
+      console.info(
+        'Using passive session environment because native audio is unavailable or disabled.',
+      );
     }
     return createPassiveSessionEnvironment();
   }

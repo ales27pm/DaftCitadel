@@ -32,7 +32,8 @@ export interface PeerSignalingClient {
   sendOffer(offer: SignalingOffer): Promise<void>;
   sendAnswer(answer: SignalingAnswer): Promise<void>;
   sendIceCandidate(candidate: SignalingIceCandidate): Promise<void>;
-  sendPublicKey(publicKey: string): Promise<void>;
+  /** Relays the opaque, serialized authenticated key-exchange envelope unchanged. */
+  sendPublicKey(publicKeySignal: string): Promise<void>;
   disconnect(): Promise<void>;
   on<K extends EventKey>(event: K, listener: Listener<K>): this;
   off<K extends EventKey>(event: K, listener: Listener<K>): this;
@@ -52,7 +53,7 @@ export abstract class AbstractPeerSignalingClient
 
   abstract sendIceCandidate(candidate: SignalingIceCandidate): Promise<void>;
 
-  abstract sendPublicKey(publicKey: string): Promise<void>;
+  abstract sendPublicKey(publicKeySignal: string): Promise<void>;
 
   abstract disconnect(): Promise<void>;
 
