@@ -1,10 +1,12 @@
 node_modules/
 audio-engine/build/
+audio-engine/build*/
 audio-engine/build-sanitize/
 *.log
 .DS_Store
 .vscode/PythonImportHelper-v2-Completion.json
 deps/
+dist/
 coverage/
 lib/
 .expo/

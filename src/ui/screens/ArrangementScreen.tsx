@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo } from 'react';
-import { SafeAreaView, ScrollView, View } from 'react-native';
+import { ScrollView, View } from 'react-native';
 import { useSharedValue } from 'react-native-reanimated';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { MidiPianoRoll, WaveformEditor } from '../editors';
 import {
@@ -15,6 +16,7 @@ import {
   useTransportControls,
   useProjectedTransport,
 } from '../session';
+import { formatAlertTimestamp } from '../utils/date';
 
 export const ArrangementScreen: React.FC = () => {
   const adaptive = useAdaptiveLayout();
@@ -77,7 +79,7 @@ export const ArrangementScreen: React.FC = () => {
     () =>
       pluginAlerts.map((alert) => {
         const label = alert.descriptor?.name ?? alert.instanceId;
-        const timestamp = new Date(alert.timestamp).toLocaleString();
+        const timestamp = formatAlertTimestamp(alert.timestamp);
         const recoveryNote = alert.recovered ? ' • Recovered' : '';
         return (
           <NeonSurface

@@ -56,6 +56,51 @@ describe('ClipBufferCache', () => {
     expect(uploader.releaseClipBuffer).toHaveBeenCalledTimes(2);
   });
 
+  it('copies shared-memory channels into native-safe ArrayBuffers', async () => {
+    if (typeof SharedArrayBuffer === 'undefined') {
+      return;
+    }
+    const sharedSamples = new Float32Array(
+      new SharedArrayBuffer(frames * Float32Array.BYTES_PER_ELEMENT),
+    );
+    sharedSamples.fill(0.25);
+    const loader = {
+      load: jest.fn(async () => ({
+        sampleRate,
+        frames,
+        channels: 1,
+        data: [sharedSamples],
+      })),
+    };
+    let uploadedChannels: ReadonlyArray<ArrayBuffer> | undefined;
+    const uploader = {
+      uploadClipBuffer: jest.fn(
+        async (
+          _bufferKey: string,
+          _sampleRate: number,
+          _channels: number,
+          _frames: number,
+          channelData: ReadonlyArray<ArrayBuffer>,
+        ) => {
+          uploadedChannels = channelData;
+        },
+      ),
+      releaseClipBuffer: jest.fn(async () => undefined),
+    };
+    const cache = new ClipBufferCache(loader, uploader, createLogger());
+
+    await cache.getClipBuffer('fixtures/shared.wav', sampleRate);
+
+    expect(uploadedChannels).toBeDefined();
+    if (!uploadedChannels) {
+      throw new Error('Expected the cache to upload shared-memory channel data');
+    }
+    expect(Object.prototype.toString.call(uploadedChannels[0])).toBe(
+      '[object ArrayBuffer]',
+    );
+    expect(new Float32Array(uploadedChannels[0])[0]).toBeCloseTo(0.25);
+  });
+
   it('coalesces concurrent decode and upload requests for the same clip', async () => {
     let resolveLoad: ((value: ReturnType<typeof createAudioFile>) => void) | undefined;
     const loader = {

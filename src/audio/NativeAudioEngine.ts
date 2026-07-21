@@ -61,6 +61,9 @@ const resolveRegisteredModule = (): AudioEngineSpec | null => {
 // a stale module reference across native lifecycle changes.
 export const NativeAudioEngine = new Proxy({} as AudioEngineSpec, {
   get: (target, property, receiver) => {
+    if (typeof property === 'symbol' || property === 'then') {
+      return undefined;
+    }
     if (Reflect.has(target, property)) {
       return Reflect.get(target, property, receiver);
     }
@@ -69,7 +72,7 @@ export const NativeAudioEngine = new Proxy({} as AudioEngineSpec, {
       return () =>
         Promise.reject(
           new Error(
-            `${moduleName}.${String(property)} is unavailable because the native module is not linked`,
+            `${moduleName}.${String(property)} is unavailable because the native module is not linked. Use an Expo development build that includes native audio.`,
           ),
         );
     }

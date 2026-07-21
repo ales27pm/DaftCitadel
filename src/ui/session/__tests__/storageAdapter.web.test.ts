@@ -1,11 +1,11 @@
-import { AsyncStorageSessionStorageAdapter } from '../../../session/storage/asyncStorageAdapter.native';
+import { LocalStorageSessionStorageAdapter } from '../../../session/storage/localStorageAdapter.web';
 import { InMemorySessionStorageAdapter } from '../../../session/storage/memoryAdapter';
 import { createSessionStorageAdapter } from '../storageAdapter.web';
 
 describe('web session storage selection', () => {
-  it('uses the browser-compatible AsyncStorage adapter', () => {
+  it('uses the browser-compatible localStorage adapter', () => {
     expect(createSessionStorageAdapter('web-sessions', true)).toBeInstanceOf(
-      AsyncStorageSessionStorageAdapter,
+      LocalStorageSessionStorageAdapter,
     );
   });
 

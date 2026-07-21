@@ -61,26 +61,39 @@ export type PluginHostEventPayloads = {
 
 const moduleName = 'PluginHostModule';
 
-const registry = TurboModuleRegistry as typeof TurboModuleRegistry | undefined;
-const modules = NativeModules as typeof NativeModules | undefined;
-const registeredModule =
-  (typeof registry?.get === 'function'
-    ? registry.get<PluginHostSpec>(moduleName)
-    : null) ??
-  (modules?.[moduleName] as PluginHostSpec | undefined) ??
-  null;
+type TurboModuleLookup = {
+  get?<T extends TurboModule>(name: string): T | null;
+};
 
-const unavailableModule = new Proxy({} as PluginHostSpec, {
-  get: (_target, property) => () =>
-    Promise.reject(
-      new Error(
-        `${moduleName}.${String(property)} is unavailable because the native module is not linked`,
-      ),
-    ),
+const resolveNativePluginHost = (): PluginHostSpec | undefined => {
+  const registry = TurboModuleRegistry as unknown as TurboModuleLookup | undefined;
+  const turboModule = registry?.get?.<PluginHostSpec>(moduleName);
+  if (turboModule) {
+    return turboModule;
+  }
+
+  return (NativeModules as Record<string, unknown> | undefined)?.[moduleName] as
+    | PluginHostSpec
+    | undefined;
+};
+
+const unavailablePluginHost = new Proxy({} as PluginHostSpec, {
+  get: (_target, property) => {
+    if (typeof property === 'symbol' || property === 'then') {
+      return undefined;
+    }
+
+    return async () => {
+      throw new Error(
+        `${moduleName}.${property} is unavailable. Use a native development build that includes the plugin host.`,
+      );
+    };
+  },
 });
 
-export const NativePluginHost: PluginHostSpec = registeredModule ?? unavailableModule;
+export const NativePluginHost: PluginHostSpec =
+  resolveNativePluginHost() ?? unavailablePluginHost;
 
 export const isPluginHostAvailable = (): boolean => {
-  return registeredModule?.runtimeReady === true;
+  return resolveNativePluginHost()?.runtimeReady === true;
 };

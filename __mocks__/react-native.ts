@@ -5,6 +5,7 @@ export const ScrollView = 'ScrollView';
 export const SafeAreaView = 'SafeAreaView';
 export const Text = 'Text';
 export const Pressable = 'Pressable';
+export const ActivityIndicator = 'ActivityIndicator';
 export const TouchableOpacity = 'TouchableOpacity';
 export const FlatList = 'FlatList';
 export const SectionList = 'SectionList';
@@ -561,12 +562,19 @@ export class NativeEventEmitter extends MockNativeEventEmitter {
 }
 
 export const TurboModuleRegistry = {
+  get: <T>(name: string): T | null => (NativeModules[name] as T) ?? null,
   getEnforcing: <T>(name: string): T => NativeModules[name] as T,
 };
 
-export const Platform: { OS: 'ios' | 'android' | 'macos'; Version: number } = {
+export const Platform: {
+  OS: 'ios' | 'android' | 'macos';
+  Version: number;
+  select: <T>(specifics: Record<string, T | undefined>) => T | undefined;
+} = {
   OS: 'ios',
   Version: 17,
+  select: <T>(specifics: Record<string, T | undefined>): T | undefined =>
+    specifics[Platform.OS] ?? specifics.native ?? specifics.default,
 };
 
 export const PermissionsAndroid = {

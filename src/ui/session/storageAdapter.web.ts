@@ -1,5 +1,5 @@
 import type { SessionStorageAdapter } from '../../session/storage';
-import { AsyncStorageSessionStorageAdapter } from '../../session/storage/asyncStorageAdapter.native';
+import { LocalStorageSessionStorageAdapter } from '../../session/storage/localStorageAdapter.web';
 import { InMemorySessionStorageAdapter } from '../../session/storage/memoryAdapter';
 
 const hasBrowserLocalStorage = (): boolean => {
@@ -14,13 +14,13 @@ const hasBrowserLocalStorage = (): boolean => {
 };
 
 /**
- * Browser builds persist through AsyncStorage's web implementation. The JSON
- * adapter depends on Node's fs/path APIs and cannot execute in React Native Web.
+ * Browser builds persist directly through localStorage. SSR and privacy modes
+ * that deny storage fall back to memory instead of failing app startup.
  */
 export const createSessionStorageAdapter = (
   directory: string,
   persistentStorageAvailable = hasBrowserLocalStorage(),
 ): SessionStorageAdapter =>
   persistentStorageAvailable
-    ? new AsyncStorageSessionStorageAdapter(directory)
+    ? new LocalStorageSessionStorageAdapter(directory)
     : new InMemorySessionStorageAdapter();

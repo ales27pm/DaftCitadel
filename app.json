@@ -24,9 +24,11 @@
       ]
     },
     "web": {
-      "bundler": "metro"
+      "bundler": "metro",
+      "name": "Daft Citadel"
     },
     "plugins": [
+      "expo-sqlite",
       "./plugins/with-daft-citadel-native",
       "expo-dev-client",
       [

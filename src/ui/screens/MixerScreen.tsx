@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo } from 'react';
-import { SafeAreaView, ScrollView, View, StyleSheet, ViewStyle } from 'react-native';
+import { ScrollView, View, StyleSheet, ViewStyle } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withTiming,
 } from 'react-native-reanimated';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   NeonButton,
@@ -15,6 +16,7 @@ import {
 } from '../design-system';
 import { useAdaptiveLayout } from '../layout';
 import { TrackViewModel, useSessionViewModel } from '../session';
+import { formatAlertTimestamp } from '../utils/date';
 
 const channelStyles = StyleSheet.create({
   container: { margin: 12, flexBasis: '45%' },
@@ -171,7 +173,7 @@ export const MixerScreen: React.FC = () => {
       return null;
     }
     return pluginAlerts.map((alert) => {
-      const timestamp = new Date(alert.timestamp).toLocaleTimeString();
+      const timestamp = formatAlertTimestamp(alert.timestamp);
       const title = alert.descriptor?.name ?? alert.instanceId;
       const recovered = alert.recovered === true;
       const intent: ThemeIntent = recovered ? 'success' : 'critical';
