@@ -92,7 +92,36 @@ describe('ClipBufferCache', () => {
     if (!uploadedChannels) {
       throw new Error('Expected the cache to upload shared-memory channel data');
     }
-    expect(uploadedChannels[0]).toBeInstanceOf(ArrayBuffer);
+    expect(Object.prototype.toString.call(uploadedChannels[0])).toBe(
+      '[object ArrayBuffer]',
+    );
     expect(new Float32Array(uploadedChannels[0])[0]).toBeCloseTo(0.25);
+  });
+
+  it('coalesces concurrent decode and upload requests for the same clip', async () => {
+    let resolveLoad: ((value: ReturnType<typeof createAudioFile>) => void) | undefined;
+    const loader = {
+      load: jest.fn(
+        () =>
+          new Promise<ReturnType<typeof createAudioFile>>((resolve) => {
+            resolveLoad = resolve;
+          }),
+      ),
+    };
+    const uploader = {
+      uploadClipBuffer: jest.fn(async () => undefined),
+      releaseClipBuffer: jest.fn(async () => undefined),
+    };
+    const cache = new ClipBufferCache(loader, uploader, createLogger());
+
+    const first = cache.getClipBuffer('fixtures/shared.wav', sampleRate);
+    const second = cache.getClipBuffer('fixtures/shared.wav', sampleRate);
+    expect(loader.load).toHaveBeenCalledTimes(1);
+
+    resolveLoad?.(createAudioFile());
+    const [firstDescriptor, secondDescriptor] = await Promise.all([first, second]);
+
+    expect(firstDescriptor).toEqual(secondDescriptor);
+    expect(uploader.uploadClipBuffer).toHaveBeenCalledTimes(1);
   });
 });

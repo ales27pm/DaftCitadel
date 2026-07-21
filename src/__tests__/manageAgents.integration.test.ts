@@ -138,6 +138,12 @@ describe('manage:agents automation', () => {
     const roadmap = await fs.readFile(roadmapPath, 'utf8');
     expect(roadmap).toContain('<!-- managed-by: agents_sync.py v1 -->');
 
+    const generatedAgents = await fs.readFile(
+      path.join(sandboxRoot, 'docs', 'AGENTS.md'),
+      'utf8',
+    );
+    expect(generatedAgents).toMatch(/[^\n]\n$/u);
+
     const checkResult = await runManageAgents(sandboxRoot, ['--check']);
     expect(checkResult.code).toBe(0);
   });

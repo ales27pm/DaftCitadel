@@ -1,5 +1,7 @@
 import { Buffer } from 'buffer';
 import { EncryptionContext, generateIdentityKeyPair } from '../encryption';
+import { EncryptionManager, EncryptionResetError } from '../EncryptionManager';
+import { createPeerEncryptionBinding } from '../protocol';
 
 describe('EncryptionContext', () => {
   it('roundtrips payloads with derived shared secret', () => {
@@ -88,5 +90,62 @@ describe('EncryptionContext', () => {
     expect(() => mismatchedContext.decrypt(cipher)).toThrow(
       'Unable to decrypt collaboration payload',
     );
+  });
+
+  it('rejects ciphertext replayed from a previous handshake lifecycle', () => {
+    const aliceKeys = generateIdentityKeyPair();
+    const bobKeys = generateIdentityKeyPair();
+    const sharedSecret = new Uint8Array(32).fill(5);
+    const oldBinding = createPeerEncryptionBinding({
+      sessionId: 'session-a',
+      localSenderId: 'alice',
+      localHandshakeId: 'alice-handshake',
+      remoteSenderId: 'bob',
+      remoteHandshakeId: 'bob-old-handshake',
+    });
+    const newBinding = createPeerEncryptionBinding({
+      sessionId: 'session-a',
+      localSenderId: 'alice',
+      localHandshakeId: 'alice-handshake',
+      remoteSenderId: 'bob',
+      remoteHandshakeId: 'bob-new-handshake',
+    });
+    const oldAliceContext = new EncryptionContext({
+      identityKeyPair: aliceKeys,
+      remotePublicKey: bobKeys.publicKey,
+      preSharedKey: sharedSecret,
+      contextBinding: oldBinding,
+    });
+    const newBobContext = new EncryptionContext({
+      identityKeyPair: bobKeys,
+      remotePublicKey: aliceKeys.publicKey,
+      preSharedKey: sharedSecret,
+      contextBinding: newBinding,
+    });
+    const oldCiphertext = oldAliceContext.encrypt({
+      clock: Date.now(),
+      schemaVersion: 1,
+      body: { stale: true },
+    });
+
+    expect(() => newBobContext.decrypt(oldCiphertext)).toThrow(
+      'Unable to decrypt collaboration payload',
+    );
+  });
+});
+
+describe('EncryptionManager', () => {
+  it('rejects existing readiness waiters when reset and supports a fresh handshake', async () => {
+    const manager = new EncryptionManager({ logger: jest.fn() });
+    const pendingReadiness = manager.waitUntilReady();
+
+    manager.reset();
+
+    await expect(pendingReadiness).rejects.toBeInstanceOf(EncryptionResetError);
+
+    const nextReadiness = manager.waitUntilReady();
+    manager.setRemotePublicKey(generateIdentityKeyPair().publicKey);
+    await expect(nextReadiness).resolves.toBeUndefined();
+    expect(manager.requireContext()).toBeInstanceOf(EncryptionContext);
   });
 });

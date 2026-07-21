@@ -42,6 +42,10 @@ class RecordingAudioEngine implements AudioEngineBridge {
   async applySessionUpdate(session: Session): Promise<void> {
     this.applied.push(JSON.parse(JSON.stringify(session)) as Session);
   }
+
+  async resetSession(): Promise<void> {
+    this.applied = [];
+  }
 }
 
 describe('SessionManager collaborative integration', () => {

@@ -118,7 +118,14 @@ inline std::unique_ptr<daft::audio::DSPNode> CreateNode(const std::string& type,
                                                         const NodeOptions& options,
                                                         std::string& error) {
   const auto normalized = detail::normalize(type);
-  if (normalized == "gain" || normalized == "gainnode") {
+  if (normalized == "trackoutput") {
+    auto node = std::make_unique<daft::audio::TrackOutputNode>();
+    detail::applyParameters(*node, options, {});
+    return node;
+  }
+  // Other session routing endpoints and buses are transparent audio stages.
+  if (normalized == "gain" || normalized == "gainnode" || normalized == "trackinput" ||
+      normalized == "send" || normalized == "return" || normalized == "sidechaintap") {
     auto node = std::make_unique<daft::audio::GainNode>();
     detail::applyParameters(*node, options, {});
     return node;

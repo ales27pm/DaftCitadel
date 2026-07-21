@@ -16,7 +16,7 @@ export interface AudioEngineSpec extends TurboModule {
     sampleRate: number,
     channels: number,
     frames: number,
-    channelData: ArrayBuffer[],
+    channelData: string[],
   ): Promise<void>;
   unregisterClipBuffer(bufferKey: string): Promise<void>;
   removeNode(nodeId: NodeId): Promise<void>;
@@ -44,39 +44,40 @@ export interface AudioEngineSpec extends TurboModule {
 
 const moduleName = 'AudioEngineModule';
 
-type TurboModuleLookup = {
-  get?<T extends TurboModule>(name: string): T | null;
+const resolveRegisteredModule = (): AudioEngineSpec | null => {
+  const registry = TurboModuleRegistry as typeof TurboModuleRegistry | undefined;
+  const modules = NativeModules as typeof NativeModules | undefined;
+  return (
+    (typeof registry?.get === 'function'
+      ? registry.get<AudioEngineSpec>(moduleName)
+      : null) ??
+    (modules?.[moduleName] as AudioEngineSpec | undefined) ??
+    null
+  );
 };
 
-const resolveNativeAudioEngine = (): AudioEngineSpec | undefined => {
-  const registry = TurboModuleRegistry as unknown as TurboModuleLookup | undefined;
-  const turboModule = registry?.get?.<AudioEngineSpec>(moduleName);
-  if (turboModule) {
-    return turboModule;
-  }
-
-  return (NativeModules as Record<string, unknown> | undefined)?.[moduleName] as
-    | AudioEngineSpec
-    | undefined;
-};
-
-const unavailableNativeAudioEngine = new Proxy({} as AudioEngineSpec, {
-  get: (_target, property) => {
-    if (typeof property === 'symbol') {
-      return undefined;
+// Keep imports safe when an embedding target intentionally omits native audio;
+// resolve the binding at access time so fast refresh and test hosts cannot retain
+// a stale module reference across native lifecycle changes.
+export const NativeAudioEngine = new Proxy({} as AudioEngineSpec, {
+  get: (target, property, receiver) => {
+    if (Reflect.has(target, property)) {
+      return Reflect.get(target, property, receiver);
     }
-
-    return async () => {
-      throw new Error(
-        `${moduleName}.${property} is unavailable. Use an Expo development build that includes the native audio module.`,
-      );
-    };
+    const registeredModule = resolveRegisteredModule();
+    if (!registeredModule) {
+      return () =>
+        Promise.reject(
+          new Error(
+            `${moduleName}.${String(property)} is unavailable because the native module is not linked. Use an Expo development build that includes native audio.`,
+          ),
+        );
+    }
+    const value = Reflect.get(registeredModule as object, property);
+    return typeof value === 'function' ? value.bind(registeredModule) : value;
   },
 });
 
-export const NativeAudioEngine: AudioEngineSpec =
-  resolveNativeAudioEngine() ?? unavailableNativeAudioEngine;
-
 export const isNativeModuleAvailable = (): boolean => {
-  return resolveNativeAudioEngine() != null;
+  return resolveRegisteredModule() != null;
 };

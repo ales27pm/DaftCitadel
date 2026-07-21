@@ -312,13 +312,20 @@ const validateRoutingGraph = (graph: RoutingGraph): void => {
       }
     }
     if (node.type === 'send' || node.type === 'return') {
-      if (node.gain < 0) {
+      if (!Number.isFinite(node.gain) || node.gain < 0) {
         throw new Error(`Send/return node ${node.id} must have non-negative gain`);
       }
     }
   });
 
   const connectionIds = new Set<string>();
+  const audioAdjacency = new Map<string, string[]>();
+  const audioIndegree = new Map<string, number>();
+  nodeIds.forEach((nodeId) => {
+    audioAdjacency.set(nodeId, []);
+    audioIndegree.set(nodeId, 0);
+  });
+
   graph.connections.forEach((connection) => {
     if (connectionIds.has(connection.id)) {
       throw new Error(`Duplicate routing connection id: ${connection.id}`);
@@ -330,7 +337,36 @@ const validateRoutingGraph = (graph: RoutingGraph): void => {
     if (!nodeIds.has(connection.to.nodeId)) {
       throw new Error(`Connection ${connection.id} references missing destination node`);
     }
+    if (connection.gain !== undefined && !Number.isFinite(connection.gain)) {
+      throw new Error(`Connection ${connection.id} has invalid gain`);
+    }
+    if (connection.enabled && connection.signal === 'audio') {
+      audioAdjacency.get(connection.from.nodeId)?.push(connection.to.nodeId);
+      audioIndegree.set(
+        connection.to.nodeId,
+        (audioIndegree.get(connection.to.nodeId) ?? 0) + 1,
+      );
+    }
   });
+
+  const ready = Array.from(audioIndegree.entries())
+    .filter(([, degree]) => degree === 0)
+    .map(([nodeId]) => nodeId);
+  let visited = 0;
+  for (let index = 0; index < ready.length; index += 1) {
+    const nodeId = ready[index];
+    visited += 1;
+    audioAdjacency.get(nodeId)?.forEach((destinationId) => {
+      const nextDegree = (audioIndegree.get(destinationId) ?? 0) - 1;
+      audioIndegree.set(destinationId, nextDegree);
+      if (nextDegree === 0) {
+        ready.push(destinationId);
+      }
+    });
+  }
+  if (visited !== nodeIds.size) {
+    throw new Error('Enabled audio routing connections must form an acyclic graph');
+  }
 };
 
 const normalizeTrackRouting = (trackId: TrackID, routing: TrackRouting): TrackRouting => {

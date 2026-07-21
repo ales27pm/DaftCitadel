@@ -1,5 +1,4 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { PermissionsAndroid, Platform } from 'react-native';
 import { NativePluginHost } from './NativePluginHost';
 import type { PluginDescriptor } from './types';
 
@@ -36,10 +35,7 @@ export class PluginSandboxManager {
 
   private readonly ready: Promise<void>;
 
-  constructor(
-    private readonly requestExternalStorage?: () => Promise<boolean>,
-    private readonly storage: SandboxStorage = AsyncStorage,
-  ) {
+  constructor(private readonly storage: SandboxStorage = AsyncStorage) {
     this.ready = this.hydrateFromStorage().catch((error) => {
       console.warn('Failed to hydrate sandbox metadata', error);
     });
@@ -58,10 +54,6 @@ export class PluginSandboxManager {
         console.warn('Failed to persist sandbox metadata', error);
       });
       return existing;
-    }
-
-    if (Platform.OS === 'android') {
-      await this.ensureAndroidPermissions();
     }
 
     const { sandboxPath } = await NativePluginHost.ensureSandbox(identifier);
@@ -155,30 +147,5 @@ export class PluginSandboxManager {
 
   private makeKey(format: PluginDescriptor['format'], identifier: string): string {
     return `${format}:${identifier}`;
-  }
-
-  private async ensureAndroidPermissions(): Promise<void> {
-    if (Platform.OS !== 'android') {
-      return;
-    }
-    const customHandlerGranted = this.requestExternalStorage
-      ? await this.requestExternalStorage()
-      : true;
-    if (!customHandlerGranted) {
-      throw new Error('Storage permission denied by custom handler');
-    }
-
-    if (Platform.Version >= 33) {
-      return;
-    }
-
-    const writePermission = PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE;
-    const hasPermission = await PermissionsAndroid.check(writePermission);
-    if (!hasPermission) {
-      const result = await PermissionsAndroid.request(writePermission);
-      if (result !== PermissionsAndroid.RESULTS.GRANTED) {
-        throw new Error('WRITE_EXTERNAL_STORAGE permission denied');
-      }
-    }
   }
 }

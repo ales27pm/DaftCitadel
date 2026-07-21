@@ -56,14 +56,15 @@ const ensureArrayBuffer = (channel: Float32Array): ArrayBuffer => {
   ) {
     return channel.buffer;
   }
-  const copy = new Uint8Array(channel.byteLength);
-  copy.set(new Uint8Array(channel.buffer, channel.byteOffset, channel.byteLength));
-  return copy.buffer;
+  const owned = new Float32Array(channel.length);
+  owned.set(channel);
+  return owned.buffer;
 };
 
 export class ClipBufferCache {
   private readonly cache = new Map<CacheKey, CacheEntry>();
   private readonly bufferKeyToCacheKey = new Map<string, CacheKey>();
+  private readonly pendingLoads = new Map<CacheKey, Promise<ClipBufferDescriptor>>();
 
   constructor(
     private readonly loader: AudioFileLoader,
@@ -83,6 +84,28 @@ export class ClipBufferCache {
       return cached.descriptor;
     }
 
+    const pending = this.pendingLoads.get(key);
+    if (pending) {
+      this.logger.debug('ClipBufferCache pending hit', { filePath, targetSampleRate });
+      return pending;
+    }
+
+    const load = this.loadAndUpload(filePath, targetSampleRate, key);
+    this.pendingLoads.set(key, load);
+    try {
+      return await load;
+    } finally {
+      if (this.pendingLoads.get(key) === load) {
+        this.pendingLoads.delete(key);
+      }
+    }
+  }
+
+  private async loadAndUpload(
+    filePath: string,
+    targetSampleRate: number,
+    key: CacheKey,
+  ): Promise<ClipBufferDescriptor> {
     const decoded = await this.loader.load(filePath);
     this.validateDecodedBuffer(filePath, decoded);
 

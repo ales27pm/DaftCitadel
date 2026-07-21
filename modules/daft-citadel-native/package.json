@@ -1,0 +1,17 @@
+{
+  "name": "daft-citadel-native",
+  "version": "1.0.0",
+  "description": "Native audio, plugin-hosting, sample-loading, and collaboration bridges for Daft Citadel.",
+  "main": "index.js",
+  "license": "MIT",
+  "author": "Daft Citadel <engineering@daftcitadel.dev>",
+  "homepage": "https://github.com/ales27pm/DaftCitadel",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ales27pm/DaftCitadel.git"
+  },
+  "peerDependencies": {
+    "expo": "*",
+    "react-native": "*"
+  }
+}

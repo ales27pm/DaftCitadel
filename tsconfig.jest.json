@@ -1,9 +1,9 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "customConditions": [],
     "jsx": "react-jsx",
-    "isolatedModules": true,
-    "module": "Node16",
-    "moduleResolution": "Node16"
+    "module": "commonjs",
+    "moduleResolution": "node"
   }
 }

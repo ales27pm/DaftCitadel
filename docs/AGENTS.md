@@ -17,4 +17,3 @@
 
 - Architectural diagrams or binary assets should live under docs/assets/ with descriptive filenames if needed.
 - Cross-link documentation sections to avoid duplication whenever multiple files describe the same subsystem.
-

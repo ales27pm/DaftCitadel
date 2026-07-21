@@ -11,6 +11,7 @@ import {
 } from '../session/models';
 import type {
   AudioDiagnosticsSnapshot,
+  AudioEngineBridge,
   AudioTransportSnapshot,
 } from '../session/sessionManager';
 import {
@@ -71,6 +72,9 @@ const allowProcessToExit = (handle: ReturnType<typeof setInterval>): void => {
   // React Native returns numeric handles, so this is a no-op on devices.
   (handle as unknown as UnrefableTimer).unref?.();
 };
+
+const connectionGainNodeId = (trackId: string, connectionId: string): string =>
+  `__connection_gain__:${encodeURIComponent(trackId)}:${encodeURIComponent(connectionId)}`;
 
 class PluginRecoveryManager {
   private snapshot: RecoverySnapshot = {
@@ -293,7 +297,7 @@ export interface SessionAudioBridgeOptions {
   diagnosticsPollIntervalMs?: number;
 }
 
-export class SessionAudioBridge {
+export class SessionAudioBridge implements AudioEngineBridge {
   private readonly clock: ClockSyncService;
 
   private readonly bufferCache: ClipBufferCache;
@@ -393,29 +397,6 @@ export class SessionAudioBridge {
         renderLoad: 0,
       };
     }
-    if (this.supportsTransport && this.transportPollIntervalMs > 0) {
-      this.transportPollHandle = setInterval(() => {
-        this.refreshTransportState().catch((error) => {
-          this.logger.warn('Transport polling failed', error);
-        });
-      }, this.transportPollIntervalMs);
-      allowProcessToExit(this.transportPollHandle);
-      this.refreshTransportState().catch((error) => {
-        this.logger.warn('Failed to prime transport state', error);
-      });
-    }
-    if (this.supportsDiagnostics && this.diagnosticsPollIntervalMs > 0) {
-      this.diagnosticsPollHandle = setInterval(() => {
-        this.refreshDiagnosticsState().catch((error) => {
-          this.logger.warn('Diagnostics polling failed', error);
-        });
-      }, this.diagnosticsPollIntervalMs);
-      allowProcessToExit(this.diagnosticsPollHandle);
-      this.refreshDiagnosticsState().catch((error) => {
-        this.logger.warn('Failed to prime diagnostics state', error);
-      });
-    }
-
     if (this.pluginHost) {
       this.pluginRecovery = new PluginRecoveryManager({
         pluginHost: this.pluginHost,
@@ -427,6 +408,64 @@ export class SessionAudioBridge {
         applyPluginAutomations: (requests) => this.applyPluginAutomations(requests),
         logger: this.logger,
       });
+    }
+  }
+
+  public async resetSession(): Promise<void> {
+    const failures: Array<{ phase: string; error: unknown }> = [];
+    const attempt = async (
+      phase: string,
+      operation: () => Promise<void>,
+    ): Promise<void> => {
+      try {
+        await operation();
+      } catch (error) {
+        failures.push({ phase, error });
+      }
+    };
+
+    if (this.supportsTransport) {
+      await attempt('stop transport', () => this.audioEngine.stopTransport());
+    }
+    await attempt('clear automation', () =>
+      this.automationPublisher.applyChanges(new Map<string, AutomationRequest>()),
+    );
+    await attempt('clear plugin automation', () =>
+      this.applyPluginAutomations(new Map<string, PluginAutomationRequest>()),
+    );
+    await attempt('clear graph', async () => {
+      await this.graph.apply(
+        new Map<string, NodeConfiguration>(),
+        new Set<ConnectionKey>(),
+      );
+    });
+    await attempt('release plugins', () =>
+      this.releaseStalePluginInstances(new Set<string>()),
+    );
+    await attempt('release clip buffers', () =>
+      this.reconcileClipBuffers(new Map<string, ClipBufferDescriptor>()),
+    );
+
+    this.pluginRecovery?.record({
+      automationRequests: new Map<string, AutomationRequest>(),
+      pluginAutomations: new Map<string, PluginAutomationRequest>(),
+      pluginNodes: new Map<string, PluginRoutingNode>(),
+    });
+    this.resolvePluginDescriptor?.clearAll?.();
+    this.previousSessionRevision = -1;
+
+    if (this.supportsTransport) {
+      this.refreshTransportState().catch((error) => {
+        this.logger.warn('Failed to refresh transport state after session reset', error);
+      });
+    }
+
+    if (failures.length > 0) {
+      this.logger.error('Session audio reset was incomplete', {
+        phases: failures.map(({ phase }) => phase),
+        error: failures[0].error,
+      });
+      throw failures[0].error;
     }
   }
 
@@ -458,8 +497,11 @@ export class SessionAudioBridge {
       pluginNodes: desiredState.pluginNodes,
     });
 
-    await this.graph.apply(desiredState.nodes, desiredState.connections);
-    await this.automationPublisher.applyChanges(desiredState.automations);
+    const graphChanges = await this.graph.apply(
+      desiredState.nodes,
+      desiredState.connections,
+    );
+    await this.automationPublisher.applyChanges(desiredState.automations, graphChanges);
     await this.applyPluginAutomations(desiredState.pluginAutomations);
     await this.releaseStalePluginInstances(desiredState.activePluginInstances);
     await this.reconcileClipBuffers(desiredState.clipBuffers);
@@ -506,13 +548,13 @@ export class SessionAudioBridge {
       } catch (error) {
         this.logger.error('Transport listener threw on fallback snapshot', error);
       }
-    } else {
-      this.refreshTransportState().catch((error) => {
-        this.logger.warn('Failed to refresh transport state for subscriber', error);
-      });
     }
+    this.startTransportPolling();
     return () => {
       this.transportListeners.delete(listener);
+      if (this.transportListeners.size === 0) {
+        this.stopTransportPolling();
+      }
     };
   }
 
@@ -556,8 +598,12 @@ export class SessionAudioBridge {
     } catch (error) {
       this.logger.error('Diagnostics listener threw on subscription', error);
     }
+    this.startDiagnosticsPolling();
     return () => {
       this.diagnosticsListeners.delete(listener);
+      if (this.diagnosticsListeners.size === 0) {
+        this.stopDiagnosticsPolling();
+      }
     };
   }
 
@@ -572,6 +618,7 @@ export class SessionAudioBridge {
     const activePluginInstances = new Set<string>();
     const clipBuffers = new Map<string, ClipBufferDescriptor>();
     const pluginNodes = new Map<string, PluginRoutingNode>();
+    const hasSoloTrack = session.tracks.some((track) => track.solo);
 
     await Promise.all(
       session.tracks.map(async (track) => {
@@ -583,11 +630,23 @@ export class SessionAudioBridge {
           (node): node is TrackEndpointNode => node.type === 'trackOutput',
         );
 
+        const trackOutputGain =
+          track.muted || (hasSoloTrack && !track.solo)
+            ? 0
+            : Math.pow(10, track.volume / 20);
         graph.nodes.forEach((node) => {
           if (isPluginNode(node)) {
             return;
           }
-          nodes.set(node.id, this.createNodeConfiguration(node));
+          nodes.set(
+            node.id,
+            this.createNodeConfiguration(
+              node,
+              node.type === 'trackOutput'
+                ? { gain: trackOutputGain, pan: track.pan }
+                : undefined,
+            ),
+          );
         });
 
         await this.preparePluginNodes(
@@ -604,9 +663,39 @@ export class SessionAudioBridge {
           if (connection.enabled === false) {
             return;
           }
+          if (connection.signal !== 'audio') {
+            this.logger.warn('Skipping unsupported non-audio native graph connection', {
+              connectionId: connection.id,
+              signal: connection.signal,
+            });
+            return;
+          }
+          const gain = connection.gain ?? 1;
+          if (!Number.isFinite(gain)) {
+            throw new Error(`Routing connection ${connection.id} has invalid gain`);
+          }
+          if (gain === 1) {
+            connections.add(
+              this.graph.getConnectionKey(connection.from.nodeId, connection.to.nodeId),
+            );
+            return;
+          }
+
+          const gainNodeId = connectionGainNodeId(track.id, connection.id);
+          if (nodes.has(gainNodeId)) {
+            throw new Error(
+              `Routing connection ${connection.id} generated duplicate gain node ${gainNodeId}`,
+            );
+          }
+          nodes.set(gainNodeId, {
+            id: gainNodeId,
+            type: 'gain',
+            options: { gain },
+          });
           connections.add(
-            this.graph.getConnectionKey(connection.from.nodeId, connection.to.nodeId),
+            this.graph.getConnectionKey(connection.from.nodeId, gainNodeId),
           );
+          connections.add(this.graph.getConnectionKey(gainNodeId, connection.to.nodeId));
         });
 
         if (trackOutput) {
@@ -652,11 +741,6 @@ export class SessionAudioBridge {
                   clipState.destinationNodeId,
                 ),
               );
-              automations.set(clipState.automationKey, {
-                nodeId: clipState.node.id,
-                lane: clipState.lane,
-                signature: describeAutomation(clipState.node.id, clipState.lane),
-              });
               clipBuffers.set(clip.id, clipState.bufferDescriptor);
             } catch (error) {
               this.logger.error('Failed to prepare clip node', {
@@ -687,7 +771,10 @@ export class SessionAudioBridge {
     throw new Error(`Track ${track.id} is missing a routing graph`);
   }
 
-  private createNodeConfiguration(node: RoutingNode): NodeConfiguration {
+  private createNodeConfiguration(
+    node: RoutingNode,
+    trackOutputOptions?: { gain: number; pan: number },
+  ): NodeConfiguration {
     if (isTrackEndpointNode(node)) {
       return {
         id: node.id,
@@ -696,6 +783,7 @@ export class SessionAudioBridge {
           ioId: node.ioId,
           channelCount: node.channelCount,
           label: node.label ?? '',
+          ...(trackOutputOptions ?? {}),
         },
       };
     }
@@ -755,8 +843,6 @@ export class SessionAudioBridge {
   ): Promise<{
     node: NodeConfiguration;
     destinationNodeId: TrackNodeId;
-    lane: AutomationLane;
-    automationKey: string;
     bufferDescriptor: ClipBufferDescriptor;
   }> {
     const bufferDescriptor = await this.bufferCache.getClipBuffer(
@@ -795,32 +881,9 @@ export class SessionAudioBridge {
       },
     };
 
-    const lane = new AutomationLane('gain');
-    if (fadeInFrames > 0) {
-      lane.addPoint({ frame: startFrame, value: 0 });
-      lane.addPoint({
-        frame: this.quantizeFrame(startFrame + fadeInFrames),
-        value: clip.gain,
-      });
-    } else {
-      lane.addPoint({ frame: startFrame, value: clip.gain });
-    }
-    if (fadeOutFrames > 0) {
-      lane.addPoint({
-        frame: this.quantizeFrame(endFrame - fadeOutFrames),
-        value: clip.gain,
-      });
-      lane.addPoint({ frame: endFrame, value: 0 });
-    } else {
-      lane.addPoint({ frame: endFrame, value: clip.gain });
-    }
-
-    const automationKey = `${nodeId}:gain`;
     return {
       node,
       destinationNodeId,
-      lane,
-      automationKey,
       bufferDescriptor,
     };
   }
@@ -1202,6 +1265,62 @@ export class SessionAudioBridge {
     }
   }
 
+  private startTransportPolling(): void {
+    if (!this.supportsTransport || this.transportListeners.size === 0) {
+      return;
+    }
+    if (this.transportPollHandle) {
+      return;
+    }
+    this.refreshTransportState().catch((error) => {
+      this.logger.warn('Failed to prime transport state', error);
+    });
+    if (this.transportPollIntervalMs > 0) {
+      this.transportPollHandle = setInterval(() => {
+        this.refreshTransportState().catch((error) => {
+          this.logger.warn('Transport polling failed', error);
+        });
+      }, this.transportPollIntervalMs);
+      allowProcessToExit(this.transportPollHandle);
+    }
+  }
+
+  private stopTransportPolling(): void {
+    if (!this.transportPollHandle) {
+      return;
+    }
+    clearInterval(this.transportPollHandle);
+    this.transportPollHandle = undefined;
+  }
+
+  private startDiagnosticsPolling(): void {
+    if (!this.supportsDiagnostics || this.diagnosticsListeners.size === 0) {
+      return;
+    }
+    if (this.diagnosticsPollHandle) {
+      return;
+    }
+    this.refreshDiagnosticsState().catch((error) => {
+      this.logger.warn('Failed to prime diagnostics state', error);
+    });
+    if (this.diagnosticsPollIntervalMs > 0) {
+      this.diagnosticsPollHandle = setInterval(() => {
+        this.refreshDiagnosticsState().catch((error) => {
+          this.logger.warn('Diagnostics polling failed', error);
+        });
+      }, this.diagnosticsPollIntervalMs);
+      allowProcessToExit(this.diagnosticsPollHandle);
+    }
+  }
+
+  private stopDiagnosticsPolling(): void {
+    if (!this.diagnosticsPollHandle) {
+      return;
+    }
+    clearInterval(this.diagnosticsPollHandle);
+    this.diagnosticsPollHandle = undefined;
+  }
+
   private async refreshTransportState(): Promise<void> {
     if (!this.supportsTransport || this.isTransportPolling) {
       return;
@@ -1284,14 +1403,8 @@ export class SessionAudioBridge {
   }
 
   public async dispose(): Promise<void> {
-    if (this.transportPollHandle) {
-      clearInterval(this.transportPollHandle);
-      this.transportPollHandle = undefined;
-    }
-    if (this.diagnosticsPollHandle) {
-      clearInterval(this.diagnosticsPollHandle);
-      this.diagnosticsPollHandle = undefined;
-    }
+    this.stopTransportPolling();
+    this.stopDiagnosticsPolling();
     this.transportListeners.clear();
     this.diagnosticsListeners.clear();
     const pending: Array<Promise<void>> = [];

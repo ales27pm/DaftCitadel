@@ -17,10 +17,11 @@ interface MemoryEntry {
 interface StagedWrite {
   session: Session;
   expectedRevision?: number;
+  originalRevision: number;
 }
 
 export class InMemorySessionStorageAdapter implements SessionStorageAdapter {
-  private readonly store = new Map<string, MemoryEntry>();
+  private store = new Map<string, MemoryEntry>();
 
   async initialize(): Promise<void> {
     // No-op for in-memory storage.
@@ -79,12 +80,38 @@ export class InMemorySessionStorageAdapter implements SessionStorageAdapter {
     return { session: deepClone(entry.session), updatedAt: entry.updatedAt };
   }
 
-  internalWrite(session: Session, expectedRevision?: number) {
-    this.writeEntry(session, expectedRevision);
-  }
+  internalCommit(
+    writes: ReadonlyMap<string, StagedWrite>,
+    deletions: ReadonlySet<string>,
+  ): void {
+    for (const [sessionId, { expectedRevision }] of writes) {
+      if (expectedRevision === undefined) {
+        continue;
+      }
+      const currentRevision = this.store.get(sessionId)?.session.revision ?? 0;
+      if (currentRevision !== expectedRevision) {
+        throw new RevisionConflictError(sessionId, expectedRevision, currentRevision);
+      }
+    }
 
-  internalDelete(sessionId: string) {
-    this.deleteEntry(sessionId);
+    const nextStore = new Map<string, MemoryEntry>();
+    this.store.forEach((entry, sessionId) => {
+      nextStore.set(sessionId, {
+        session: deepClone(entry.session),
+        updatedAt: entry.updatedAt,
+      });
+    });
+    const committedAt = new Date().toISOString();
+    writes.forEach(({ session }) => {
+      nextStore.set(session.id, {
+        session: deepClone(session),
+        updatedAt: committedAt,
+      });
+    });
+    deletions.forEach((sessionId) => {
+      nextStore.delete(sessionId);
+    });
+    this.store = nextStore;
   }
 }
 
@@ -104,11 +131,9 @@ class InMemorySessionStorageTransaction implements SessionStorageTransaction {
   async write(session: Session, options?: WriteOptions): Promise<void> {
     this.assertOpen();
     const staged = this.writes.get(session.id);
-    const baseline = staged ?? {
-      session: this.adapter.internalRead(session.id)?.session ?? null,
-      expectedRevision: undefined,
-    };
-    const baselineRevision = baseline.session?.revision ?? 0;
+    const storedRevision = this.adapter.internalRead(session.id)?.session.revision ?? 0;
+    const originalRevision = staged?.originalRevision ?? storedRevision;
+    const baselineRevision = staged?.session.revision ?? storedRevision;
     if (
       options?.expectedRevision !== undefined &&
       options.expectedRevision !== baselineRevision
@@ -120,12 +145,12 @@ class InMemorySessionStorageTransaction implements SessionStorageTransaction {
       );
     }
     const expectedRevision =
-      options?.expectedRevision !== undefined
-        ? options.expectedRevision
-        : staged?.expectedRevision;
+      staged?.expectedRevision ??
+      (options?.expectedRevision !== undefined ? originalRevision : undefined);
     this.writes.set(session.id, {
       session: deepClone(session),
       expectedRevision,
+      originalRevision,
     });
     this.deletions.delete(session.id);
   }
@@ -151,12 +176,7 @@ class InMemorySessionStorageTransaction implements SessionStorageTransaction {
 
   async commit(): Promise<void> {
     this.assertOpen();
-    this.writes.forEach(({ session, expectedRevision }) => {
-      this.adapter.internalWrite(session, expectedRevision);
-    });
-    this.deletions.forEach((sessionId) => {
-      this.adapter.internalDelete(sessionId);
-    });
+    this.adapter.internalCommit(this.writes, this.deletions);
     this.closed = true;
   }
 
