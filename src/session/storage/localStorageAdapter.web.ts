@@ -15,6 +15,8 @@ type StoredSessionRecord = {
   updatedAt: string;
 };
 
+type RawSessionSnapshot = Map<string, string | null>;
+
 const SESSION_KEY_PREFIX = 'daft-citadel:session';
 
 const validateSessionId = (sessionId: string): void => {
@@ -157,12 +159,17 @@ export class LocalStorageSessionStorageAdapter implements SessionStorageAdapter 
         if (!key?.startsWith(this.prefix)) {
           continue;
         }
-        const record = parseRecord(globalThis.localStorage.getItem(key));
-        if (record) {
-          records.push({
-            updatedAt: record.updatedAt,
-            session: deserializeSession(record.payload),
-          });
+        const raw = globalThis.localStorage.getItem(key);
+        try {
+          const record = parseRecord(raw);
+          if (record) {
+            records.push({
+              updatedAt: record.updatedAt,
+              session: deserializeSession(record.payload),
+            });
+          }
+        } catch (error) {
+          console.warn('Skipping malformed browser session record', { key, error });
         }
       }
       return records;
@@ -185,8 +192,37 @@ export class LocalStorageSessionStorageAdapter implements SessionStorageAdapter 
     return this.read(sessionId);
   }
 
-  async writeDirect(session: Session): Promise<void> {
-    await this.write(session);
+  async snapshotDirect(sessionIds: Iterable<string>): Promise<RawSessionSnapshot> {
+    await this.initialize();
+    try {
+      const snapshot: RawSessionSnapshot = new Map();
+      for (const sessionId of sessionIds) {
+        snapshot.set(sessionId, globalThis.localStorage.getItem(this.keyFor(sessionId)));
+      }
+      return snapshot;
+    } catch (error) {
+      throw new SessionStorageError(
+        `Failed to snapshot browser sessions: ${(error as Error).message}`,
+      );
+    }
+  }
+
+  async restoreDirect(snapshot: RawSessionSnapshot): Promise<void> {
+    await this.initialize();
+    try {
+      for (const [sessionId, value] of snapshot) {
+        const key = this.keyFor(sessionId);
+        if (value === null) {
+          globalThis.localStorage.removeItem(key);
+        } else {
+          globalThis.localStorage.setItem(key, value);
+        }
+      }
+    } catch (error) {
+      throw new SessionStorageError(
+        `Failed to restore browser sessions: ${(error as Error).message}`,
+      );
+    }
   }
 }
 
@@ -245,15 +281,35 @@ class LocalStorageSessionStorageTransaction implements SessionStorageTransaction
 
   async commit(): Promise<void> {
     this.assertOpen();
-    for (const [, staged] of this.writes) {
-      await this.adapter.write(staged.session, {
-        expectedRevision: staged.expectedRevision,
-      });
+    const affectedSessionIds = new Set([
+      ...this.writes.keys(),
+      ...this.deletions.values(),
+    ]);
+    let snapshot: RawSessionSnapshot | undefined;
+    try {
+      snapshot = await this.adapter.snapshotDirect(affectedSessionIds);
+      for (const [, staged] of this.writes) {
+        await this.adapter.write(staged.session, {
+          expectedRevision: staged.expectedRevision,
+        });
+      }
+      for (const sessionId of this.deletions) {
+        await this.adapter.delete(sessionId);
+      }
+    } catch (error) {
+      if (snapshot) {
+        try {
+          await this.adapter.restoreDirect(snapshot);
+        } catch (restoreError) {
+          console.error('Failed to restore browser session transaction', {
+            error: restoreError,
+          });
+        }
+      }
+      throw error;
+    } finally {
+      this.closed = true;
     }
-    for (const sessionId of this.deletions) {
-      await this.adapter.delete(sessionId);
-    }
-    this.closed = true;
   }
 
   async rollback(): Promise<void> {

@@ -24,7 +24,6 @@ export const PerformanceScreen: React.FC = () => {
   const transportControls = useTransportControls();
   const { preferences } = useUserPreferences();
   const { projectedBeats } = useProjectedTransport(transport);
-  const bpm = useSharedValue(transport?.bpm ?? 0);
   const renderLoad = useSharedValue(diagnostics.renderLoad);
   const [activeScene, setActiveScene] = useState<string>();
   const [actionError, setActionError] = useState<string>();
@@ -55,12 +54,6 @@ export const PerformanceScreen: React.FC = () => {
       (left, right) => left.startMs - right.startMs,
     );
   }, [tracks]);
-
-  useEffect(() => {
-    if (transport) {
-      bpm.value = withTiming(transport.bpm, { duration: 300 });
-    }
-  }, [bpm, transport]);
 
   useEffect(() => {
     renderLoad.value = withTiming(diagnostics.renderLoad, { duration: 220 });
@@ -177,6 +170,7 @@ export const PerformanceScreen: React.FC = () => {
                   <View key={scene.name} style={sceneButtonStyle}>
                     <NeonButton
                       label={scene.name}
+                      accessibilityLabel={scene.name}
                       onPress={() => {
                         handleSceneLaunch(scene).catch(() => undefined);
                       }}

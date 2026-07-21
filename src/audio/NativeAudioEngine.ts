@@ -61,6 +61,9 @@ const resolveRegisteredModule = (): AudioEngineSpec | null => {
 // a stale module reference across native lifecycle changes.
 export const NativeAudioEngine = new Proxy({} as AudioEngineSpec, {
   get: (target, property, receiver) => {
+    if (typeof property === 'symbol' || property === 'then') {
+      return undefined;
+    }
     if (Reflect.has(target, property)) {
       return Reflect.get(target, property, receiver);
     }

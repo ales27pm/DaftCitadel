@@ -1,5 +1,5 @@
 import { demoSession } from '../../fixtures/demoSession';
-import { RevisionConflictError } from '../index';
+import { RevisionConflictError, SessionStorageError } from '../index';
 import { LocalStorageSessionStorageAdapter } from '../localStorageAdapter.web';
 
 class MemoryWebStorage implements Storage {
@@ -67,5 +67,74 @@ describe('LocalStorageSessionStorageAdapter', () => {
     await expect(
       adapter.write({ ...nextSession, revision: 2 }, { expectedRevision: 0 }),
     ).rejects.toBeInstanceOf(RevisionConflictError);
+  });
+
+  it('discards staged writes when a transaction is rolled back', async () => {
+    const adapter = new LocalStorageSessionStorageAdapter('sessions');
+    const original = { ...demoSession, revision: 0 };
+    await adapter.write(original, { expectedRevision: 0 });
+
+    const transaction = await adapter.beginTransaction();
+    await transaction.write(
+      { ...original, name: 'Discarded update', revision: 1 },
+      { expectedRevision: 0 },
+    );
+    await transaction.rollback();
+
+    expect(await adapter.read(original.id)).toEqual(original);
+    await expect(transaction.commit()).rejects.toBeInstanceOf(SessionStorageError);
+  });
+
+  it('restores earlier writes when a later transaction write conflicts', async () => {
+    const adapter = new LocalStorageSessionStorageAdapter('sessions');
+    const first = { ...demoSession, id: 'first', name: 'First', revision: 0 };
+    const second = { ...demoSession, id: 'second', name: 'Second', revision: 0 };
+    await adapter.write(first, { expectedRevision: 0 });
+    await adapter.write(second, { expectedRevision: 0 });
+
+    const transaction = await adapter.beginTransaction();
+    await transaction.write(
+      { ...first, name: 'First transaction update', revision: 1 },
+      { expectedRevision: 0 },
+    );
+    await transaction.write(
+      { ...second, name: 'Second transaction update', revision: 1 },
+      { expectedRevision: 0 },
+    );
+
+    const externallyUpdatedSecond = {
+      ...second,
+      name: 'External update',
+      revision: 1,
+    };
+    await adapter.write(externallyUpdatedSecond, { expectedRevision: 0 });
+
+    await expect(transaction.commit()).rejects.toBeInstanceOf(RevisionConflictError);
+    expect(await adapter.read(first.id)).toEqual(first);
+    expect(await adapter.read(second.id)).toEqual(externallyUpdatedSecond);
+    await expect(transaction.commit()).rejects.toBeInstanceOf(SessionStorageError);
+  });
+
+  it('skips malformed records while listing valid sessions', async () => {
+    const adapter = new LocalStorageSessionStorageAdapter('sessions');
+    await adapter.write(demoSession, { expectedRevision: 0 });
+    globalThis.localStorage.setItem(
+      'daft-citadel:session:sessions:corrupt',
+      '{not valid json',
+    );
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const records = await adapter.list();
+      expect(records.map((record) => record.session.id)).toEqual([demoSession.id]);
+      expect(warn).toHaveBeenCalledWith(
+        'Skipping malformed browser session record',
+        expect.objectContaining({
+          key: 'daft-citadel:session:sessions:corrupt',
+        }),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

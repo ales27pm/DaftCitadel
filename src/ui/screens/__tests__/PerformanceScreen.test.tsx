@@ -79,8 +79,14 @@ describe('PerformanceScreen', () => {
     }
 
     const buttons = renderer.root.findAllByType(Pressable);
+    const launchButton = buttons.find(
+      (button) => button.props.accessibilityLabel === 'Around the World',
+    );
+    if (!launchButton) {
+      throw new Error('Around the World scene launch button not found');
+    }
     await act(async () => {
-      buttons[3].props.onPress();
+      launchButton.props.onPress();
       await Promise.resolve();
       await Promise.resolve();
     });

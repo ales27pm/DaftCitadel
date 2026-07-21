@@ -22,7 +22,10 @@ import { ThemeIntent, mapIntentToColor } from './tokens';
 import { createTextStyle, TypographyVariant } from './typography';
 import { useTheme } from './theme';
 
-const MotionView = Platform.OS === 'web' ? View : Animated.View;
+const MotionView = Platform.select<React.ComponentType<ViewProps>>({
+  web: View,
+  default: Animated.View as unknown as React.ComponentType<ViewProps>,
+});
 
 export interface NeonSurfaceProps extends ViewProps, AccessibilityProps {
   elevation?: keyof ReturnType<typeof useTheme>['elevation'];

@@ -4,7 +4,6 @@ import {
   StyleProp,
   View,
   ViewStyle,
-  Platform,
   useWindowDimensions,
 } from 'react-native';
 import Animated, {
@@ -18,8 +17,6 @@ import type { ScrollEvent } from 'react-native-reanimated';
 
 import { ThemeIntent, mapIntentToColor } from '../../design-system/tokens';
 import { useTheme } from '../../design-system/theme';
-
-const MotionScrollView = Platform.OS === 'web' ? ScrollView : Animated.ScrollView;
 
 interface GridMetrics {
   startBeat: number;
@@ -140,10 +137,10 @@ export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
   );
 
   return (
-    <MotionScrollView
+    <Animated.ScrollView
       horizontal
       nestedScrollEnabled
-      onScroll={Platform.OS === 'web' ? undefined : onScroll}
+      onScroll={onScroll}
       scrollEventThrottle={16}
       style={style}
       contentContainerStyle={horizontalContentStyle}
@@ -185,6 +182,6 @@ export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
           })}
         </View>
       </ScrollView>
-    </MotionScrollView>
+    </Animated.ScrollView>
   );
 };

@@ -16,14 +16,7 @@ import {
   useTransportControls,
   useProjectedTransport,
 } from '../session';
-
-const formatAlertTimestamp = (timestamp: string): string => {
-  const value = new Date(timestamp);
-  if (Number.isNaN(value.getTime())) {
-    return 'Unknown time';
-  }
-  return `${value.toLocaleString('en-US', { timeZone: 'UTC' })} UTC`;
-};
+import { formatAlertTimestamp } from '../utils/date';
 
 export const ArrangementScreen: React.FC = () => {
   const adaptive = useAdaptiveLayout();

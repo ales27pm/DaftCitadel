@@ -57,6 +57,9 @@ describe('ClipBufferCache', () => {
   });
 
   it('copies shared-memory channels into native-safe ArrayBuffers', async () => {
+    if (typeof SharedArrayBuffer === 'undefined') {
+      return;
+    }
     const sharedSamples = new Float32Array(
       new SharedArrayBuffer(frames * Float32Array.BYTES_PER_ELEMENT),
     );

@@ -566,9 +566,15 @@ export const TurboModuleRegistry = {
   getEnforcing: <T>(name: string): T => NativeModules[name] as T,
 };
 
-export const Platform: { OS: 'ios' | 'android' | 'macos'; Version: number } = {
+export const Platform: {
+  OS: 'ios' | 'android' | 'macos';
+  Version: number;
+  select: <T>(specifics: Record<string, T | undefined>) => T | undefined;
+} = {
   OS: 'ios',
   Version: 17,
+  select: <T>(specifics: Record<string, T | undefined>): T | undefined =>
+    specifics[Platform.OS] ?? specifics.native ?? specifics.default,
 };
 
 export const PermissionsAndroid = {

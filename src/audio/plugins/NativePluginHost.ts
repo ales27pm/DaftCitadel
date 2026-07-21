@@ -79,7 +79,7 @@ const resolveNativePluginHost = (): PluginHostSpec | undefined => {
 
 const unavailablePluginHost = new Proxy({} as PluginHostSpec, {
   get: (_target, property) => {
-    if (typeof property === 'symbol') {
+    if (typeof property === 'symbol' || property === 'then') {
       return undefined;
     }
 

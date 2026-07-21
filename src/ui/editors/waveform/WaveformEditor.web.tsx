@@ -1,10 +1,12 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
-import { useSharedValue, type SharedValue } from 'react-native-reanimated';
+import type { SharedValue } from 'react-native-reanimated';
 
 import { useTheme } from '../../design-system';
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
+
+let nextPlayheadListenerId = 1;
 
 const styles = StyleSheet.create({
   container: {
@@ -63,9 +65,8 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
   onPlayheadChange,
 }) => {
   const theme = useTheme();
-  const internalPlayhead = useSharedValue(0);
-  const playheadValue = playhead ?? internalPlayhead;
-  const progress = clamp01(playheadValue.value);
+  const [progress, setProgress] = useState(() => clamp01(playhead?.value ?? 0));
+  const [listenerId] = useState(() => nextPlayheadListenerId++);
   const samples = useMemo(
     () => downsample(waveform, Math.max(1, Math.min(256, Math.floor(width / 2)))),
     [waveform, width],
@@ -111,6 +112,22 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
     [height, progress, theme.colors.accentSecondary, width],
   );
   const lastReportedProgress = useRef(progress);
+
+  useEffect(() => {
+    if (!playhead) {
+      setProgress(0);
+      return;
+    }
+    const updateProgress = (value: number): void => {
+      const nextProgress = clamp01(value);
+      setProgress((current) => (current === nextProgress ? current : nextProgress));
+    };
+    updateProgress(playhead.value);
+    playhead.addListener(listenerId, updateProgress);
+    return () => {
+      playhead.removeListener(listenerId);
+    };
+  }, [listenerId, playhead]);
 
   useEffect(() => {
     if (lastReportedProgress.current === progress) {
