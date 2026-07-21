@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "Daft Citadel",
+    "slug": "daft-citadel",
+    "version": "1.0.0",
+    "orientation": "default",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.daftcitadel.app"
+    },
+    "android": {
+      "package": "com.daftcitadel.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#080A12"
+      }
+    },
+    "web": {
+      "bundler": "metro",
+      "name": "Daft Citadel"
+    },
+    "plugins": [
+      "expo-sqlite"
+    ]
+  }
+}

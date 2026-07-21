@@ -62,6 +62,16 @@ const isPluginNode = (node: RoutingNode): node is PluginRoutingNode =>
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
 
+type UnrefableTimer = {
+  unref?: () => void;
+};
+
+const allowProcessToExit = (handle: ReturnType<typeof setInterval>): void => {
+  // Node timers keep Jest, SSR, and command-line consumers alive by default.
+  // React Native returns numeric handles, so this is a no-op on devices.
+  (handle as unknown as UnrefableTimer).unref?.();
+};
+
 class PluginRecoveryManager {
   private snapshot: RecoverySnapshot = {
     pluginNodes: new Map(),
@@ -389,6 +399,7 @@ export class SessionAudioBridge {
           this.logger.warn('Transport polling failed', error);
         });
       }, this.transportPollIntervalMs);
+      allowProcessToExit(this.transportPollHandle);
       this.refreshTransportState().catch((error) => {
         this.logger.warn('Failed to prime transport state', error);
       });
@@ -399,6 +410,7 @@ export class SessionAudioBridge {
           this.logger.warn('Diagnostics polling failed', error);
         });
       }, this.diagnosticsPollIntervalMs);
+      allowProcessToExit(this.diagnosticsPollHandle);
       this.refreshDiagnosticsState().catch((error) => {
         this.logger.warn('Failed to prime diagnostics state', error);
       });

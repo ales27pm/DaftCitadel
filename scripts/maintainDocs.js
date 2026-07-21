@@ -260,13 +260,12 @@ async function resolvePythonExecutable() {
     const override = process.env.MAINTAIN_DOCS_PYTHON.trim();
     if (path.isAbsolute(override)) {
       candidates.push(override);
-    } else if (verbose) {
-      console.warn(
-        'Ignoring MAINTAIN_DOCS_PYTHON override because it is not an absolute path.',
-      );
+    } else {
+      throw new Error('MAINTAIN_DOCS_PYTHON must be an absolute path.');
     }
+  } else {
+    candidates.push('python3', 'python');
   }
-  candidates.push('python3', 'python');
 
   const seen = new Set();
   for (const candidate of candidates) {

@@ -13,6 +13,16 @@ type NormalizedChannel = {
   byteLength: number;
 };
 
+const copyToArrayBuffer = (
+  source: ArrayBufferLike,
+  byteOffset: number,
+  byteLength: number,
+): ArrayBuffer => {
+  const copy = new Uint8Array(byteLength);
+  copy.set(new Uint8Array(source, byteOffset, byteLength));
+  return copy.buffer;
+};
+
 const isArrayBufferPayload = (value: unknown): value is ArrayBuffer => {
   if (value instanceof ArrayBuffer) {
     return true;
@@ -63,9 +73,16 @@ const normalizeChannelPayload = (payload: ChannelPayload): NormalizedChannel => 
     if (!(payload instanceof Float32Array)) {
       throw new Error('channelData typed views must be Float32Array (Float32 PCM)');
     }
+    if (isArrayBufferPayload(payload.buffer)) {
+      return {
+        buffer: payload.buffer,
+        byteOffset: payload.byteOffset,
+        byteLength: payload.byteLength,
+      };
+    }
     return {
-      buffer: payload.buffer,
-      byteOffset: payload.byteOffset,
+      buffer: copyToArrayBuffer(payload.buffer, payload.byteOffset, payload.byteLength),
+      byteOffset: 0,
       byteLength: payload.byteLength,
     };
   }

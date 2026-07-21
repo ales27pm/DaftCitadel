@@ -1,29 +1,31 @@
 import React, { useMemo } from 'react';
-import { SafeAreaView, ScrollView, Switch, View } from 'react-native';
+import { ScrollView, Switch, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { NeonSurface, NeonText, NeonToolbar } from '../design-system';
 import { useAdaptiveLayout } from '../layout';
+import { useUserPreferences, type UserPreferences } from '../settings';
 
-const SETTINGS = [
+const SETTINGS: ReadonlyArray<{
+  key: keyof UserPreferences;
+  label: string;
+  description: string;
+}> = [
   {
-    key: 'adaptive',
-    label: 'Adaptive Layout',
-    description: 'Automatically adapt to phone, tablet, or desktop form factors.',
+    key: 'autoPlayScenes',
+    label: 'Auto-play scenes',
+    description: 'Start transport immediately after locating a scene.',
   },
   {
-    key: 'accessibility',
-    label: 'Accessibility Checks',
-    description: 'Run screen reader and motion audits before performances.',
-  },
-  {
-    key: 'cloud',
-    label: 'Cloud Sync',
-    description: 'Persist arrangement data with encrypted cloud storage.',
+    key: 'showDiagnostics',
+    label: 'Show diagnostics',
+    description: 'Display audio load and xrun metrics on performance surfaces.',
   },
 ];
 
 export const SettingsScreen: React.FC = () => {
   const adaptive = useAdaptiveLayout();
+  const { preferences, setPreference } = useUserPreferences();
   const safeAreaStyle = useMemo(() => ({ flex: 1 }), []);
   const contentStyle = useMemo(
     () => ({ padding: adaptive.breakpoint === 'phone' ? 12 : 32 }),
@@ -72,8 +74,8 @@ export const SettingsScreen: React.FC = () => {
                 </NeonText>
               </View>
               <Switch
-                value={setting.key === 'adaptive'}
-                onValueChange={() => undefined}
+                value={preferences[setting.key]}
+                onValueChange={(value) => setPreference(setting.key, value)}
                 accessibilityLabel={setting.label}
               />
             </NeonSurface>

@@ -56,9 +56,39 @@ export type PluginHostEventPayloads = {
 
 const moduleName = 'PluginHostModule';
 
+type TurboModuleLookup = {
+  get?<T extends TurboModule>(name: string): T | null;
+};
+
+const resolveNativePluginHost = (): PluginHostSpec | undefined => {
+  const registry = TurboModuleRegistry as unknown as TurboModuleLookup | undefined;
+  const turboModule = registry?.get?.<PluginHostSpec>(moduleName);
+  if (turboModule) {
+    return turboModule;
+  }
+
+  return (NativeModules as Record<string, unknown> | undefined)?.[moduleName] as
+    | PluginHostSpec
+    | undefined;
+};
+
+const unavailablePluginHost = new Proxy({} as PluginHostSpec, {
+  get: (_target, property) => {
+    if (typeof property === 'symbol') {
+      return undefined;
+    }
+
+    return async () => {
+      throw new Error(
+        `${moduleName}.${property} is unavailable. Use a native development build that includes the plugin host.`,
+      );
+    };
+  },
+});
+
 export const NativePluginHost: PluginHostSpec =
-  TurboModuleRegistry.getEnforcing<PluginHostSpec>(moduleName);
+  resolveNativePluginHost() ?? unavailablePluginHost;
 
 export const isPluginHostAvailable = (): boolean => {
-  return NativeModules[moduleName] != null;
+  return resolveNativePluginHost() != null;
 };

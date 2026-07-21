@@ -5,6 +5,7 @@ export const ScrollView = 'ScrollView';
 export const SafeAreaView = 'SafeAreaView';
 export const Text = 'Text';
 export const Pressable = 'Pressable';
+export const ActivityIndicator = 'ActivityIndicator';
 export const TouchableOpacity = 'TouchableOpacity';
 export const FlatList = 'FlatList';
 export const SectionList = 'SectionList';
@@ -259,7 +260,9 @@ const audioEngineModule = {
         source = payload;
       } else if (ArrayBuffer.isView(payload)) {
         const view = payload as ArrayBufferView;
-        source = view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
+        const copy = new Uint8Array(view.byteLength);
+        copy.set(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+        source = copy.buffer;
       } else {
         throw new Error(
           `channelData[${index}] must be an ArrayBuffer or ArrayBufferView`,
@@ -553,6 +556,7 @@ export class NativeEventEmitter extends MockNativeEventEmitter {
 }
 
 export const TurboModuleRegistry = {
+  get: <T>(name: string): T | null => (NativeModules[name] as T) ?? null,
   getEnforcing: <T>(name: string): T => NativeModules[name] as T,
 };
 

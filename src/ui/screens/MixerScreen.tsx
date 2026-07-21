@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo } from 'react';
-import { SafeAreaView, ScrollView, View, StyleSheet, ViewStyle } from 'react-native';
+import { ScrollView, View, StyleSheet, ViewStyle } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withTiming,
 } from 'react-native-reanimated';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   NeonButton,

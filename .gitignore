@@ -1,7 +1,10 @@
 node_modules/
 audio-engine/build/
+audio-engine/build*/
+android/
+ios/
 *.log
 .DS_Store
 .vscode/PythonImportHelper-v2-Completion.json
 deps/
-
+dist/

@@ -22,6 +22,8 @@ import { ThemeIntent, mapIntentToColor } from './tokens';
 import { createTextStyle, TypographyVariant } from './typography';
 import { useTheme } from './theme';
 
+const MotionView = Platform.OS === 'web' ? View : Animated.View;
+
 export interface NeonSurfaceProps extends ViewProps, AccessibilityProps {
   elevation?: keyof ReturnType<typeof useTheme>['elevation'];
   intent?: ThemeIntent;
@@ -75,14 +77,14 @@ export const NeonSurface: React.FC<PropsWithChildren<NeonSurfaceProps>> = ({
   );
 
   return (
-    <Animated.View
+    <MotionView
       accessible
       accessibilityRole="summary"
       style={[containerStyle, animatedStyle]}
       {...rest}
     >
       {children}
-    </Animated.View>
+    </MotionView>
   );
 };
 
@@ -173,7 +175,7 @@ export const NeonButton: React.FC<NeonButtonProps> = ({
       disabled={disabled}
       {...rest}
     >
-      <Animated.View style={[baseStyle, animatedGlow]}>
+      <MotionView style={[baseStyle, animatedGlow]}>
         <NeonText
           variant="bodyLarge"
           weight="medium"
@@ -182,7 +184,7 @@ export const NeonButton: React.FC<NeonButtonProps> = ({
         >
           {label}
         </NeonText>
-      </Animated.View>
+      </MotionView>
     </Pressable>
   );
 };

@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
     "target": "ES2019",
-    "module": "commonjs",
-    "moduleResolution": "node",
+    "module": "preserve",
+    "moduleResolution": "bundler",
     "esModuleInterop": true,
     "allowJs": false,
     "strict": true,
@@ -10,23 +10,45 @@
     "rootDir": "src",
     "outDir": "lib",
     "jsx": "react-native",
-    "types": ["jest", "node", "react-test-renderer"],
+    "types": [
+      "jest",
+      "node",
+      "react-test-renderer"
+    ],
     "typeRoots": [
       "./src/types",
       "./node_modules/@types",
       "./node_modules/react-native/types"
     ],
     "paths": {
-      "react-native-reanimated": ["src/types/stubs/react-native-reanimated"],
-      "@shopify/react-native-skia": ["src/types/stubs/shopify-react-native-skia"],
-      "@react-navigation/native": ["src/types/stubs/react-navigation-native"],
-      "@react-navigation/native-stack": ["src/types/stubs/react-navigation-native-stack"],
-      "@react-navigation/bottom-tabs": ["src/types/stubs/react-navigation-bottom-tabs"],
-      "react-native-webrtc": ["src/types/stubs/react-native-webrtc"]
+      "react-native-reanimated": [
+        "src/types/stubs/react-native-reanimated"
+      ],
+      "@shopify/react-native-skia": [
+        "src/types/stubs/shopify-react-native-skia"
+      ],
+      "@react-navigation/native": [
+        "src/types/stubs/react-navigation-native"
+      ],
+      "@react-navigation/native-stack": [
+        "src/types/stubs/react-navigation-native-stack"
+      ],
+      "@react-navigation/bottom-tabs": [
+        "src/types/stubs/react-navigation-bottom-tabs"
+      ],
+      "react-native-webrtc": [
+        "src/types/stubs/react-native-webrtc"
+      ]
     },
     "resolveJsonModule": true,
     "skipLibCheck": true
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "lib"]
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "lib"
+  ],
+  "extends": "expo/tsconfig.base"
 }

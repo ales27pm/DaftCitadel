@@ -44,9 +44,39 @@ export interface AudioEngineSpec extends TurboModule {
 
 const moduleName = 'AudioEngineModule';
 
+type TurboModuleLookup = {
+  get?<T extends TurboModule>(name: string): T | null;
+};
+
+const resolveNativeAudioEngine = (): AudioEngineSpec | undefined => {
+  const registry = TurboModuleRegistry as unknown as TurboModuleLookup | undefined;
+  const turboModule = registry?.get?.<AudioEngineSpec>(moduleName);
+  if (turboModule) {
+    return turboModule;
+  }
+
+  return (NativeModules as Record<string, unknown> | undefined)?.[moduleName] as
+    | AudioEngineSpec
+    | undefined;
+};
+
+const unavailableNativeAudioEngine = new Proxy({} as AudioEngineSpec, {
+  get: (_target, property) => {
+    if (typeof property === 'symbol') {
+      return undefined;
+    }
+
+    return async () => {
+      throw new Error(
+        `${moduleName}.${property} is unavailable. Use an Expo development build that includes the native audio module.`,
+      );
+    };
+  },
+});
+
 export const NativeAudioEngine: AudioEngineSpec =
-  TurboModuleRegistry.getEnforcing<AudioEngineSpec>(moduleName);
+  resolveNativeAudioEngine() ?? unavailableNativeAudioEngine;
 
 export const isNativeModuleAvailable = (): boolean => {
-  return NativeModules[moduleName] != null;
+  return resolveNativeAudioEngine() != null;
 };

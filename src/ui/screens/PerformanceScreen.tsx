@@ -1,26 +1,33 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { SafeAreaView, ScrollView, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Platform, ScrollView, View } from 'react-native';
 import Animated, {
-  runOnJS,
-  useAnimatedReaction,
   useAnimatedStyle,
-  useDerivedValue,
   useSharedValue,
   withTiming,
 } from 'react-native-reanimated';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { NeonButton, NeonSurface, NeonText, NeonToolbar } from '../design-system';
 import { useAdaptiveLayout } from '../layout';
-import { useSessionViewModel, useProjectedTransport } from '../session';
+import {
+  useSessionViewModel,
+  useProjectedTransport,
+  useTransportControls,
+} from '../session';
+import { useUserPreferences } from '../settings';
+
+const MotionView = Platform.OS === 'web' ? View : Animated.View;
 
 export const PerformanceScreen: React.FC = () => {
   const adaptive = useAdaptiveLayout();
   const { status, transport, tracks, diagnostics, refresh } = useSessionViewModel();
+  const transportControls = useTransportControls();
+  const { preferences } = useUserPreferences();
   const { projectedBeats } = useProjectedTransport(transport);
   const bpm = useSharedValue(transport?.bpm ?? 0);
   const renderLoad = useSharedValue(diagnostics.renderLoad);
-  const bpmDisplay = useDerivedValue(() => bpm.value);
-  const [displayBpm, setDisplayBpm] = useState(transport?.bpm ?? 0);
+  const [activeScene, setActiveScene] = useState<string>();
+  const [actionError, setActionError] = useState<string>();
   const safeAreaStyle = useMemo(() => ({ flex: 1 }), []);
   const contentStyle = useMemo(
     () => ({ padding: adaptive.breakpoint === 'phone' ? 12 : 32 }),
@@ -35,11 +42,18 @@ export const PerformanceScreen: React.FC = () => {
   );
   const sceneButtonStyle = useMemo(() => ({ margin: 6, minWidth: 120 }), []);
   const scenes = useMemo(() => {
-    const names = new Set<string>();
+    const byName = new Map<string, { name: string; startMs: number }>();
     tracks.forEach((track) => {
-      track.clips.forEach((clip) => names.add(clip.name));
+      track.clips.forEach((clip) => {
+        const current = byName.get(clip.name);
+        if (!current || clip.startMs < current.startMs) {
+          byName.set(clip.name, { name: clip.name, startMs: clip.startMs });
+        }
+      });
     });
-    return Array.from(names);
+    return Array.from(byName.values()).sort(
+      (left, right) => left.startMs - right.startMs,
+    );
   }, [tracks]);
 
   useEffect(() => {
@@ -52,14 +66,6 @@ export const PerformanceScreen: React.FC = () => {
     renderLoad.value = withTiming(diagnostics.renderLoad, { duration: 220 });
   }, [diagnostics.renderLoad, renderLoad]);
 
-  useAnimatedReaction(
-    () => bpmDisplay.value,
-    (value) => {
-      runOnJS(setDisplayBpm)(Math.round(value));
-    },
-    [bpmDisplay],
-  );
-
   const bpmStyle = useAnimatedStyle(() => ({
     transform: [
       {
@@ -71,9 +77,43 @@ export const PerformanceScreen: React.FC = () => {
     ],
   }));
 
-  const handleRefresh = () => {
+  const handleRefresh = useCallback(() => {
     refresh().catch(() => undefined);
-  };
+  }, [refresh]);
+
+  const handlePlay = useCallback(() => {
+    setActionError(undefined);
+    transportControls.play().catch((error) => {
+      setActionError(
+        error instanceof Error ? error.message : 'Unable to start transport',
+      );
+    });
+  }, [transportControls]);
+
+  const handleStop = useCallback(() => {
+    setActionError(undefined);
+    transportControls.stop().catch((error) => {
+      setActionError(error instanceof Error ? error.message : 'Unable to stop transport');
+    });
+  }, [transportControls]);
+
+  const handleSceneLaunch = useCallback(
+    async (scene: { name: string; startMs: number }) => {
+      const bpmValue = transport?.bpm ?? 120;
+      const beats = (scene.startMs / 60000) * bpmValue;
+      setActionError(undefined);
+      try {
+        await transportControls.locateBeats(beats);
+        if (preferences.autoPlayScenes && !transportControls.isPlaying) {
+          await transportControls.play();
+        }
+        setActiveScene(scene.name);
+      } catch (error) {
+        setActionError(error instanceof Error ? error.message : 'Unable to launch scene');
+      }
+    },
+    [preferences.autoPlayScenes, transport?.bpm, transportControls],
+  );
 
   return (
     <SafeAreaView style={safeAreaStyle}>
@@ -81,7 +121,18 @@ export const PerformanceScreen: React.FC = () => {
         <NeonToolbar
           title="Performance"
           actions={[
-            { label: 'Record', onPress: () => undefined, intent: 'critical' },
+            {
+              label: 'Play',
+              onPress: handlePlay,
+              intent: 'primary',
+              disabled: !transportControls.isAvailable || transportControls.isPlaying,
+            },
+            {
+              label: 'Stop',
+              onPress: handleStop,
+              intent: 'secondary',
+              disabled: !transportControls.isAvailable || !transportControls.isPlaying,
+            },
             { label: 'Refresh', onPress: handleRefresh, intent: 'secondary' },
           ]}
         />
@@ -90,11 +141,11 @@ export const PerformanceScreen: React.FC = () => {
             <NeonText variant="headline" weight="bold">
               Live Status
             </NeonText>
-            <Animated.View style={[bpmContainerStyle, bpmStyle]}>
+            <MotionView style={[bpmContainerStyle, bpmStyle]}>
               <NeonText variant="title" weight="medium" intent="tertiary">
-                {displayBpm} BPM
+                {Math.round(transport?.bpm ?? 0)} BPM
               </NeonText>
-            </Animated.View>
+            </MotionView>
             <NeonText variant="body" style={statusTextStyle}>
               {status === 'ready'
                 ? `Time Signature ${transport?.timeSignature ?? '4/4'} • Playhead ${
@@ -102,10 +153,17 @@ export const PerformanceScreen: React.FC = () => {
                   } beats`
                 : 'Connecting to transport controller...'}
             </NeonText>
-            <NeonText variant="body" intent="secondary" style={statusTextStyle}>
-              XRuns: {diagnostics.xruns} • Engine load{' '}
-              {(diagnostics.renderLoad * 100).toFixed(0)}%
-            </NeonText>
+            {preferences.showDiagnostics && (
+              <NeonText variant="body" intent="secondary" style={statusTextStyle}>
+                XRuns: {diagnostics.xruns} • Engine load{' '}
+                {(diagnostics.renderLoad * 100).toFixed(0)}%
+              </NeonText>
+            )}
+            {actionError && (
+              <NeonText variant="body" intent="critical" style={statusTextStyle}>
+                {actionError}
+              </NeonText>
+            )}
           </NeonSurface>
           <NeonSurface>
             <NeonText variant="title" weight="medium">
@@ -116,11 +174,14 @@ export const PerformanceScreen: React.FC = () => {
                 <NeonText variant="body">No scenes detected in current session.</NeonText>
               ) : (
                 scenes.map((scene) => (
-                  <View key={scene} style={sceneButtonStyle}>
+                  <View key={scene.name} style={sceneButtonStyle}>
                     <NeonButton
-                      label={scene}
-                      onPress={() => undefined}
-                      intent="secondary"
+                      label={scene.name}
+                      onPress={() => {
+                        handleSceneLaunch(scene).catch(() => undefined);
+                      }}
+                      intent={activeScene === scene.name ? 'success' : 'secondary'}
+                      disabled={!transportControls.isAvailable}
                     />
                   </View>
                 ))

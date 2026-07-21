@@ -1002,7 +1002,7 @@ exports[`ArrangementScreen diagnostics renders diagnostics summary when ready 1`
             ]
           }
         >
-          1/1/2024, 12:00:00 AM
+          1/1/2024, 12:00:00 AM UTC
            • 
           Test crash
         </Text>

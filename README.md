@@ -105,4 +105,24 @@ The React Native shell mounts `SessionAppProvider` (`src/ui/session/SessionAppPr
 
 `SessionViewModelProvider` consumes the environment and loads the active session, seeding the demo project on first launch. When the React tree unmounts, both the audio bridge and plugin host dispose cleanly so rerenders or fast-refresh cycles do not leak native resources.
 
+### Run the app
+
+The mobile and web shell targets Expo SDK 54 and includes a passive audio environment for development. Install dependencies and start the project with:
+
+```bash
+npm install
+npm start
+```
+
+Use `npm run web` for a browser session, or open the QR code in Expo Go. The custom audio engine, plugin host, and network diagnostics contain native code and therefore require an Expo development build for device integration; Expo Go automatically uses the passive transport so the arrangement, mixer, performance, settings, and persistence flows remain usable.
+
+Useful validation commands:
+
+```bash
+npm run export:web
+npm run doctor
+```
+
+Performance scene buttons now locate the transport to the corresponding clip and can auto-play based on the persisted setting. Settings are stored locally on every supported Expo platform.
+
 Enjoy the groove!
