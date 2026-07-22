@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
-import { ThemeProvider, useTheme } from '../design-system';
+import { StudioIcon, StudioText, ThemeProvider, useTheme } from '../design-system';
 import {
   ArrangementScreen,
   MixerScreen,
@@ -9,19 +9,11 @@ import {
   SettingsScreen,
 } from '../screens';
 import { SessionAppProvider } from '../session';
+import { APP_TABS, type AppTabName } from './tab-spec';
 
 export type ArrangementStackParamList = {
   ArrangementHome: undefined;
 };
-
-export type AppTabParamList = {
-  Arrangement: undefined;
-  Mixer: undefined;
-  Performance: undefined;
-  Settings: undefined;
-};
-
-type AppTabName = keyof AppTabParamList;
 
 const TABS: ReadonlyArray<{
   name: AppTabName;
@@ -37,7 +29,6 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     minHeight: 0,
-    backgroundColor: '#03050A',
   },
   screen: {
     flex: 1,
@@ -48,7 +39,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'stretch',
     justifyContent: 'center',
-    gap: 8,
+    gap: 4,
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderTopWidth: 1,
@@ -59,12 +50,9 @@ const styles = StyleSheet.create({
     maxWidth: 180,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 12,
+    borderRadius: 10,
+    gap: 2,
     paddingHorizontal: 4,
-  },
-  tabLabel: {
-    fontSize: 14,
-    fontWeight: '700',
   },
 });
 
@@ -76,46 +64,45 @@ const WebTabNavigator: React.FC = () => {
   const dynamicStyles = useMemo(
     () => ({
       tabBar: {
-        backgroundColor: theme.colors.surfaceVariant,
-        borderTopColor: theme.colors.surface,
+        backgroundColor: theme.colors.surface,
+        borderTopColor: theme.colors.border,
       },
-      tab: { backgroundColor: theme.colors.surface },
-      selectedTab: { backgroundColor: theme.colors.accentPrimary },
-      tabLabel: { color: theme.colors.textSecondary },
-      selectedTabLabel: { color: theme.colors.background },
+      selectedTab: { backgroundColor: theme.colors.surfaceVariant },
     }),
     [theme],
   );
 
   return (
-    <View style={styles.root}>
+    <View style={[styles.root, { backgroundColor: theme.colors.background }]}>
       <View style={styles.screen}>
         <ActiveScreen />
       </View>
       <View style={[styles.tabBar, dynamicStyles.tabBar]}>
         {TABS.map((tab) => {
           const selected = tab.name === activeTab;
+          const spec = APP_TABS.find((entry) => entry.name === tab.name) ?? APP_TABS[0];
           return (
             <Pressable
               key={tab.name}
               accessibilityRole="tab"
               accessibilityState={{ selected }}
               onPress={() => setActiveTab(tab.name)}
-              style={[
-                styles.tab,
-                dynamicStyles.tab,
-                selected && dynamicStyles.selectedTab,
-              ]}
+              style={[styles.tab, selected && dynamicStyles.selectedTab]}
             >
-              <Text
-                style={[
-                  styles.tabLabel,
-                  dynamicStyles.tabLabel,
-                  selected && dynamicStyles.selectedTabLabel,
-                ]}
+              <StudioIcon
+                color={selected ? theme.colors.accentPrimary : theme.colors.textSecondary}
+                name={spec.icon}
+                size={18}
+              />
+              <StudioText
+                variant="caption"
+                weight="medium"
+                style={{
+                  color: selected ? theme.colors.textPrimary : theme.colors.textSecondary,
+                }}
               >
                 {tab.name}
-              </Text>
+              </StudioText>
             </Pressable>
           );
         })}

@@ -10,7 +10,7 @@ local native module.
 - Node.js 22 and npm
 - Expo SDK 54 / React Native 0.81
 - Android Studio toolchain with JDK 17 and Android SDK 36
-- Xcode 16.1 or newer on macOS, CocoaPods, and an iOS 15.1+ target
+- Xcode 16.1 or newer on macOS, CocoaPods, and an iOS 18.0+ target
 
 The checked-in `android/` and `ios/` directories are the build inputs and are
 reproducible from `app.json`, the local Expo module, and the config plugin:
@@ -46,7 +46,7 @@ be forced into passive mode for debugging.
 
 - `modules/daft-citadel-native/android/build.gradle` adds the existing Kotlin,
   JNI, and C++ source roots and builds the audio engine with CMake.
-- `modules/daft-citadel-native/ios/DaftCitadelNative.podspec` links the Swift,
+- `DaftCitadelNative.podspec` links the Swift,
   Objective-C++, and C++ sources with AVFoundation, AudioToolbox, and
   NetworkExtension.
 - `plugins/with-daft-citadel-native.js` registers the legacy React Native package

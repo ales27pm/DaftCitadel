@@ -9,6 +9,7 @@ export const ActivityIndicator = 'ActivityIndicator';
 export const TouchableOpacity = 'TouchableOpacity';
 export const FlatList = 'FlatList';
 export const SectionList = 'SectionList';
+export const Switch = 'Switch';
 
 export const StyleSheet = {
   create: <T extends Record<string, unknown>>(styles: T): T => styles,

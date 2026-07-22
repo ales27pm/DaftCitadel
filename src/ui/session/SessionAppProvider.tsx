@@ -1,14 +1,15 @@
 import React, { PropsWithChildren, useCallback, useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Platform, StyleSheet, View } from 'react-native';
 
 import { isNativeModuleAvailable } from '../../audio';
+import {
+  darkTokens,
+  StudioButton,
+  StudioIcon,
+  StudioPanel,
+  StudioText,
+  ThemeProvider,
+} from '../design-system';
 import { SessionViewModelProvider } from './SessionViewModelProvider';
 import {
   NativeAudioUnavailableError,
@@ -68,33 +69,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 16,
     padding: 24,
-    backgroundColor: '#080A12',
   },
-  title: {
-    color: '#F7F8FF',
-    fontSize: 22,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  message: {
-    color: '#AEB4CC',
-    fontSize: 15,
-    lineHeight: 22,
-    textAlign: 'center',
-  },
-  retryButton: {
-    minHeight: 44,
-    minWidth: 120,
+  bootstrapPanel: {
     alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 12,
-    paddingHorizontal: 20,
-    backgroundColor: '#50E3C2',
+    gap: 12,
+    maxWidth: 460,
+    width: '100%',
   },
-  retryLabel: {
-    color: '#080A12',
-    fontSize: 16,
-    fontWeight: '700',
+  centeredCopy: {
+    textAlign: 'center',
   },
 });
 
@@ -150,30 +133,54 @@ export const SessionAppProvider: React.FC<PropsWithChildren> = ({ children }) =>
 
   if (error) {
     return (
-      <View style={styles.bootstrap} accessibilityRole="alert">
-        <Text style={styles.title}>Daft Citadel could not start</Text>
-        <Text style={styles.message} selectable>
-          {error.message}
-        </Text>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityHint="Retries session and audio initialization"
-          onPress={retryBootstrap}
-          style={styles.retryButton}
+      <ThemeProvider scheme="dark">
+        <View
+          style={[styles.bootstrap, { backgroundColor: darkTokens.colors.background }]}
+          accessibilityRole="alert"
         >
-          <Text style={styles.retryLabel}>Try again</Text>
-        </Pressable>
-      </View>
+          <StudioPanel style={styles.bootstrapPanel}>
+            <StudioIcon
+              name="diagnostics"
+              color={darkTokens.colors.statusCritical}
+              size={30}
+            />
+            <StudioText variant="sectionTitle" tone="critical" weight="bold">
+              Daft Citadel could not start
+            </StudioText>
+            <StudioText selectable tone="secondary" style={styles.centeredCopy}>
+              {error.message}
+            </StudioText>
+            <StudioButton
+              accessibilityHint="Retries session and audio initialization"
+              icon="engine"
+              label="Try again"
+              onPress={retryBootstrap}
+              variant="primary"
+            />
+          </StudioPanel>
+        </View>
+      </ThemeProvider>
     );
   }
 
   if (!environment) {
     return (
-      <View style={styles.bootstrap} accessibilityRole="progressbar">
-        <ActivityIndicator color="#50E3C2" size="large" />
-        <Text style={styles.title}>Preparing Daft Citadel</Text>
-        <Text style={styles.message}>Loading your session and audio environment…</Text>
-      </View>
+      <ThemeProvider scheme="dark">
+        <View
+          style={[styles.bootstrap, { backgroundColor: darkTokens.colors.background }]}
+          accessibilityRole="progressbar"
+        >
+          <StudioPanel style={styles.bootstrapPanel}>
+            <ActivityIndicator color={darkTokens.colors.accentPrimary} size="large" />
+            <StudioText variant="sectionTitle" weight="bold">
+              Preparing Daft Citadel
+            </StudioText>
+            <StudioText tone="secondary" style={styles.centeredCopy}>
+              Loading your session and audio environment…
+            </StudioText>
+          </StudioPanel>
+        </View>
+      </ThemeProvider>
     );
   }
 

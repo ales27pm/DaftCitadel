@@ -13,7 +13,7 @@ class PluginHostModule: RCTEventEmitter {
     let audioUnit: AUAudioUnit
     let descriptor: [String: Any]
     let sandboxPath: String?
-    let renderObserverToken: AUAudioUnitRenderObserverToken?
+    let renderObserverToken: Int?
   }
 
   private let queue = DispatchQueue(label: "com.daftcitadel.pluginhost", qos: .userInitiated)
@@ -135,7 +135,7 @@ class PluginHostModule: RCTEventEmitter {
     }
     let scheduleBlock = state.audioUnit.scheduleParameterBlock
 
-    let sampleRate = state.audioUnit.outputBusses.first?.format.sampleRate ?? 44100
+    let sampleRate = state.audioUnit.outputBusses.firstBus?.format.sampleRate ?? 44100
     let events: [(sampleTime: AUEventSampleTime, value: AUValue)] = curve.compactMap { element in
       guard
         let dict = element as? [String: Any],
@@ -199,8 +199,8 @@ class PluginHostModule: RCTEventEmitter {
     var inputChannels = 2
     var outputChannels = 2
     if let audioUnit = try? AUAudioUnit(componentDescription: description) {
-      inputChannels = Int(audioUnit.inputBusses.first?.format.channelCount ?? 2)
-      outputChannels = Int(audioUnit.outputBusses.first?.format.channelCount ?? 2)
+      inputChannels = Int(audioUnit.inputBusses.firstBus?.format.channelCount ?? 2)
+      outputChannels = Int(audioUnit.outputBusses.firstBus?.format.channelCount ?? 2)
       if let parameterTree = audioUnit.parameterTree {
         parameters = parameterTree.allParameters.map { parameter in
           [
@@ -285,6 +285,12 @@ private class PluginSandboxCoordinator {
       try fileManager.createDirectory(at: pluginsURL, withIntermediateDirectories: true)
     }
     return pluginsURL
+  }
+}
+
+private extension AUAudioUnitBusArray {
+  var firstBus: AUAudioUnitBus? {
+    count > 0 ? self[0] : nil
   }
 }
 

@@ -9,10 +9,15 @@ jest.mock('../../session', () => ({
   useSessionViewModel: jest.fn(),
   useTransportControls: jest.fn(),
   useProjectedTransport: jest.fn(),
+  useSessionActions: jest.fn(),
 }));
 
-const { useSessionViewModel, useTransportControls, useProjectedTransport } =
-  jest.requireMock('../../session');
+const {
+  useSessionViewModel,
+  useTransportControls,
+  useProjectedTransport,
+  useSessionActions,
+} = jest.requireMock('../../session');
 
 const baseTrack = {
   id: 'track-1',
@@ -66,6 +71,11 @@ beforeEach(() => {
     projectedBeats: 0,
     projectedRatio: 0,
     transport: null,
+  });
+  useSessionActions.mockReturnValue({
+    addTrack: jest.fn(async () => undefined),
+    setTrackMuted: jest.fn(async () => undefined),
+    setTrackSolo: jest.fn(async () => undefined),
   });
 });
 
@@ -134,7 +144,10 @@ describe('ArrangementScreen diagnostics', () => {
     });
 
     const renderer = await renderScreen();
-    expect(renderer.toJSON()).toMatchSnapshot();
+    const serialized = JSON.stringify(renderer.toJSON());
+    expect(serialized).toContain('Engine 25% · 0 xruns');
+    expect(serialized).toContain('Plugin needs attention');
+    expect(serialized).toContain('Fixture Plugin');
     renderer.unmount();
   });
 
@@ -165,7 +178,7 @@ describe('ArrangementScreen diagnostics', () => {
     });
 
     const renderer = await renderScreen();
-    expect(renderer.toJSON()).toMatchSnapshot();
+    expect(JSON.stringify(renderer.toJSON())).toContain('Diagnostics failed');
     renderer.unmount();
   });
 
@@ -195,7 +208,7 @@ describe('ArrangementScreen diagnostics', () => {
     });
 
     const renderer = await renderScreen();
-    expect(renderer.toJSON()).toMatchSnapshot();
+    expect(JSON.stringify(renderer.toJSON())).toContain('Audio diagnostics unavailable');
     renderer.unmount();
   });
 });

@@ -4,9 +4,14 @@ export type ColorTokens = {
   background: string;
   surface: string;
   surfaceVariant: string;
+  surfaceElevated: string;
+  surfacePressed: string;
+  border: string;
   textPrimary: string;
   textSecondary: string;
+  textTertiary: string;
   accentPrimary: string;
+  accentPrimaryInk: string;
   accentSecondary: string;
   accentTertiary: string;
   waveform: string;
@@ -85,19 +90,24 @@ export interface ThemeTokens {
 export const lightTokens: ThemeTokens = {
   scheme: 'light',
   colors: {
-    background: '#08090F',
-    surface: '#0E1120',
-    surfaceVariant: '#11162A',
-    textPrimary: '#F5F6FF',
-    textSecondary: '#CED4FF',
-    accentPrimary: '#50E3C2',
-    accentSecondary: '#FB3EFF',
-    accentTertiary: '#25C1FF',
-    waveform: '#25C1FF',
-    midiNote: '#FB3EFF',
-    statusSuccess: '#3BEA7B',
-    statusWarning: '#FFC857',
-    statusCritical: '#FF6B6B',
+    background: '#05070C',
+    surface: '#0B1018',
+    surfaceVariant: '#111926',
+    surfaceElevated: '#182334',
+    surfacePressed: '#223047',
+    border: '#273446',
+    textPrimary: '#F4F7FB',
+    textSecondary: '#A9B5C5',
+    textTertiary: '#748397',
+    accentPrimary: '#5CE6C3',
+    accentPrimaryInk: '#06231D',
+    accentSecondary: '#E171F5',
+    accentTertiary: '#63C7F5',
+    waveform: '#63C7F5',
+    midiNote: '#E171F5',
+    statusSuccess: '#5CE6C3',
+    statusWarning: '#F2C66D',
+    statusCritical: '#FF7A88',
   },
   spacing: {
     none: 0,
@@ -109,9 +119,9 @@ export const lightTokens: ThemeTokens = {
     xxl: 40,
   },
   radii: {
-    sm: 6,
-    md: 12,
-    lg: 20,
+    sm: 8,
+    md: 10,
+    lg: 14,
     pill: 999,
   },
   elevation: {
@@ -124,7 +134,7 @@ export const lightTokens: ThemeTokens = {
     overlay: 0.64,
   },
   typography: {
-    fontFamily: 'Inter',
+    fontFamily: 'System',
     weights: {
       regular: '400',
       medium: '600',
@@ -153,21 +163,7 @@ export const lightTokens: ThemeTokens = {
 export const darkTokens: ThemeTokens = {
   ...lightTokens,
   scheme: 'dark',
-  colors: {
-    background: '#03050A',
-    surface: '#060A14',
-    surfaceVariant: '#0A1021',
-    textPrimary: '#FFFFFF',
-    textSecondary: '#C8CCFF',
-    accentPrimary: '#5CFFCA',
-    accentSecondary: '#FF63FF',
-    accentTertiary: '#4DD6FF',
-    waveform: '#4DD6FF',
-    midiNote: '#FF63FF',
-    statusSuccess: '#4BFF92',
-    statusWarning: '#FFD46F',
-    statusCritical: '#FF7E7E',
-  },
+  colors: { ...lightTokens.colors },
 };
 
 export const TOKENS_BY_SCHEME: Record<'light' | 'dark', ThemeTokens> = {

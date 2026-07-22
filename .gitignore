@@ -10,6 +10,8 @@ dist/
 coverage/
 lib/
 .expo/
+.superdesign/init/
+.superdesign/tmp/
 android/.gradle/
 android/app/build/
 ios/Pods/

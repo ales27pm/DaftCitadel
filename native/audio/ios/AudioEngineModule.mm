@@ -97,10 +97,66 @@ NodeOptions ConvertOptions(NSDictionary* options) {
 void RejectPromise(RCTPromiseRejectBlock reject, NSString* code, const std::string& message) {
   reject(code, [NSString stringWithUTF8String:message.c_str()], nil);
 }
+
+void RejectObjectiveCException(RCTPromiseRejectBlock reject, NSString* code,
+                               NSString* operation, NSException* exception) {
+  NSString* reason = exception.reason ?: @"No exception reason supplied";
+  NSString* message = [NSString stringWithFormat:@"%@ failed: %@", operation, reason];
+  NSError* error = [NSError errorWithDomain:@"dev.daftcitadel.audio-bridge"
+                                       code:1
+                                   userInfo:@{
+                                     NSLocalizedDescriptionKey : message,
+                                     @"operation" : operation,
+                                     @"exceptionName" : exception.name,
+                                     @"exceptionReason" : reason,
+                                   }];
+  os_log_error(ModuleLogger(), "%{public}@ raised %{public}@: %{public}@",
+               operation, exception.name, reason);
+  reject(code, message, error);
+}
+
+void LogObjectiveCException(NSString* operation, NSException* exception) {
+  os_log_error(ModuleLogger(), "%{public}@ raised %{public}@: %{public}@",
+               operation, exception.name,
+               exception.reason ?: @"No exception reason supplied");
+}
+
+void PerformPromiseOperation(RCTPromiseRejectBlock reject, NSString* code,
+                             NSString* operation, void (^body)(void)) {
+  @try {
+    try {
+      body();
+    } catch (const std::exception& ex) {
+      os_log_error(ModuleLogger(), "%{public}@ failed: %{public}s", operation, ex.what());
+      RejectPromise(reject, code, ex.what());
+    } catch (...) {
+      NSString* message = [NSString stringWithFormat:@"%@ failed", operation];
+      os_log_error(ModuleLogger(), "%{public}@ failed with an unknown C++ exception", operation);
+      reject(code, message, nil);
+    }
+  } @catch (NSException* exception) {
+    RejectObjectiveCException(reject, code, operation, exception);
+  }
+}
+
+void ShutdownBridgeAfterFailure(NSString* operation) {
+  try {
+    AudioEngineBridge::shutdown();
+  } catch (const std::exception& ex) {
+    os_log_error(ModuleLogger(), "%{public}@ bridge cleanup failed: %{public}s", operation,
+                 ex.what());
+  } catch (...) {
+    os_log_error(ModuleLogger(), "%{public}@ bridge cleanup failed", operation);
+  }
+}
 }  // namespace
 
 @interface AudioEngineModule ()
 @property(nonatomic, strong) DaftAudioDeviceDriver* deviceDriver;
+@property(nonatomic, assign) double configuredSampleRate;
+@property(nonatomic, assign) NSUInteger configuredFramesPerBuffer;
+@property(nonatomic, assign) BOOL engineConfigured;
+@property(nonatomic, assign) BOOL deviceStarted;
 @end
 
 @implementation AudioEngineModule
@@ -111,85 +167,140 @@ RCT_EXPORT_MODULE();
   return NO;
 }
 
+- (dispatch_queue_t)methodQueue {
+  static dispatch_queue_t audioControlQueue;
+  static dispatch_once_t onceToken;
+  dispatch_once(&onceToken, ^{
+    audioControlQueue =
+        dispatch_queue_create("dev.daftcitadel.audio-control", DISPATCH_QUEUE_SERIAL);
+  });
+  return audioControlQueue;
+}
+
 - (instancetype)init {
   self = [super init];
   if (self != nil) {
     _deviceDriver = [[DaftAudioDeviceDriver alloc] init];
+    _configuredSampleRate = 0.0;
+    _configuredFramesPerBuffer = 0;
+    _engineConfigured = NO;
+    _deviceStarted = NO;
   }
   return self;
+}
+
+- (void)clearConfigurationState {
+  self.engineConfigured = NO;
+  self.configuredSampleRate = 0.0;
+  self.configuredFramesPerBuffer = 0;
+}
+
+- (void)stopDeviceSafelyForOperation:(NSString*)operation {
+  @try {
+    [self.deviceDriver stop];
+  } @catch (NSException* exception) {
+    LogObjectiveCException(operation, exception);
+  }
+  self.deviceStarted = NO;
 }
 
 RCT_EXPORT_METHOD(initialize:(double)sampleRate
                   framesPerBuffer:(nonnull NSNumber*)framesPerBuffer
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
-  if (!std::isfinite(sampleRate) || sampleRate <= 0.0 || framesPerBuffer == nil) {
-    RejectPromise(reject, @"invalid_arguments", "Invalid sample rate or buffer size supplied to initialize");
-    return;
-  }
-  const auto framesUnsigned = framesPerBuffer.unsignedIntValue;
-  const double framesValue = framesPerBuffer.doubleValue;
-  if (framesUnsigned == 0U || !std::isfinite(framesValue)) {
-    RejectPromise(reject, @"invalid_arguments", "Invalid sample rate or buffer size supplied to initialize");
-    return;
-  }
-  const double diff = std::fabs(framesValue - static_cast<double>(framesUnsigned));
-  if (diff > std::numeric_limits<double>::epsilon()) {
-    RejectPromise(reject, @"invalid_arguments", "framesPerBuffer must be an integer value");
-    return;
-  }
-  const auto maxFrames = daft::audio::SceneGraph::maxSupportedFramesPerBuffer();
-  if (framesUnsigned > maxFrames) {
-    std::string message = "framesPerBuffer exceeds engine capacity (max " + std::to_string(maxFrames) + ")";
-    RejectPromise(reject, @"invalid_arguments", message);
-    return;
-  }
-  try {
-    [self.deviceDriver stop];
-    AudioEngineBridge::initialize(sampleRate, framesUnsigned);
-    NSError* deviceError = nil;
-    if (![self.deviceDriver startWithSampleRate:sampleRate
-                               framesPerBuffer:framesUnsigned
-                                         error:&deviceError]) {
-      AudioEngineBridge::shutdown();
-      reject(@"initialize_failed", @"Unable to start the iOS audio device", deviceError);
-      return;
+  @try {
+    try {
+      if (!std::isfinite(sampleRate) || sampleRate <= 0.0 || framesPerBuffer == nil) {
+        RejectPromise(reject, @"invalid_arguments",
+                      "Invalid sample rate or buffer size supplied to initialize");
+        return;
+      }
+      const auto framesUnsigned = framesPerBuffer.unsignedIntValue;
+      const double framesValue = framesPerBuffer.doubleValue;
+      if (framesUnsigned == 0U || !std::isfinite(framesValue)) {
+        RejectPromise(reject, @"invalid_arguments",
+                      "Invalid sample rate or buffer size supplied to initialize");
+        return;
+      }
+      const double diff = std::fabs(framesValue - static_cast<double>(framesUnsigned));
+      if (diff > std::numeric_limits<double>::epsilon()) {
+        RejectPromise(reject, @"invalid_arguments", "framesPerBuffer must be an integer value");
+        return;
+      }
+      const auto maxFrames = daft::audio::SceneGraph::maxSupportedFramesPerBuffer();
+      if (framesUnsigned > maxFrames) {
+        std::string message =
+            "framesPerBuffer exceeds engine capacity (max " + std::to_string(maxFrames) + ")";
+        RejectPromise(reject, @"invalid_arguments", message);
+        return;
+      }
+      if (self.deviceStarted) {
+        [self stopDeviceSafelyForOperation:@"Audio device reset before initialization"];
+      }
+      AudioEngineBridge::initialize(sampleRate, framesUnsigned);
+      self.configuredSampleRate = sampleRate;
+      self.configuredFramesPerBuffer = framesUnsigned;
+      self.engineConfigured = YES;
+      resolve(nil);
+    } catch (const std::exception& ex) {
+      [self clearConfigurationState];
+      ShutdownBridgeAfterFailure(@"Audio engine initialization");
+      os_log_error(ModuleLogger(), "Initialize failed: %{public}s", ex.what());
+      RejectPromise(reject, @"initialize_failed", ex.what());
+    } catch (...) {
+      [self clearConfigurationState];
+      ShutdownBridgeAfterFailure(@"Audio engine initialization");
+      os_log_error(ModuleLogger(), "Initialize failed with an unknown C++ exception");
+      reject(@"initialize_failed", @"Audio engine initialization failed", nil);
     }
-    resolve(nil);
-  } catch (const std::exception& ex) {
-    os_log_error(ModuleLogger(), "Initialize failed: %{public}s", ex.what());
-    RejectPromise(reject, @"initialize_failed", ex.what());
+  } @catch (NSException* exception) {
+    [self stopDeviceSafelyForOperation:@"Audio device cleanup after initialization failure"];
+    [self clearConfigurationState];
+    ShutdownBridgeAfterFailure(@"Audio engine initialization");
+    RejectObjectiveCException(reject, @"initialize_failed", @"Audio engine initialization",
+                              exception);
   }
 }
 
 RCT_EXPORT_METHOD(shutdown:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
-  try {
-    [self.deviceDriver stop];
-    AudioEngineBridge::shutdown();
-    resolve(nil);
-  } catch (const std::exception& ex) {
-    os_log_error(ModuleLogger(), "Shutdown failed: %{public}s", ex.what());
-    RejectPromise(reject, @"shutdown_failed", ex.what());
+  @try {
+    try {
+      if (self.deviceStarted) {
+        [self stopDeviceSafelyForOperation:@"Audio device shutdown"];
+      }
+      [self clearConfigurationState];
+      AudioEngineBridge::shutdown();
+      resolve(nil);
+    } catch (const std::exception& ex) {
+      [self clearConfigurationState];
+      ShutdownBridgeAfterFailure(@"Audio engine shutdown");
+      os_log_error(ModuleLogger(), "Shutdown failed: %{public}s", ex.what());
+      RejectPromise(reject, @"shutdown_failed", ex.what());
+    } catch (...) {
+      [self clearConfigurationState];
+      ShutdownBridgeAfterFailure(@"Audio engine shutdown");
+      os_log_error(ModuleLogger(), "Shutdown failed with an unknown C++ exception");
+      reject(@"shutdown_failed", @"Audio engine shutdown failed", nil);
+    }
+  } @catch (NSException* exception) {
+    [self stopDeviceSafelyForOperation:@"Audio device cleanup after shutdown failure"];
+    [self clearConfigurationState];
+    ShutdownBridgeAfterFailure(@"Audio engine shutdown");
+    RejectObjectiveCException(reject, @"shutdown_failed", @"Audio engine shutdown",
+                              exception);
   }
 }
 
 - (void)invalidate {
-  [self.deviceDriver stop];
-  try {
-    AudioEngineBridge::shutdown();
-  } catch (...) {
-    os_log_error(ModuleLogger(), "Audio engine shutdown failed during invalidation");
-  }
+  [self stopDeviceSafelyForOperation:@"Audio engine invalidation"];
+  [self clearConfigurationState];
+  ShutdownBridgeAfterFailure(@"Audio engine invalidation");
 }
 
 - (void)dealloc {
-  [self.deviceDriver stop];
-  try {
-    AudioEngineBridge::shutdown();
-  } catch (...) {
-    os_log_error(ModuleLogger(), "Audio engine shutdown failed during deallocation");
-  }
+  [self stopDeviceSafelyForOperation:@"Audio engine deallocation"];
+  ShutdownBridgeAfterFailure(@"Audio engine deallocation");
 }
 
 RCT_EXPORT_METHOD(addNode:(NSString*)nodeId
@@ -197,26 +308,28 @@ RCT_EXPORT_METHOD(addNode:(NSString*)nodeId
                   options:(NSDictionary*)options
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
-  if (nodeId.length == 0 || nodeType.length == 0) {
-    RejectPromise(reject, @"invalid_arguments", "nodeId and nodeType are required");
-    return;
-  }
-  NodeOptions nativeOptions = ConvertOptions(options);
-  std::string error;
-  auto node = CreateNode([nodeType UTF8String], nativeOptions, error);
-  if (!node) {
-    os_log_error(ModuleLogger(), "Unsupported node type %{public}@", nodeType);
-    RejectPromise(reject, @"unsupported_node", error);
-    return;
-  }
-  const bool success = AudioEngineBridge::addNode([nodeId UTF8String], std::move(node));
-  if (!success) {
-    std::string message = "Failed to add node '" + std::string([nodeId UTF8String]) + "'";
-    os_log_error(ModuleLogger(), "%{public}s", message.c_str());
-    RejectPromise(reject, @"add_node_failed", message);
-    return;
-  }
-  resolve(nil);
+  PerformPromiseOperation(reject, @"add_node_failed", @"Add audio node", ^{
+    if (nodeId.length == 0 || nodeType.length == 0) {
+      RejectPromise(reject, @"invalid_arguments", "nodeId and nodeType are required");
+      return;
+    }
+    NodeOptions nativeOptions = ConvertOptions(options);
+    std::string error;
+    auto node = CreateNode([nodeType UTF8String], nativeOptions, error);
+    if (!node) {
+      os_log_error(ModuleLogger(), "Unsupported node type %{public}@", nodeType);
+      RejectPromise(reject, @"unsupported_node", error);
+      return;
+    }
+    const bool success = AudioEngineBridge::addNode([nodeId UTF8String], std::move(node));
+    if (!success) {
+      std::string message = "Failed to add node '" + std::string([nodeId UTF8String]) + "'";
+      os_log_error(ModuleLogger(), "%{public}s", message.c_str());
+      RejectPromise(reject, @"add_node_failed", message);
+      return;
+    }
+    resolve(nil);
+  });
 }
 
 RCT_EXPORT_METHOD(registerClipBuffer:(NSString*)bufferKey
@@ -226,167 +339,171 @@ RCT_EXPORT_METHOD(registerClipBuffer:(NSString*)bufferKey
                   channelData:(NSArray*)channelData
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
-  const std::string key = Trim(bufferKey.length > 0 ? [bufferKey UTF8String] : "");
-  if (key.empty()) {
-    RejectPromise(reject, @"invalid_arguments", "bufferKey is required");
-    return;
-  }
-  if (!std::isfinite(sampleRate) || sampleRate <= 0.0) {
-    RejectPromise(reject, @"invalid_arguments", "sampleRate must be positive and finite");
-    return;
-  }
-  if (channels == nil || frames == nil) {
-    RejectPromise(reject, @"invalid_arguments", "channels and frames are required");
-    return;
-  }
-
-  const auto channelCountUnsigned = channels.unsignedIntegerValue;
-  const auto framesUnsigned = frames.unsignedLongLongValue;
-  const double channelsValue = channels.doubleValue;
-  const double framesValue = frames.doubleValue;
-  if (channelCountUnsigned == 0 || framesUnsigned == 0) {
-    RejectPromise(reject, @"invalid_arguments", "channels and frames must be positive integers");
-    return;
-  }
-  if (!std::isfinite(channelsValue) || !std::isfinite(framesValue)) {
-    RejectPromise(reject, @"invalid_arguments", "channels and frames must be finite");
-    return;
-  }
-  if (std::fabs(channelsValue - static_cast<double>(channelCountUnsigned)) > std::numeric_limits<double>::epsilon() ||
-      std::fabs(framesValue - static_cast<double>(framesUnsigned)) > std::numeric_limits<double>::epsilon()) {
-    RejectPromise(reject, @"invalid_arguments", "channels and frames must be integer values");
-    return;
-  }
-  if (channelData == nil || channelData.count != channelCountUnsigned) {
-    RejectPromise(reject, @"invalid_arguments", "channelData length must equal channels");
-    return;
-  }
-
-  constexpr std::size_t kMaxChannels = 64;
-  constexpr unsigned long long kMaxFrames = 10'000'000ULL;
-
-  if (channelCountUnsigned > kMaxChannels) {
-    RejectPromise(reject, @"invalid_arguments", "channels must be between 1 and 64");
-    return;
-  }
-  if (framesUnsigned > kMaxFrames) {
-    RejectPromise(reject, @"invalid_arguments", "frames must be between 1 and 10000000");
-    return;
-  }
-  if (framesUnsigned > std::numeric_limits<std::size_t>::max()) {
-    RejectPromise(reject, @"invalid_arguments", "frames exceed platform limits");
-    return;
-  }
-
-  const std::size_t channelCount = static_cast<std::size_t>(channelCountUnsigned);
-  const std::size_t frameCount = static_cast<std::size_t>(framesUnsigned);
-  if (frameCount > std::numeric_limits<std::size_t>::max() / sizeof(float)) {
-    RejectPromise(reject, @"invalid_arguments", "frames exceed platform limits");
-    return;
-  }
-  const std::size_t requiredBytes = frameCount * sizeof(float);
-
-  std::vector<std::vector<float>> nativeChannels;
-  nativeChannels.reserve(channelCount);
-
-  for (NSUInteger index = 0; index < channelCountUnsigned; ++index) {
-    id entry = channelData[index];
-    NSData* data = nil;
-    if ([entry isKindOfClass:[NSData class]]) {
-      data = (NSData*)entry;
-    } else if ([entry isKindOfClass:[NSString class]]) {
-      data = [[NSData alloc] initWithBase64EncodedString:(NSString*)entry
-                                                options:NSDataBase64DecodingIgnoreUnknownCharacters];
-    }
-    if (data == nil) {
-      RejectPromise(reject, @"invalid_arguments", "channelData entries must be base64 Float32 PCM strings");
+  PerformPromiseOperation(reject, @"register_clip_failed", @"Register clip buffer", ^{
+    const std::string key = Trim(bufferKey.length > 0 ? [bufferKey UTF8String] : "");
+    if (key.empty()) {
+      RejectPromise(reject, @"invalid_arguments", "bufferKey is required");
       return;
     }
-    if (data.length < requiredBytes) {
-      RejectPromise(reject, @"invalid_arguments", "channelData entry is smaller than the expected frame count");
+    if (!std::isfinite(sampleRate) || sampleRate <= 0.0) {
+      RejectPromise(reject, @"invalid_arguments", "sampleRate must be positive and finite");
       return;
     }
-    std::vector<float> channel(frameCount);
-    std::memcpy(channel.data(), data.bytes, requiredBytes);
-    nativeChannels.push_back(std::move(channel));
-  }
+    if (channels == nil || frames == nil) {
+      RejectPromise(reject, @"invalid_arguments", "channels and frames are required");
+      return;
+    }
 
-  const bool ok = AudioEngineBridge::registerClipBuffer(key, sampleRate, channelCount, frameCount, std::move(nativeChannels));
-  if (!ok) {
-    os_log_error(ModuleLogger(), "Failed to register clip buffer %{public}@", bufferKey);
-    RejectPromise(reject, @"register_clip_failed", "Failed to register clip buffer");
-    return;
-  }
-  resolve(nil);
+    const auto channelCountUnsigned = channels.unsignedIntegerValue;
+    const auto framesUnsigned = frames.unsignedLongLongValue;
+    const double channelsValue = channels.doubleValue;
+    const double framesValue = frames.doubleValue;
+    if (channelCountUnsigned == 0 || framesUnsigned == 0) {
+      RejectPromise(reject, @"invalid_arguments", "channels and frames must be positive integers");
+      return;
+    }
+    if (!std::isfinite(channelsValue) || !std::isfinite(framesValue)) {
+      RejectPromise(reject, @"invalid_arguments", "channels and frames must be finite");
+      return;
+    }
+    if (std::fabs(channelsValue - static_cast<double>(channelCountUnsigned)) >
+            std::numeric_limits<double>::epsilon() ||
+        std::fabs(framesValue - static_cast<double>(framesUnsigned)) >
+            std::numeric_limits<double>::epsilon()) {
+      RejectPromise(reject, @"invalid_arguments", "channels and frames must be integer values");
+      return;
+    }
+    if (channelData == nil || channelData.count != channelCountUnsigned) {
+      RejectPromise(reject, @"invalid_arguments", "channelData length must equal channels");
+      return;
+    }
+
+    constexpr std::size_t kMaxChannels = 64;
+    constexpr unsigned long long kMaxFrames = 10'000'000ULL;
+
+    if (channelCountUnsigned > kMaxChannels) {
+      RejectPromise(reject, @"invalid_arguments", "channels must be between 1 and 64");
+      return;
+    }
+    if (framesUnsigned > kMaxFrames) {
+      RejectPromise(reject, @"invalid_arguments", "frames must be between 1 and 10000000");
+      return;
+    }
+    if (framesUnsigned > std::numeric_limits<std::size_t>::max()) {
+      RejectPromise(reject, @"invalid_arguments", "frames exceed platform limits");
+      return;
+    }
+
+    const std::size_t channelCount = static_cast<std::size_t>(channelCountUnsigned);
+    const std::size_t frameCount = static_cast<std::size_t>(framesUnsigned);
+    if (frameCount > std::numeric_limits<std::size_t>::max() / sizeof(float)) {
+      RejectPromise(reject, @"invalid_arguments", "frames exceed platform limits");
+      return;
+    }
+    const std::size_t requiredBytes = frameCount * sizeof(float);
+
+    std::vector<std::vector<float>> nativeChannels;
+    nativeChannels.reserve(channelCount);
+
+    for (NSUInteger index = 0; index < channelCountUnsigned; ++index) {
+      id entry = channelData[index];
+      NSData* data = nil;
+      if ([entry isKindOfClass:[NSData class]]) {
+        data = (NSData*)entry;
+      } else if ([entry isKindOfClass:[NSString class]]) {
+        data = [[NSData alloc] initWithBase64EncodedString:(NSString*)entry
+                                                  options:NSDataBase64DecodingIgnoreUnknownCharacters];
+      }
+      if (data == nil) {
+        RejectPromise(reject, @"invalid_arguments", "channelData entries must be base64 Float32 PCM strings");
+        return;
+      }
+      if (data.length < requiredBytes) {
+        RejectPromise(reject, @"invalid_arguments", "channelData entry is smaller than the expected frame count");
+        return;
+      }
+      std::vector<float> channel(frameCount);
+      std::memcpy(channel.data(), data.bytes, requiredBytes);
+      nativeChannels.push_back(std::move(channel));
+    }
+
+    const bool ok = AudioEngineBridge::registerClipBuffer(
+        key, sampleRate, channelCount, frameCount, std::move(nativeChannels));
+    if (!ok) {
+      os_log_error(ModuleLogger(), "Failed to register clip buffer %{public}@", bufferKey);
+      RejectPromise(reject, @"register_clip_failed", "Failed to register clip buffer");
+      return;
+    }
+    resolve(nil);
+  });
 }
 
 RCT_EXPORT_METHOD(unregisterClipBuffer:(NSString*)bufferKey
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
-  NSString* trimmedKey = [bufferKey stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-  if (trimmedKey.length == 0) {
-    RejectPromise(reject, @"invalid_arguments", "bufferKey is required");
-    return;
-  }
-  const bool ok = AudioEngineBridge::unregisterClipBuffer([trimmedKey UTF8String]);
-  if (!ok) {
-    os_log_error(ModuleLogger(), "Failed to unregister clip buffer %{public}@", trimmedKey);
-    RejectPromise(reject, @"unregister_clip_failed", "Failed to unregister clip buffer");
-    return;
-  }
-  resolve(nil);
+  PerformPromiseOperation(reject, @"unregister_clip_failed", @"Unregister clip buffer", ^{
+    NSString* trimmedKey =
+        [bufferKey stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (trimmedKey.length == 0) {
+      RejectPromise(reject, @"invalid_arguments", "bufferKey is required");
+      return;
+    }
+    const bool ok = AudioEngineBridge::unregisterClipBuffer([trimmedKey UTF8String]);
+    if (!ok) {
+      os_log_error(ModuleLogger(), "Failed to unregister clip buffer %{public}@", trimmedKey);
+      RejectPromise(reject, @"unregister_clip_failed", "Failed to unregister clip buffer");
+      return;
+    }
+    resolve(nil);
+  });
 }
 
 RCT_EXPORT_METHOD(removeNode:(NSString*)nodeId
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
-  if (nodeId.length == 0) {
-    RejectPromise(reject, @"invalid_arguments", "nodeId is required");
-    return;
-  }
-  try {
+  PerformPromiseOperation(reject, @"remove_node_failed", @"Remove audio node", ^{
+    if (nodeId.length == 0) {
+      RejectPromise(reject, @"invalid_arguments", "nodeId is required");
+      return;
+    }
     AudioEngineBridge::removeNode([nodeId UTF8String]);
     resolve(nil);
-  } catch (const std::exception& ex) {
-    os_log_error(ModuleLogger(), "removeNode failed: %{public}s", ex.what());
-    RejectPromise(reject, @"remove_node_failed", ex.what());
-  }
+  });
 }
 
 RCT_EXPORT_METHOD(connectNodes:(NSString*)source
                   destination:(NSString*)destination
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
-  if (source.length == 0 || destination.length == 0) {
-    RejectPromise(reject, @"invalid_arguments", "source and destination are required");
-    return;
-  }
-  const bool ok = AudioEngineBridge::connect([source UTF8String], [destination UTF8String]);
-  if (!ok) {
-    std::string message = "Failed to connect '" + std::string([source UTF8String]) + "' -> '" +
-                          std::string([destination UTF8String]) + "'";
-    os_log_error(ModuleLogger(), "%{public}s", message.c_str());
-    RejectPromise(reject, @"connect_failed", message);
-    return;
-  }
-  resolve(nil);
+  PerformPromiseOperation(reject, @"connect_failed", @"Connect audio nodes", ^{
+    if (source.length == 0 || destination.length == 0) {
+      RejectPromise(reject, @"invalid_arguments", "source and destination are required");
+      return;
+    }
+    const bool ok = AudioEngineBridge::connect([source UTF8String], [destination UTF8String]);
+    if (!ok) {
+      std::string message = "Failed to connect '" + std::string([source UTF8String]) + "' -> '" +
+                            std::string([destination UTF8String]) + "'";
+      os_log_error(ModuleLogger(), "%{public}s", message.c_str());
+      RejectPromise(reject, @"connect_failed", message);
+      return;
+    }
+    resolve(nil);
+  });
 }
 
 RCT_EXPORT_METHOD(disconnectNodes:(NSString*)source
                   destination:(NSString*)destination
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
-  if (source.length == 0 || destination.length == 0) {
-    RejectPromise(reject, @"invalid_arguments", "source and destination are required");
-    return;
-  }
-  try {
+  PerformPromiseOperation(reject, @"disconnect_failed", @"Disconnect audio nodes", ^{
+    if (source.length == 0 || destination.length == 0) {
+      RejectPromise(reject, @"invalid_arguments", "source and destination are required");
+      return;
+    }
     AudioEngineBridge::disconnect([source UTF8String], [destination UTF8String]);
     resolve(nil);
-  } catch (const std::exception& ex) {
-    os_log_error(ModuleLogger(), "disconnectNodes failed: %{public}s", ex.what());
-    RejectPromise(reject, @"disconnect_failed", ex.what());
-  }
+  });
 }
 
 RCT_EXPORT_METHOD(scheduleParameterAutomation:(NSString*)nodeId
@@ -395,97 +512,143 @@ RCT_EXPORT_METHOD(scheduleParameterAutomation:(NSString*)nodeId
                   value:(double)value
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
-  if (nodeId.length == 0 || parameter.length == 0 || frame == nil) {
-    RejectPromise(reject, @"invalid_arguments", "nodeId, parameter, and frame are required");
-    return;
-  }
-  const double frameValue = frame.doubleValue;
-  if (!std::isfinite(frameValue) || frameValue < 0.0) {
-    RejectPromise(reject, @"invalid_arguments", "frame must be a non-negative integer");
-    return;
-  }
-  if (!std::isfinite(value)) {
-    RejectPromise(reject, @"invalid_arguments", "value must be finite");
-    return;
-  }
-  const unsigned long long frameTicks = frame.unsignedLongLongValue;
-  const double diff = std::fabs(frameValue - static_cast<double>(frameTicks));
-  if (diff > 1e-6) {
-    RejectPromise(reject, @"invalid_arguments", "frame must be a non-negative integer");
-    return;
-  }
-  try {
+  PerformPromiseOperation(reject, @"automation_failed", @"Schedule parameter automation", ^{
+    if (nodeId.length == 0 || parameter.length == 0 || frame == nil) {
+      RejectPromise(reject, @"invalid_arguments", "nodeId, parameter, and frame are required");
+      return;
+    }
+    const double frameValue = frame.doubleValue;
+    if (!std::isfinite(frameValue) || frameValue < 0.0) {
+      RejectPromise(reject, @"invalid_arguments", "frame must be a non-negative integer");
+      return;
+    }
+    if (!std::isfinite(value)) {
+      RejectPromise(reject, @"invalid_arguments", "value must be finite");
+      return;
+    }
+    const unsigned long long frameTicks = frame.unsignedLongLongValue;
+    const double diff = std::fabs(frameValue - static_cast<double>(frameTicks));
+    if (diff > 1e-6) {
+      RejectPromise(reject, @"invalid_arguments", "frame must be a non-negative integer");
+      return;
+    }
     AudioEngineBridge::scheduleParameterAutomation([nodeId UTF8String], [[parameter lowercaseString] UTF8String],
                                                    frameTicks, value);
     resolve(nil);
-  } catch (const std::exception& ex) {
-    os_log_error(ModuleLogger(), "scheduleParameterAutomation failed: %{public}s", ex.what());
-    RejectPromise(reject, @"automation_failed", ex.what());
-  }
+  });
 }
 
 RCT_EXPORT_METHOD(startTransport:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
-  try {
-    AudioEngineBridge::startTransport();
-    resolve(nil);
-  } catch (const std::exception& ex) {
-    RejectPromise(reject, @"transport_start_failed", ex.what());
+  @try {
+    if (!self.engineConfigured || self.configuredSampleRate <= 0.0 ||
+        self.configuredFramesPerBuffer == 0) {
+      reject(@"transport_start_failed", @"Audio engine is not initialized", nil);
+      return;
+    }
+
+    if (self.deviceStarted && ![self.deviceDriver isRunning]) {
+      self.deviceStarted = NO;
+      os_log_info(ModuleLogger(), "Rebuilding an audio device route that is no longer running");
+    }
+
+    BOOL startedDeviceForRequest = NO;
+    if (!self.deviceStarted) {
+      NSError* deviceError = nil;
+      if (![self.deviceDriver startWithSampleRate:self.configuredSampleRate
+                                 framesPerBuffer:self.configuredFramesPerBuffer
+                                           error:&deviceError]) {
+        reject(@"transport_start_failed", @"Unable to start the iOS audio device",
+               deviceError);
+        return;
+      }
+      self.deviceStarted = YES;
+      startedDeviceForRequest = YES;
+    }
+
+    try {
+      AudioEngineBridge::startTransport();
+      resolve(nil);
+    } catch (const std::exception& ex) {
+      if (startedDeviceForRequest) {
+        [self stopDeviceSafelyForOperation:@"Audio device cleanup after transport start failure"];
+      }
+      RejectPromise(reject, @"transport_start_failed", ex.what());
+    } catch (...) {
+      if (startedDeviceForRequest) {
+        [self stopDeviceSafelyForOperation:@"Audio device cleanup after transport start failure"];
+      }
+      reject(@"transport_start_failed", @"Audio transport failed to start", nil);
+    }
+  } @catch (NSException* exception) {
+    [self stopDeviceSafelyForOperation:@"Audio device cleanup after transport start exception"];
+    RejectObjectiveCException(reject, @"transport_start_failed", @"Audio transport start",
+                              exception);
   }
 }
 
 RCT_EXPORT_METHOD(stopTransport:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
-  try {
-    AudioEngineBridge::stopTransport();
-    resolve(nil);
-  } catch (const std::exception& ex) {
-    RejectPromise(reject, @"transport_stop_failed", ex.what());
+  @try {
+    try {
+      AudioEngineBridge::stopTransport();
+      if (self.deviceStarted) {
+        [self stopDeviceSafelyForOperation:@"Audio device transport stop"];
+      }
+      resolve(nil);
+    } catch (const std::exception& ex) {
+      if (self.deviceStarted) {
+        [self stopDeviceSafelyForOperation:@"Audio device cleanup after transport stop failure"];
+      }
+      RejectPromise(reject, @"transport_stop_failed", ex.what());
+    } catch (...) {
+      if (self.deviceStarted) {
+        [self stopDeviceSafelyForOperation:@"Audio device cleanup after transport stop failure"];
+      }
+      reject(@"transport_stop_failed", @"Audio transport failed to stop", nil);
+    }
+  } @catch (NSException* exception) {
+    [self stopDeviceSafelyForOperation:@"Audio device cleanup after transport stop exception"];
+    RejectObjectiveCException(reject, @"transport_stop_failed", @"Audio transport stop",
+                              exception);
   }
 }
 
 RCT_EXPORT_METHOD(locateTransport:(nonnull NSNumber*)frame
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
-  if (frame == nil || !std::isfinite(frame.doubleValue) || frame.doubleValue < 0.0 ||
-      std::floor(frame.doubleValue) != frame.doubleValue) {
-    RejectPromise(reject, @"invalid_arguments", "frame must be a non-negative integer");
-    return;
-  }
-  try {
+  PerformPromiseOperation(reject, @"transport_locate_failed", @"Locate audio transport", ^{
+    if (frame == nil || !std::isfinite(frame.doubleValue) || frame.doubleValue < 0.0 ||
+        std::floor(frame.doubleValue) != frame.doubleValue) {
+      RejectPromise(reject, @"invalid_arguments", "frame must be a non-negative integer");
+      return;
+    }
     AudioEngineBridge::locateTransport(frame.unsignedLongLongValue);
     resolve(nil);
-  } catch (const std::exception& ex) {
-    RejectPromise(reject, @"transport_locate_failed", ex.what());
-  }
+  });
 }
 
 RCT_EXPORT_METHOD(getTransportState:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
-  try {
+  PerformPromiseOperation(reject, @"transport_state_failed", @"Read audio transport state", ^{
     const auto state = AudioEngineBridge::getTransportState();
     resolve(@{
       @"currentFrame" : @(static_cast<unsigned long long>(state.currentFrame)),
       @"isPlaying" : @(state.isPlaying),
     });
-  } catch (const std::exception& ex) {
-    RejectPromise(reject, @"transport_state_failed", ex.what());
-  }
+  });
 }
 
 RCT_EXPORT_METHOD(getRenderDiagnostics:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
-  try {
+  PerformPromiseOperation(reject, @"diagnostics_failed", @"Read audio render diagnostics", ^{
     const auto diagnostics = AudioEngineBridge::getDiagnostics();
     resolve(@{
       @"xruns" : @(static_cast<NSInteger>(diagnostics.xruns)),
       @"lastRenderDurationMicros" : @(diagnostics.lastRenderDurationMicros),
       @"clipBufferBytes" : @(static_cast<NSInteger>(diagnostics.clipBufferBytes)),
     });
-  } catch (const std::exception& ex) {
-    os_log_error(ModuleLogger(), "getRenderDiagnostics failed: %{public}s", ex.what());
-    RejectPromise(reject, @"diagnostics_failed", ex.what());
-  }
+  });
 }
 
 @end

@@ -43,29 +43,31 @@ export const NeonSurface: React.FC<PropsWithChildren<NeonSurfaceProps>> = ({
 }) => {
   const theme = useTheme();
   const glowValue = useSharedValue(glow);
+  const accent = mapIntentToColor(theme, intent);
+  const elevationValue = theme.elevation[elevation];
+  const isAndroid = Platform.OS === 'android';
 
   useEffect(() => {
     glowValue.value = withTiming(glow, { duration: 200 });
   }, [glow, glowValue]);
 
   const animatedStyle = useAnimatedStyle(() => {
-    const accent = mapIntentToColor(theme, intent);
     const base: ViewStyle = {
       borderColor: accent,
       borderWidth: 1,
     };
 
-    if (Platform.OS === 'android') {
-      base.elevation = theme.elevation[elevation];
+    if (isAndroid) {
+      base.elevation = elevationValue;
     } else {
       base.shadowColor = accent;
       base.shadowOpacity = 0.7;
-      base.shadowRadius = theme.elevation[elevation] * glowValue.value;
+      base.shadowRadius = elevationValue * glowValue.value;
       base.shadowOffset = { width: 0, height: 0 };
     }
 
     return base;
-  }, [elevation, glowValue, intent, theme]);
+  }, [accent, elevationValue, glowValue, isAndroid]);
 
   const containerStyle: StyleProp<ViewStyle> = useMemo(
     () => [
@@ -137,6 +139,8 @@ export const NeonButton: React.FC<NeonButtonProps> = ({
   const theme = useTheme();
   const glow = useSharedValue(disabled ? theme.opacity.disabled : 1);
   const scale = useSharedValue(disabled ? 0.98 : 1);
+  const accent = mapIntentToColor(theme, intent);
+  const shadowRadius = theme.elevation.md;
 
   useEffect(() => {
     glow.value = withTiming(disabled ? theme.opacity.disabled : 1, { duration: 150 });
@@ -145,21 +149,21 @@ export const NeonButton: React.FC<NeonButtonProps> = ({
 
   const animatedGlow = useAnimatedStyle(
     () => ({
-      shadowColor: mapIntentToColor(theme, intent),
+      shadowColor: accent,
       shadowOpacity: glow.value,
-      shadowRadius: theme.elevation.md,
+      shadowRadius,
       transform: [
         {
           scale: scale.value,
         },
       ],
     }),
-    [intent, theme],
+    [accent, shadowRadius],
   );
 
   const baseStyle: StyleProp<ViewStyle> = [
     {
-      backgroundColor: mapIntentToColor(theme, intent),
+      backgroundColor: accent,
       paddingVertical: theme.spacing.sm,
       paddingHorizontal: theme.spacing.lg,
       borderRadius: theme.radii.md,

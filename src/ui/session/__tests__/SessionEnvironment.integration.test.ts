@@ -4,8 +4,8 @@ import path from 'path';
 
 import { NativeModules } from 'react-native';
 
-import { JsonSessionStorageAdapter } from '../../../session';
 import type { SessionStorageAdapter } from '../../../session';
+import { JsonSessionStorageAdapter } from '../../../session/storage/jsonAdapter';
 import {
   PluginHost,
   SessionAudioBridge,

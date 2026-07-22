@@ -4,7 +4,7 @@ module.exports = {
   dependency: {
     platforms: {
       ios: {
-        podspecPath: path.join(__dirname, 'ios/DaftCitadelNative.podspec'),
+        podspecPath: path.join(__dirname, '../../DaftCitadelNative.podspec'),
       },
       android: {
         sourceDir: path.join(__dirname, 'android'),

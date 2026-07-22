@@ -8,9 +8,12 @@
     "newArchEnabled": true,
     "ios": {
       "bundleIdentifier": "dev.daftcitadel.app",
+      "buildNumber": "5",
       "supportsTablet": true,
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "Daft Citadel uses Wi-Fi signal quality to keep collaboration sessions reliable."
+        "NSCameraUsageDescription": "Daft Citadel uses the camera when you choose to share live video during a collaboration session.",
+        "NSLocationWhenInUseUsageDescription": "Daft Citadel uses Wi-Fi signal quality to keep collaboration sessions reliable.",
+        "NSMicrophoneUsageDescription": "Daft Citadel uses the microphone when you choose to record audio or communicate during a collaboration session."
       },
       "entitlements": {
         "com.apple.developer.networking.wifi-info": true
@@ -35,7 +38,7 @@
         "expo-build-properties",
         {
           "ios": {
-            "deploymentTarget": "15.1"
+            "deploymentTarget": "18.0"
           },
           "android": {
             "minSdkVersion": 24,

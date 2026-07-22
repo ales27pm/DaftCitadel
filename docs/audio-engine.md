@@ -23,10 +23,10 @@ lanes that align to buffer boundaries for deterministic playback.
 1. **JavaScript bootstrap**: `AudioEngine` in `src/audio/AudioEngine.ts` validates that the
    TurboModule is loaded and calls `initialize(sampleRate, framesPerBuffer)`.
 2. **Platform bridge**: Android and iOS both forward initialization to
-   `AudioEngineBridge::initialize`, which allocates a `SceneGraph` configured with the actual
-   render quantum supplied by React Native. The platform module then starts its owned device
-   driver: a priority `AudioTrack` render thread on Android or an `AVAudioSourceNode` attached to
-   `AVAudioEngine` on iOS.
+   `AudioEngineBridge::initialize`, which allocates a `SceneGraph` configured with the render
+   quantum supplied by React Native. Android then starts its priority `AudioTrack` render thread.
+   iOS defers `AVAudioSession` activation and `AVAudioEngine` construction until the user starts
+   transport, so application launch does not claim an audio route before playback is requested.
 3. **Scene graph**: The graph primes DSP nodes with `prepare`, sizes stack-backed scratch
    buffers to the reported buffer length, and constructs a reusable topological ordering of the
    signal graph.
@@ -52,6 +52,9 @@ assumptions baked into `createProductionSessionEnvironment`:
   bootstrap shuts down any partially initialized engine and falls back to a passive environment.
   A missing native engine or sample loader follows the same path. Keep the native logging
   (`os_log` / Logcat) enabled so configuration mismatches can be diagnosed during bring-up.
+  The iOS bridge catches Objective-C framework exceptions at the Promise boundary and reports the
+  failing AVFoundation phase as a normal rejection; no native exception may escape into React
+  Native's asynchronous TurboModule dispatcher.
 - **First-launch session** – Persistent production and passive environments create an empty
   `Untitled Session`. The richer demo fixture references development-only sample paths and is
   intentionally limited to the explicit demo environment, so a clean mobile install never starts
@@ -73,6 +76,8 @@ The render thread attempts to acquire the bridge mutex with `std::try_to_lock`; 
 renders silence for the current quantum, preventing audio drop-outs caused by blocking locks.
 Device teardown always stops and joins/detaches the platform callback before destroying the C++
 graph, including React Native invalidation and fast-refresh lifecycles.
+On iOS, device lifecycle work is serialized on a dedicated audio-control queue; the real-time
+render callback remains owned by `AURemoteIO` and never runs on that control queue.
 
 ## DSP Nodes and Routing
 
@@ -171,7 +176,7 @@ DSP can contribute to that main bus.
 - **iOS** – `native/audio/ios/AudioEngineModule.mm` conforms to `RCTBridgeModule` and
   `RCTTurboModule`, forwards every method in `src/audio/NativeAudioEngine.ts` to
   `daft::audio::bridge::AudioEngineBridge`, and surfaces diagnostics via `getRenderDiagnostics`.
-  `modules/daft-citadel-native/ios/DaftCitadelNative.podspec` compiles those sources and the
+  `DaftCitadelNative.podspec` compiles those sources and the
   device driver into the generated Xcode workspace.
 - **Android** – `native/audio/android/src/main/java/com/daftcitadel/audio/AudioEngineModule.kt`
   implements the TurboModule interface and delegates to JNI helpers located under

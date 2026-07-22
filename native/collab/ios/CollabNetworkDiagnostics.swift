@@ -323,13 +323,12 @@ final class CollabNetworkDiagnostics: RCTEventEmitter, CLLocationManagerDelegate
         "timestamp": Date().timeIntervalSince1970 * 1000.0,
       ]
 
-      if let interfaceName = network.interfaceName, !interfaceName.isEmpty {
-        payload["interface"] = interfaceName
-      }
-      if let ssid = network.ssid, !ssid.isEmpty {
+      let ssid = network.ssid
+      if !ssid.isEmpty {
         payload["ssid"] = ssid
       }
-      if let bssid = network.bssid, !bssid.isEmpty {
+      let bssid = network.bssid
+      if !bssid.isEmpty {
         payload["bssid"] = bssid
       }
       let signalStrength = network.signalStrength

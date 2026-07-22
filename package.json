@@ -19,7 +19,6 @@
     "test": "jest",
     "test:ci": "TZ=UTC jest --runInBand --silent",
     "typecheck": "tsc --noEmit",
-    "prettier": "prettier --write \"{src,docs}/**/*.{ts,tsx,md}\"",
     "format": "prettier --write \"{src,docs}/**/*.{ts,tsx,md}\"",
     "format:check": "prettier --check \"{src,docs}/**/*.{ts,tsx,md}\"",
     "manage:agents": "node scripts/manageAgents.js",

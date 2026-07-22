@@ -8,6 +8,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)startWithSampleRate:(double)sampleRate
             framesPerBuffer:(NSUInteger)framesPerBuffer
                       error:(NSError* _Nullable* _Nullable)error;
+- (BOOL)isRunning;
 - (void)stop;
 
 @end
