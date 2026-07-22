@@ -383,6 +383,22 @@ describe('SessionAudioBridge', () => {
         expect.objectContaining({ type: 'clipPlayer' }),
       ]),
     );
+    expect(initialNodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: expect.stringContaining('track-1:input'),
+          type: 'trackInput',
+          options: undefined,
+        }),
+      ]),
+    );
+    expect(initialNodes).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          options: expect.objectContaining({ ioId: expect.anything() }),
+        }),
+      ]),
+    );
     expect(connect).toHaveBeenCalled();
     expect(disconnect).not.toHaveBeenCalled();
     expect(removeNodes).not.toHaveBeenCalled();
@@ -1628,6 +1644,43 @@ describe('SessionAudioBridge', () => {
           status: 'ready',
           xruns: 1,
           clipBufferBytes: 4096,
+        }),
+      );
+
+      await bridge.dispose();
+    });
+
+    it('reports an error when native diagnostics say the graph is uninitialized', async () => {
+      const { loader } = createLoader(observerSampleRate, observerSampleRate);
+      const clock = new ClockSyncService(
+        observerSampleRate,
+        observerFramesPerBuffer,
+        120,
+      );
+      const { engine, getRenderDiagnostics } = createMockEngine(clock);
+      getRenderDiagnostics.mockResolvedValue({
+        xruns: 0,
+        lastRenderDurationMicros: 0,
+        clipBufferBytes: 0,
+        initialized: false,
+      });
+
+      const bridge = new SessionAudioBridge(engine, {
+        fileLoader: loader,
+        transportPollIntervalMs: 0,
+        diagnosticsPollIntervalMs: 10,
+      });
+      const listener = jest.fn();
+      bridge.subscribeDiagnostics(listener);
+
+      await flushAsync();
+      jest.advanceTimersByTime(300);
+      await flushAsync();
+
+      expect(listener).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'error',
+          error: expect.objectContaining({ message: 'Audio engine is not initialized' }),
         }),
       );
 

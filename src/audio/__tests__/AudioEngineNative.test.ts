@@ -1070,13 +1070,28 @@ describe('NativeAudioEngine TurboModule', () => {
         xruns: 2,
         lastRenderDurationMicros: 4200,
         clipBufferBytes: 8192,
+        initialized: true,
       });
       const diagnostics = await engine.getRenderDiagnostics();
       expect(diagnostics).toEqual({
         xruns: 2,
         lastRenderDurationMicros: 4200,
         clipBufferBytes: 8192,
+        initialized: true,
       });
+    });
+
+    it('rejects malformed native readiness diagnostics', async () => {
+      jest.spyOn(NativeAudioEngine, 'getRenderDiagnostics').mockResolvedValueOnce({
+        xruns: 0,
+        lastRenderDurationMicros: 0,
+        clipBufferBytes: 0,
+        initialized: 'yes',
+      } as never);
+
+      await expect(engine.getRenderDiagnostics()).rejects.toThrow(
+        'AudioEngine returned invalid diagnostics payload',
+      );
     });
   });
 });

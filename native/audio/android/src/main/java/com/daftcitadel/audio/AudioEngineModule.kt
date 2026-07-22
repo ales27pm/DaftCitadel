@@ -29,6 +29,7 @@ class AudioEngineModule(private val reactContext: ReactApplicationContext) :
 
   private val maxFramesPerBuffer: Int by lazy { nativeMaxFramesPerBuffer() }
   private val deviceDriver = AudioTrackDeviceDriver(::nativeRenderInterleaved)
+  @Volatile private var engineInitialized = false
 
   /**
  * The module's name as exposed to React Native.
@@ -81,8 +82,10 @@ override fun getName(): String = NAME
       deviceDriver.stop()
       nativeInitialize(sampleRate, framesInt)
       deviceDriver.start(deviceSampleRate, framesInt)
+      engineInitialized = true
       promise.resolve(null)
     } catch (error: Exception) {
+      engineInitialized = false
       deviceDriver.stop()
       runCatching { nativeShutdown() }
       promise.reject("initialize_failed", error)
@@ -102,13 +105,16 @@ override fun getName(): String = NAME
     try {
       deviceDriver.stop()
       nativeShutdown()
+      engineInitialized = false
       promise.resolve(null)
     } catch (error: Exception) {
+      engineInitialized = false
       promise.reject("shutdown_failed", error)
     }
   }
 
   override fun invalidate() {
+    engineInitialized = false
     deviceDriver.stop()
     runCatching { nativeShutdown() }
     super.invalidate()
@@ -437,6 +443,7 @@ override fun getName(): String = NAME
         if (payload.size >= 3) {
           putDouble("clipBufferBytes", payload[2])
         }
+        putBoolean("initialized", engineInitialized)
       }
       promise.resolve(diagnostics)
     } catch (error: Exception) {

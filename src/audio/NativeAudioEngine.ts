@@ -39,6 +39,7 @@ export interface AudioEngineSpec extends TurboModule {
     xruns: number;
     lastRenderDurationMicros: number;
     clipBufferBytes: number;
+    initialized?: boolean;
   }>;
 }
 

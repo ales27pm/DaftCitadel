@@ -120,6 +120,7 @@ export type RenderDiagnostics = {
   xruns: number;
   lastRenderDurationMicros: number;
   clipBufferBytes: number;
+  initialized?: boolean;
 };
 
 export class AudioEngine {
@@ -236,7 +237,9 @@ export class AudioEngine {
       diagnostics === null ||
       !Number.isFinite(diagnostics.xruns) ||
       !Number.isFinite(diagnostics.lastRenderDurationMicros) ||
-      !Number.isFinite(diagnostics.clipBufferBytes)
+      !Number.isFinite(diagnostics.clipBufferBytes) ||
+      (diagnostics.initialized !== undefined &&
+        typeof diagnostics.initialized !== 'boolean')
     ) {
       throw new Error('AudioEngine returned invalid diagnostics payload');
     }

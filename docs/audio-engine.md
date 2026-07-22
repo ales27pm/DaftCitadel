@@ -27,13 +27,24 @@ lanes that align to buffer boundaries for deterministic playback.
    quantum supplied by React Native. Android then starts its priority `AudioTrack` render thread.
    iOS defers `AVAudioSession` activation and `AVAudioEngine` construction until the user starts
    transport, so application launch does not claim an audio route before playback is requested.
-3. **Scene graph**: The graph primes DSP nodes with `prepare`, sizes stack-backed scratch
+3. **iOS ownership and readiness**: Each iOS TurboModule instance stores the generation returned
+   by [`AudioEngineBridge::initialize`](../audio-engine/platform/ios/AudioEngineBridge.hpp).
+   Shutdown, invalidation, and deallocation only destroy the graph when that generation still
+   owns it, so stale module teardown cannot remove a replacement graph. Every graph mutation and
+   state read repeats that ownership check while holding the bridge mutex, and the iOS render
+   route captures its generation so an obsolete device callback renders silence instead of
+   touching the replacement graph or its metrics. The
+   [iOS module](../native/audio/ios/AudioEngineModule.mm) reports `diagnostics.initialized` only
+   while its configured generation owns a live graph. The
+   [session bridge](../src/audio/SessionAudioBridge.ts) treats an explicit `false` as a bootstrap
+   failure while accepting an omitted field for legacy implementations.
+4. **Scene graph**: The graph primes DSP nodes with `prepare`, sizes stack-backed scratch
    buffers to the reported buffer length, and constructs a reusable topological ordering of the
    signal graph.
    Initialization rejects buffers larger than the engine's static capacity (1024 frames) so that
    real-time rendering always fits within the pre-allocated scratch space shared by both
    platforms.
-4. **Automation**: When JavaScript publishes automation lanes, the TurboModule forwards each
+5. **Automation**: When JavaScript publishes automation lanes, the TurboModule forwards each
    automation point to `SceneGraph::scheduleAutomation`, which queues callbacks in the bounded
    scheduler so parameter updates execute on the exact frame requested.
 
@@ -54,7 +65,9 @@ assumptions baked into `createProductionSessionEnvironment`:
   (`os_log` / Logcat) enabled so configuration mismatches can be diagnosed during bring-up.
   The iOS bridge catches Objective-C framework exceptions at the Promise boundary and reports the
   failing AVFoundation phase as a normal rejection; no native exception may escape into React
-  Native's asynchronous TurboModule dispatcher.
+  Native's asynchronous TurboModule dispatcher. Promise outcomes are captured first and delivered
+  once outside the operation catch scopes, preventing a callback exception from triggering a
+  second settlement attempt.
 - **First-launch session** – Persistent production and passive environments create an empty
   `Untitled Session`. The richer demo fixture references development-only sample paths and is
   intentionally limited to the explicit demo environment, so a clean mobile install never starts
@@ -186,6 +199,7 @@ DSP can contribute to that main bus.
   the Expo config plugin inserts into `MainApplication`.
 - **Unit tests** – `src/audio/__tests__/AudioEngineNative.test.ts` performs a smoke test that
   initializes the native module, adds a node, connects it to `OUTPUT_BUS`, and confirms the
-  diagnostics contract (including the aggregate `clipBufferBytes` field surfaced by
-  `getRenderDiagnostics`). The React Native Jest mock (`__mocks__/react-native.ts`) has been
-  extended to track TurboModule state to keep the test suite green.
+  diagnostics contract (including `initialized` and the aggregate `clipBufferBytes` field
+  surfaced by `getRenderDiagnostics`). `src/audio/__tests__/IOSAudioBridgeSafety.test.ts` guards
+  the iOS exception boundary and generation-owned teardown contract. The React Native Jest mock
+  (`__mocks__/react-native.ts`) tracks TurboModule state to keep the test suite deterministic.

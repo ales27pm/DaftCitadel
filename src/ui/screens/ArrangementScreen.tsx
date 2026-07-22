@@ -221,14 +221,16 @@ export const ArrangementScreen: React.FC = () => {
           Shape your first track
         </StudioText>
         <StudioText variant="body" tone="secondary">
-          Add a routed channel to begin arranging this session. Your transport and audio
-          engine are already prepared.
+          {transportControls.isAvailable
+            ? 'Add a routed channel to begin arranging this session. Your transport and audio engine are already prepared.'
+            : 'The audio engine must finish preparing before a routed channel can be added.'}
         </StudioText>
       </View>
       <StudioButton
         label="Add first track"
         icon="plus"
         variant="primary"
+        disabled={!transportControls.isAvailable}
         loading={isAddingTrack}
         onPress={() => {
           handleAddTrack().catch(() => undefined);
@@ -262,6 +264,7 @@ export const ArrangementScreen: React.FC = () => {
             label="Add track"
             icon="plus"
             variant="ghost"
+            disabled={!transportControls.isAvailable}
             loading={isAddingTrack}
             onPress={() => {
               handleAddTrack().catch(() => undefined);

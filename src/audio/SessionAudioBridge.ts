@@ -779,12 +779,10 @@ export class SessionAudioBridge implements AudioEngineBridge {
       return {
         id: node.id,
         type: node.type,
-        options: {
-          ioId: node.ioId,
-          channelCount: node.channelCount,
-          label: node.label ?? '',
-          ...(trackOutputOptions ?? {}),
-        },
+        // Endpoint metadata belongs to the session model. The native DSP nodes
+        // only consume gain/pan, so keep the bridge payload minimal and avoid
+        // pushing labels or routing identifiers through Objective-C conversion.
+        options: node.type === 'trackOutput' ? trackOutputOptions : undefined,
       };
     }
     if (isPluginNode(node)) {
@@ -1366,6 +1364,9 @@ export class SessionAudioBridge implements AudioEngineBridge {
     this.isDiagnosticsPolling = true;
     try {
       const diagnostics = await this.audioEngine.getRenderDiagnostics();
+      if (diagnostics.initialized === false) {
+        throw new Error('Audio engine is not initialized');
+      }
       const renderLoad = clamp(diagnostics.lastRenderDurationMicros / 10_000, 0, 1);
       const snapshot: AudioDiagnosticsSnapshot = {
         status: 'ready',

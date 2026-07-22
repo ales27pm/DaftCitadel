@@ -17,9 +17,9 @@
 
 namespace daft::audio {
 namespace {
+#if defined(__ANDROID__)
 constexpr const char* kLogTag = "DaftAudioEngine";
 
-#if defined(__ANDROID__)
 void LogPluginError(const char* message, const std::string& instanceId) {
   __android_log_print(ANDROID_LOG_ERROR, kLogTag, "%s (hostInstanceId=%s)", message, instanceId.c_str());
 }

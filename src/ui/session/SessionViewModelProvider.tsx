@@ -373,9 +373,11 @@ export const SessionViewModelProvider: React.FC<SessionViewModelProviderProps> =
   );
 
   const transportControls = useMemo<TransportController>(() => {
-    if (!hasTransportControls(audioBridge)) {
+    if (!hasTransportControls(audioBridge) || diagnostics.status !== 'ready') {
       const fallback = async () => {
-        console.warn('Transport controls unavailable in current session environment.');
+        console.warn(
+          'Transport controls unavailable while the audio engine is not ready.',
+        );
       };
       return {
         isAvailable: false,
@@ -390,7 +392,7 @@ export const SessionViewModelProvider: React.FC<SessionViewModelProviderProps> =
       stop: () => audioBridge.stopTransport(),
       locateFrame: (frame: number) => audioBridge.locateTransport(frame),
     };
-  }, [audioBridge]);
+  }, [audioBridge, diagnostics.status]);
 
   return (
     <TransportControlsContext.Provider value={transportControls}>

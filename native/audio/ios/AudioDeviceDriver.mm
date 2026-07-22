@@ -87,6 +87,7 @@ void CleanupEngine(AVAudioEngine* engine, AVAudioSourceNode* sourceNode, BOOL so
 
 - (BOOL)startWithSampleRate:(double)sampleRate
             framesPerBuffer:(NSUInteger)framesPerBuffer
+           engineGeneration:(uint64_t)engineGeneration
                       error:(NSError**)error {
   NSString* phase = @"previous-route-stop";
   AVAudioSession* session = nil;
@@ -205,7 +206,7 @@ void CleanupEngine(AVAudioEngine* engine, AVAudioSourceNode* sourceNode, BOOL so
                 return noErr;
               }
             }
-            AudioEngineBridge::render(channelPointers.data(), channels, frames);
+            AudioEngineBridge::render(engineGeneration, channelPointers.data(), channels, frames);
           } else if (outputData->mNumberBuffers == 1 &&
                      outputData->mBuffers[0].mData != nullptr) {
             auto* interleaved = static_cast<float*>(outputData->mBuffers[0].mData);
@@ -217,7 +218,7 @@ void CleanupEngine(AVAudioEngine* engine, AVAudioSourceNode* sourceNode, BOOL so
             for (std::size_t channel = 0; channel < channels; ++channel) {
               channelPointers[channel] = planar[channel].data();
             }
-            AudioEngineBridge::render(channelPointers.data(), channels, frames);
+            AudioEngineBridge::render(engineGeneration, channelPointers.data(), channels, frames);
             for (std::size_t frame = 0; frame < frames; ++frame) {
               for (std::size_t channel = 0; channel < channels; ++channel) {
                 interleaved[frame * channels + channel] = planar[channel][frame];

@@ -5,6 +5,7 @@ import { NativeModules, Platform } from 'react-native';
 import {
   InMemorySessionStorageAdapter,
   SessionManager,
+  type AudioDiagnosticsSnapshot,
   type AudioTransportSnapshot,
 } from '../../../session';
 import { demoSession, DEMO_SESSION_ID } from '../../../session/fixtures/demoSession';
@@ -13,7 +14,26 @@ import { SessionViewModelProvider } from '../SessionViewModelProvider';
 import { useTransportControls } from '../useTransportControls';
 import type { TransportControlsHandle } from '../useTransportControls';
 
-class InteractiveBridge extends PassiveAudioEngineBridge {
+const READY_DIAGNOSTICS: AudioDiagnosticsSnapshot = {
+  status: 'ready',
+  xruns: 0,
+  renderLoad: 0,
+};
+
+class ReadyBridge extends PassiveAudioEngineBridge {
+  override getDiagnosticsState(): AudioDiagnosticsSnapshot {
+    return { ...READY_DIAGNOSTICS };
+  }
+
+  override subscribeDiagnostics(
+    listener: (snapshot: AudioDiagnosticsSnapshot) => void,
+  ): () => void {
+    listener({ ...READY_DIAGNOSTICS });
+    return () => undefined;
+  }
+}
+
+class InteractiveBridge extends ReadyBridge {
   public readonly startSpy = jest.fn();
   public readonly stopSpy = jest.fn();
   public readonly locateSpy = jest.fn();
@@ -46,7 +66,7 @@ class MissingRuntimeBridge extends InteractiveBridge {
   }
 }
 
-class SilentBridge extends PassiveAudioEngineBridge {
+class SilentBridge extends ReadyBridge {
   public readonly startSpy = jest.fn();
   public readonly stopSpy = jest.fn();
   public readonly locateSpy = jest.fn();
@@ -64,7 +84,7 @@ class SilentBridge extends PassiveAudioEngineBridge {
   }
 }
 
-class FailingBridge extends PassiveAudioEngineBridge {
+class FailingBridge extends ReadyBridge {
   constructor(private readonly failure: Error) {
     super();
   }

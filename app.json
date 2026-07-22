@@ -8,7 +8,7 @@
     "newArchEnabled": true,
     "ios": {
       "bundleIdentifier": "dev.daftcitadel.app",
-      "buildNumber": "5",
+      "buildNumber": "6",
       "supportsTablet": true,
       "infoPlist": {
         "NSCameraUsageDescription": "Daft Citadel uses the camera when you choose to share live video during a collaboration session.",
