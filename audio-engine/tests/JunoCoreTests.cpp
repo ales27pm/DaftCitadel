@@ -474,6 +474,39 @@ void TestSixVoiceLimitAndRelease() {
   }
 }
 
+void TestRetriggeredNoteRelease() {
+  for (const double sampleRate : {44100.0, 48000.0}) {
+    JunoDSPEngine engine;
+    if (!engine.prepare(EngineConfig{sampleRate, 128U, 6U}) ||
+        !engine.setParameter(ParameterId::kReleaseSeconds, 0.1F) ||
+        !engine.noteOn(60U, 0.8F) || !engine.noteOn(60U, 0.7F)) {
+      throw std::runtime_error("Unable to configure same-note retrigger test");
+    }
+    if (engine.activeVoiceCount() != 1U) {
+      throw std::runtime_error("Same-note retrigger allocated a duplicate voice");
+    }
+
+    OfflineRenderer renderer(engine, 128U);
+    (void)renderer.render(Frames(0.05, sampleRate));
+    if (!engine.noteOff(60U)) {
+      throw std::runtime_error("Same-note retrigger could not be released");
+    }
+    const auto released = renderer.render(Frames(1.0, sampleRate));
+    if (engine.activeVoiceCount() != 0U) {
+      throw std::runtime_error("Same-note retrigger left a sustaining voice active");
+    }
+
+    const std::size_t tailFrames = std::min<std::size_t>(1024U, released.left.size());
+    StereoSamples tail{
+        std::vector<float>(released.left.end() - static_cast<std::ptrdiff_t>(tailFrames),
+                           released.left.end()),
+        std::vector<float>(released.right.end() - static_cast<std::ptrdiff_t>(tailFrames),
+                           released.right.end()),
+    };
+    AssertSilent(tail, "Same-note retrigger release tail");
+  }
+}
+
 }  // namespace
 
 void RunJunoCoreTests() {
@@ -481,6 +514,7 @@ void RunJunoCoreTests() {
   TestReferenceRenders();
   TestBlockSizeIndependence();
   TestSixVoiceLimitAndRelease();
+  TestRetriggeredNoteRelease();
 }
 
 }  // namespace daft::audio::tests

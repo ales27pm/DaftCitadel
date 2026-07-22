@@ -19,10 +19,16 @@ DaftCitadel adaptations place the code in the `daft::audio::juno` namespace,
 remove the iOS/Metal path, remove string-based queued parameters and mutex-backed
 state, validate public inputs, and keep allocation outside `render()`.
 
-The upstream revision does not contain a `LICENSE`, `COPYING`, or `NOTICE` file.
-This file records provenance; it does not create or replace a license grant.
-Redistribution outside repositories controlled by the original rights holder
-must first confirm the applicable licensing terms.
+## Rights and authorization
+
+The owner of both `ales27pm/junoNATIVE` and `ales27pm/DaftCitadel` confirms that
+`junoNATIVE` is their original creation, that they hold the necessary rights,
+and that they authorize DaftCitadel to reproduce, modify, compile, and
+distribute these adapted portions in source and binary form.
+
+The pinned upstream revision does not contain a public `LICENSE`, `COPYING`, or
+`NOTICE` file. This authorization records reuse within DaftCitadel and does not
+independently license the remaining junoNATIVE repository to third parties.
 
 Deliberately excluded from this import:
 

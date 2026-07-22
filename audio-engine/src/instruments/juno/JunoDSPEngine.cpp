@@ -66,7 +66,13 @@ bool JunoDSPEngine::noteOn(std::uint8_t midiNote, float velocity) noexcept {
   }
 
   auto voice = std::find_if(impl_->voices.begin(), impl_->voices.end(),
-                            [](const auto& candidate) { return !candidate->isActive(); });
+                            [midiNote](const auto& candidate) {
+                              return candidate->isActive() && candidate->currentNote() == midiNote;
+                            });
+  if (voice == impl_->voices.end()) {
+    voice = std::find_if(impl_->voices.begin(), impl_->voices.end(),
+                         [](const auto& candidate) { return !candidate->isActive(); });
+  }
   if (voice == impl_->voices.end()) {
     voice = impl_->voices.begin();
   }
