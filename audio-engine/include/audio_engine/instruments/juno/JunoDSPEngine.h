@@ -10,14 +10,14 @@ namespace daft::audio::juno {
 // Numeric identifiers keep parameter dispatch independent from strings and
 // make this core safe to drive from a bounded realtime command queue later.
 enum class ParameterId : std::uint16_t {
-  kPulseWidth,
-  kSubLevel,
-  kCutoffHz,
-  kResonance,
-  kAttackSeconds,
-  kReleaseSeconds,
-  kChorusMode,
-  kOutputGain,
+  kPulseWidth = 0x0001,
+  kSubLevel = 0x0002,
+  kCutoffHz = 0x0003,
+  kResonance = 0x0004,
+  kAttackSeconds = 0x0005,
+  kReleaseSeconds = 0x0006,
+  kChorusMode = 0x0007,
+  kOutputGain = 0x0008,
 };
 
 enum class ChorusMode : std::uint8_t {
@@ -32,9 +32,9 @@ struct EngineConfig {
   std::size_t polyphony = 6;
 };
 
-// Portable CPU-only Juno synthesis core. Allocation is confined to prepare();
-// render(), note handling, reset(), and parameter updates do not allocate,
-// lock, perform I/O, log, or call platform/JavaScript APIs.
+// Portable CPU-only Juno synthesis core. Allocation is confined to construction
+// and prepare(); render(), note handling, reset(), and parameter updates do not
+// allocate, lock, perform I/O, log, or call platform/JavaScript APIs.
 //
 // PR 1 intentionally exposes a single-threaded offline control surface. Callers
 // must serialize render and control calls until the bounded MIDI/parameter
@@ -44,6 +44,10 @@ class JunoDSPEngine final {
   static constexpr std::size_t kDefaultPolyphony = 6;
   static constexpr std::size_t kMaximumPolyphony = 64;
   static constexpr std::uint32_t kMaximumFramesPerBlock = 65536;
+  // Conservative headroom for default six-voice use, not a universal no-clip
+  // guarantee for every patch or polyphony setting. The float output is not
+  // limited, so callers raising this gain must manage downstream gain/limiting.
+  static constexpr float kDefaultOutputGain = 0.2F;
 
   JunoDSPEngine();
   ~JunoDSPEngine();
@@ -56,8 +60,8 @@ class JunoDSPEngine final {
   [[nodiscard]] bool prepare(const EngineConfig& config);
   void reset() noexcept;
 
-  [[nodiscard]] bool noteOn(std::uint8_t midiNote, float velocity) noexcept;
-  [[nodiscard]] bool noteOff(std::uint8_t midiNote) noexcept;
+  [[nodiscard]] bool noteOn(int midiNote, float velocity) noexcept;
+  [[nodiscard]] bool noteOff(int midiNote) noexcept;
   void allNotesOff() noexcept;
   [[nodiscard]] bool setParameter(ParameterId parameter, float value) noexcept;
 
@@ -70,6 +74,7 @@ class JunoDSPEngine final {
   [[nodiscard]] std::size_t activeVoiceCount() const noexcept;
 
  private:
+  // Keep DSP storage and its layout out of this public/install header.
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

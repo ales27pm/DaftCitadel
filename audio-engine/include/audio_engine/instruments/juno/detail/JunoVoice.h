@@ -3,7 +3,6 @@
 #include <cstdint>
 
 #include "audio_engine/instruments/juno/JunoDSPEngine.h"
-#include "audio_engine/instruments/juno/detail/BBDChorus.h"
 #include "audio_engine/instruments/juno/detail/NonlinearVCF.h"
 
 namespace daft::audio::juno::detail {
@@ -16,7 +15,7 @@ class JunoVoice final {
   [[nodiscard]] bool noteOff(std::uint8_t midiNote) noexcept;
   void release() noexcept;
   [[nodiscard]] bool setParameter(ParameterId parameter, float value) noexcept;
-  void process(float& left, float& right) noexcept;
+  [[nodiscard]] float processMono() noexcept;
 
   [[nodiscard]] bool isActive() const noexcept { return active_; }
   [[nodiscard]] std::uint8_t currentNote() const noexcept { return midiNote_; }
@@ -40,7 +39,6 @@ class JunoVoice final {
   bool active_ = false;
   std::uint8_t midiNote_ = 0;
   NonlinearVCF filter_;
-  BBDChorus chorus_;
 };
 
 }  // namespace daft::audio::juno::detail

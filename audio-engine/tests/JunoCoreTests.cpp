@@ -14,13 +14,26 @@
 #include <vector>
 
 #include "audio_engine/instruments/juno/JunoDSPEngine.h"
+#include "audio_engine/instruments/juno/detail/BBDChorus.h"
 
 namespace daft::audio::tests {
 namespace {
 
+using juno::ChorusMode;
 using juno::EngineConfig;
 using juno::JunoDSPEngine;
 using juno::ParameterId;
+using juno::detail::BBDChorus;
+
+static_assert(static_cast<std::uint16_t>(ParameterId::kPulseWidth) == 0x0001U);
+static_assert(static_cast<std::uint16_t>(ParameterId::kSubLevel) == 0x0002U);
+static_assert(static_cast<std::uint16_t>(ParameterId::kCutoffHz) == 0x0003U);
+static_assert(static_cast<std::uint16_t>(ParameterId::kResonance) == 0x0004U);
+static_assert(static_cast<std::uint16_t>(ParameterId::kAttackSeconds) == 0x0005U);
+static_assert(static_cast<std::uint16_t>(ParameterId::kReleaseSeconds) == 0x0006U);
+static_assert(static_cast<std::uint16_t>(ParameterId::kChorusMode) == 0x0007U);
+static_assert(static_cast<std::uint16_t>(ParameterId::kOutputGain) == 0x0008U);
+static_assert(JunoDSPEngine::kDefaultOutputGain == 0.2F);
 
 struct StereoSamples {
   std::vector<float> left;
@@ -333,12 +346,26 @@ void TestConfigurationAndSilence() {
         engine.maximumFramesPerBlock() != 256U) {
       throw std::runtime_error("Juno core did not retain its configuration");
     }
-    if (engine.noteOn(255U, 0.5F) || engine.noteOn(60U, std::numeric_limits<float>::quiet_NaN()) ||
-        engine.noteOn(60U, -0.1F) ||
+    constexpr std::array<int, 6> kInvalidNotes = {
+        std::numeric_limits<int>::min(), -1, 128, 255, 256, std::numeric_limits<int>::max()};
+    for (const int midiNote : kInvalidNotes) {
+      if (engine.noteOn(midiNote, 0.5F) || engine.noteOff(midiNote)) {
+        throw std::runtime_error("Juno core accepted an out-of-range MIDI note");
+      }
+    }
+    if (engine.noteOn(60, std::numeric_limits<float>::quiet_NaN()) ||
+        engine.noteOn(60, -0.1F) ||
         engine.setParameter(ParameterId::kCutoffHz, std::numeric_limits<float>::quiet_NaN()) ||
-        engine.setParameter(ParameterId::kCutoffHz, std::numeric_limits<float>::infinity())) {
+        engine.setParameter(ParameterId::kCutoffHz, std::numeric_limits<float>::infinity()) ||
+        engine.setParameter(static_cast<ParameterId>(0x0000U), 1.0F) ||
+        engine.setParameter(static_cast<ParameterId>(0xffffU), 1.0F)) {
       throw std::runtime_error("Juno core accepted an invalid note or parameter value");
     }
+    if (!engine.noteOn(0, 0.5F) || !engine.noteOff(0) || !engine.noteOn(127, 0.5F) ||
+        !engine.noteOff(127)) {
+      throw std::runtime_error("Juno core rejected a boundary MIDI note");
+    }
+    engine.reset();
     OfflineRenderer renderer(engine, 256U);
     AssertSilent(renderer.render(4096U), "Prepared Juno core without notes");
 
@@ -359,28 +386,29 @@ void TestReferenceRenders() {
   };
   constexpr std::array<Reference, 2> kReferences = {
       Reference{44100.0,
-                {{0.163031, 0.065622, 0.056528},
-                 0.079276,
-                 0.101545,
-                 0.014207,
-                 {0.143135, 0.856864, 0.000001}},
-                {{0.652110, 0.140816, 0.121322},
-                 0.128262,
-                 0.196081,
-                 0.057354,
-                 {0.459108, 0.540886, 0.000006}}},
+                {{0.163077, 0.065693, 0.056608},
+                 0.073183,
+                 0.101544,
+                 0.014389,
+                 {0.143127, 0.856872, 0.000001}},
+                {{0.652604, 0.141230, 0.121684},
+                 0.121735,
+                 0.196068,
+                 0.057850,
+                 {0.459190, 0.540809, 0.000001}}},
       Reference{48000.0,
-                {{0.163036, 0.065639, 0.056526},
-                 0.079329,
+                {{0.163088, 0.065711, 0.056609},
+                 0.073236,
                  0.101122,
-                 0.014236,
-                 {0.454942, 0.545057, 0.000001}},
-                {{0.653647, 0.140854, 0.121347},
-                 0.128305,
-                 0.196179,
-                 0.057429,
-                 {0.476394, 0.523599, 0.000007}}},
+                 0.014413,
+                 {0.454950, 0.545049, 0.000001}},
+                {{0.653051, 0.141268, 0.121714},
+                 0.121775,
+                 0.196186,
+                 0.057926,
+                 {0.476354, 0.523645, 0.000001}}},
   };
+  const bool printReferences = std::getenv("DAFT_JUNO_PRINT_REFERENCES") != nullptr;
 
   for (const auto& reference : kReferences) {
     const double sampleRate = reference.sampleRate;
@@ -392,7 +420,7 @@ void TestReferenceRenders() {
     }
     const auto single = AnalyzeReference(singleSamples, sampleRate, 0.35, 1.40, 0.25);
     const auto chord = AnalyzeReference(chordSamples, sampleRate, 0.25, 0.90, 0.20);
-    if (std::getenv("DAFT_JUNO_PRINT_REFERENCES") != nullptr) {
+    if (printReferences) {
       std::cout << "JUNO_REFERENCE rate=" << sampleRate
                 << " scenario=single peak=" << single.overall.peak << " rms=" << single.overall.rms
                 << " stereo=" << single.overall.stereoDifferenceRms
@@ -405,11 +433,12 @@ void TestReferenceRenders() {
                 << " sustain=" << chord.sustainRms << " tail=" << chord.releaseTailRms
                 << " low=" << chord.spectrum.low << " mid=" << chord.spectrum.mid
                 << " high=" << chord.spectrum.high << '\n';
+    } else {
+      AssertReferenceAnalysis(single, reference.single,
+                              "Single-note reference at " + std::to_string(sampleRate) + " Hz");
+      AssertReferenceAnalysis(chord, reference.chord,
+                              "Six-voice reference at " + std::to_string(sampleRate) + " Hz");
     }
-    AssertReferenceAnalysis(single, reference.single,
-                            "Single-note reference at " + std::to_string(sampleRate) + " Hz");
-    AssertReferenceAnalysis(chord, reference.chord,
-                            "Six-voice reference at " + std::to_string(sampleRate) + " Hz");
   }
 }
 
@@ -474,19 +503,215 @@ void TestSixVoiceLimitAndRelease() {
   }
 }
 
+void TestDefaultPolyphonicHeadroom() {
+  constexpr std::array<int, 6> kNotes = {48, 55, 60, 64, 67, 72};
+  for (const double sampleRate : {44100.0, 48000.0}) {
+    JunoDSPEngine engine;
+    if (!engine.prepare(EngineConfig{sampleRate, 256U, kNotes.size()})) {
+      throw std::runtime_error("Unable to prepare default-headroom test");
+    }
+    for (const int note : kNotes) {
+      if (!engine.noteOn(note, 0.65F)) {
+        throw std::runtime_error("Default-headroom test rejected a chord note");
+      }
+    }
+
+    OfflineRenderer renderer(engine, 256U);
+    const auto metrics = Measure(renderer.render(Frames(0.4, sampleRate)));
+    if (metrics.rms <= 0.001 || metrics.peak > 0.8) {
+      throw std::runtime_error("Default six-voice gain does not provide bounded headroom");
+    }
+  }
+}
+
+void TestSingleGlobalChorusNoiseLayer() {
+  constexpr std::array<int, 6> kNotes = {48, 55, 60, 64, 67, 72};
+  for (const double sampleRate : {44100.0, 48000.0}) {
+    JunoDSPEngine singleVoice;
+    JunoDSPEngine sixVoices;
+    if (!singleVoice.prepare(EngineConfig{sampleRate, 256U, 1U}) ||
+        !sixVoices.prepare(EngineConfig{sampleRate, 256U, kNotes.size()}) ||
+        !singleVoice.noteOn(60, 1.0e-12F)) {
+      throw std::runtime_error("Unable to configure global chorus noise test");
+    }
+    for (const int note : kNotes) {
+      if (!sixVoices.noteOn(note, 1.0e-12F)) {
+        throw std::runtime_error("Global chorus noise test rejected a chord note");
+      }
+    }
+
+    OfflineRenderer singleRenderer(singleVoice, 256U);
+    OfflineRenderer sixRenderer(sixVoices, 256U);
+    const auto singleNoise = singleRenderer.render(Frames(0.1, sampleRate));
+    const auto sixVoiceNoise = sixRenderer.render(Frames(0.1, sampleRate));
+    const auto singleMetrics = Measure(singleNoise);
+    const auto sixVoiceMetrics = Measure(sixVoiceNoise);
+    if (singleMetrics.rms <= 1.0e-6 || sixVoiceMetrics.rms <= 1.0e-6 ||
+        sixVoiceMetrics.rms / singleMetrics.rms < 0.99 ||
+        sixVoiceMetrics.rms / singleMetrics.rms > 1.01 ||
+        Correlation(singleNoise, sixVoiceNoise) < 0.999999) {
+      throw std::runtime_error("Chorus noise was not produced by one global effect layer");
+    }
+  }
+}
+
+void TestChorusModeRoutingAndBypassHistory() {
+  for (const double sampleRate : {44100.0, 48000.0}) {
+    JunoDSPEngine engine;
+    if (!engine.prepare(EngineConfig{sampleRate, 256U, 1U}) ||
+        !engine.setParameter(ParameterId::kChorusMode,
+                             static_cast<float>(ChorusMode::kOff)) ||
+        !engine.noteOn(60, 0.8F)) {
+      throw std::runtime_error("Unable to configure chorus routing test");
+    }
+    OfflineRenderer renderer(engine, 256U);
+    const auto bypassed = Measure(renderer.render(Frames(0.1, sampleRate)));
+    if (bypassed.stereoDifferenceRms != 0.0) {
+      throw std::runtime_error("Chorus bypass did not produce dual-mono output");
+    }
+    if (!engine.setParameter(ParameterId::kChorusMode,
+                             static_cast<float>(ChorusMode::kI))) {
+      throw std::runtime_error("Unable to enable the engine-level chorus");
+    }
+    const auto enabled = Measure(renderer.render(Frames(0.1, sampleRate)));
+    if (enabled.stereoDifferenceRms <= 1.0e-5) {
+      throw std::runtime_error("Engine-level chorus did not restore stereo modulation");
+    }
+
+    BBDChorus impulseChorus;
+    BBDChorus controlChorus;
+    impulseChorus.prepare(static_cast<float>(sampleRate));
+    controlChorus.prepare(static_cast<float>(sampleRate));
+    impulseChorus.setMode(ChorusMode::kI);
+    controlChorus.setMode(ChorusMode::kI);
+    float impulseLeft = 0.0F;
+    float impulseRight = 0.0F;
+    float controlLeft = 0.0F;
+    float controlRight = 0.0F;
+    impulseChorus.process(1.0F, impulseLeft, impulseRight);
+    controlChorus.process(0.0F, controlLeft, controlRight);
+    impulseChorus.setMode(ChorusMode::kOff);
+    controlChorus.setMode(ChorusMode::kOff);
+    const auto flushFrames = Frames(0.051, sampleRate) + 8U;
+    for (std::size_t frame = 0; frame < flushFrames; ++frame) {
+      impulseChorus.process(0.0F, impulseLeft, impulseRight);
+      controlChorus.process(0.0F, controlLeft, controlRight);
+    }
+    impulseChorus.setMode(ChorusMode::kI);
+    controlChorus.setMode(ChorusMode::kI);
+    for (std::size_t frame = 0; frame < Frames(0.04, sampleRate); ++frame) {
+      impulseChorus.process(0.0F, impulseLeft, impulseRight);
+      controlChorus.process(0.0F, controlLeft, controlRight);
+      AssertNear(impulseLeft, controlLeft, 1.0e-7, "Left chorus bypass history");
+      AssertNear(impulseRight, controlRight, 1.0e-7, "Right chorus bypass history");
+    }
+  }
+}
+
+void TestOverlappingSameNoteGates() {
+  for (const double sampleRate : {44100.0, 48000.0}) {
+    JunoDSPEngine engine;
+    if (!engine.prepare(EngineConfig{sampleRate, 128U, 6U}) ||
+        !engine.setParameter(ParameterId::kReleaseSeconds, 0.05F) ||
+        !engine.noteOn(60, 0.8F) || !engine.noteOn(60, 0.7F)) {
+      throw std::runtime_error("Unable to configure overlapping-note gate test");
+    }
+    if (engine.activeVoiceCount() != 1U) {
+      throw std::runtime_error("Overlapping same-note gates allocated duplicate voices");
+    }
+
+    OfflineRenderer renderer(engine, 128U);
+    (void)renderer.render(Frames(0.05, sampleRate));
+    if (!engine.noteOff(60)) {
+      throw std::runtime_error("First overlapping note-off was rejected");
+    }
+    const auto stillHeld = renderer.render(Frames(0.2, sampleRate));
+    if (engine.activeVoiceCount() != 1U || Measure(stillHeld).rms <= 0.001) {
+      throw std::runtime_error("First note-off released a still-held overlapping note");
+    }
+
+    if (!engine.noteOff(60)) {
+      throw std::runtime_error("Second overlapping note-off was rejected");
+    }
+    const auto released = renderer.render(Frames(1.0, sampleRate));
+    if (engine.activeVoiceCount() != 0U || engine.noteOff(60)) {
+      throw std::runtime_error("Overlapping note gates did not balance after the second note-off");
+    }
+    const std::size_t tailFrames = std::min<std::size_t>(1024U, released.left.size());
+    StereoSamples tail{
+        std::vector<float>(released.left.end() - static_cast<std::ptrdiff_t>(tailFrames),
+                           released.left.end()),
+        std::vector<float>(released.right.end() - static_cast<std::ptrdiff_t>(tailFrames),
+                           released.right.end()),
+    };
+    AssertSilent(tail, "Overlapping same-note release tail");
+  }
+}
+
+void TestGateCounterLifecycleAndVoiceStealing() {
+  for (const double sampleRate : {44100.0, 48000.0}) {
+    JunoDSPEngine engine;
+    const EngineConfig config{sampleRate, 128U, 1U};
+    if (!engine.prepare(config) || !engine.noteOn(60, 0.8F) || !engine.noteOn(60, 0.7F)) {
+      throw std::runtime_error("Unable to configure gate lifecycle test");
+    }
+    engine.allNotesOff();
+    if (engine.noteOff(60)) {
+      throw std::runtime_error("allNotesOff left a held-note count behind");
+    }
+
+    if (!engine.noteOn(60, 0.8F) || !engine.noteOn(60, 0.7F)) {
+      throw std::runtime_error("Unable to configure reset gate lifecycle test");
+    }
+    engine.reset();
+    if (engine.noteOff(60)) {
+      throw std::runtime_error("reset left a held-note count behind");
+    }
+
+    if (!engine.noteOn(60, 0.8F) || !engine.noteOn(60, 0.7F) || !engine.prepare(config) ||
+        engine.noteOff(60)) {
+      throw std::runtime_error("prepare did not replace held-note state");
+    }
+
+    if (!engine.noteOn(60, 0.8F) || !engine.noteOn(62, 0.8F) || !engine.noteOff(60)) {
+      throw std::runtime_error("Voice-stealing gate setup failed");
+    }
+    OfflineRenderer renderer(engine, 128U);
+    const auto stolenNoteReleased = renderer.render(Frames(0.2, sampleRate));
+    if (engine.activeVoiceCount() != 1U || Measure(stolenNoteReleased).rms <= 0.001) {
+      throw std::runtime_error("A stolen note-off released the replacement voice");
+    }
+    if (!engine.noteOff(62)) {
+      throw std::runtime_error("Replacement voice note-off was rejected");
+    }
+  }
+}
+
 void TestRetriggeredNoteRelease() {
   for (const double sampleRate : {44100.0, 48000.0}) {
     JunoDSPEngine engine;
     if (!engine.prepare(EngineConfig{sampleRate, 128U, 6U}) ||
         !engine.setParameter(ParameterId::kReleaseSeconds, 0.1F) ||
-        !engine.noteOn(60U, 0.8F) || !engine.noteOn(60U, 0.7F)) {
+        !engine.noteOn(60U, 0.8F)) {
       throw std::runtime_error("Unable to configure same-note retrigger test");
+    }
+
+    OfflineRenderer renderer(engine, 128U);
+    (void)renderer.render(Frames(0.05, sampleRate));
+    if (!engine.noteOff(60U)) {
+      throw std::runtime_error("Same-note retrigger test could not begin release");
+    }
+    (void)renderer.render(Frames(0.02, sampleRate));
+    if (engine.activeVoiceCount() != 1U) {
+      throw std::runtime_error("Release tail ended before same-note retrigger");
+    }
+    if (!engine.noteOn(60U, 0.7F)) {
+      throw std::runtime_error("Unable to retrigger a releasing voice");
     }
     if (engine.activeVoiceCount() != 1U) {
       throw std::runtime_error("Same-note retrigger allocated a duplicate voice");
     }
 
-    OfflineRenderer renderer(engine, 128U);
     (void)renderer.render(Frames(0.05, sampleRate));
     if (!engine.noteOff(60U)) {
       throw std::runtime_error("Same-note retrigger could not be released");
@@ -514,6 +739,11 @@ void RunJunoCoreTests() {
   TestReferenceRenders();
   TestBlockSizeIndependence();
   TestSixVoiceLimitAndRelease();
+  TestDefaultPolyphonicHeadroom();
+  TestSingleGlobalChorusNoiseLayer();
+  TestChorusModeRoutingAndBypassHistory();
+  TestOverlappingSameNoteGates();
+  TestGateCounterLifecycleAndVoiceStealing();
   TestRetriggeredNoteRelease();
 }
 

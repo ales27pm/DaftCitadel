@@ -31,7 +31,17 @@ class BBDChorus final {
   }
 
   void process(float input, float& left, float& right) noexcept {
-    if (buffer_.empty() || sampleRate_ <= 0.0F || mode_ == ChorusMode::kOff) {
+    if (buffer_.empty() || sampleRate_ <= 0.0F) {
+      left = input;
+      right = input;
+      return;
+    }
+    if (mode_ == ChorusMode::kOff) {
+      // Keep delay, modulation, and noise time current while bypassed so
+      // re-enabling cannot replay an arbitrarily old buffer state.
+      writeSample(input);
+      (void)whiteNoise();
+      advanceLfos();
       left = input;
       right = input;
       return;
@@ -41,9 +51,6 @@ class BBDChorus final {
     constexpr float kDepthI = 0.004F;
     constexpr float kBaseDelayII = 0.020F;
     constexpr float kDepthII = 0.008F;
-    constexpr float kLeftLfoRate = 0.6F;
-    constexpr float kRightLfoRate = 1.2F;
-
     const float baseDelay = mode_ == ChorusMode::kI ? kBaseDelayI : kBaseDelayII;
     const float depth = mode_ == ChorusMode::kI ? kDepthI : kDepthII;
     const float leftLfo = std::sin(2.0F * kPi * leftLfoPhase_);
@@ -58,16 +65,7 @@ class BBDChorus final {
     constexpr float kWetMix = 0.6F;
     left = kDryMix * input + kWetMix * wetLeft;
     right = kDryMix * input + kWetMix * wetRight;
-
-    const float inverseSampleRate = 1.0F / sampleRate_;
-    leftLfoPhase_ += kLeftLfoRate * inverseSampleRate;
-    rightLfoPhase_ += kRightLfoRate * inverseSampleRate;
-    if (leftLfoPhase_ >= 1.0F) {
-      leftLfoPhase_ -= 1.0F;
-    }
-    if (rightLfoPhase_ >= 1.0F) {
-      rightLfoPhase_ -= 1.0F;
-    }
+    advanceLfos();
   }
 
  private:
@@ -112,6 +110,20 @@ class BBDChorus final {
     // the platform's floating-point bit representation.
     constexpr float kHalfRange = 8388607.5F;
     return static_cast<float>(value >> 8U) / kHalfRange - 1.0F;
+  }
+
+  void advanceLfos() noexcept {
+    constexpr float kLeftLfoRate = 0.6F;
+    constexpr float kRightLfoRate = 1.2F;
+    const float inverseSampleRate = 1.0F / sampleRate_;
+    leftLfoPhase_ += kLeftLfoRate * inverseSampleRate;
+    rightLfoPhase_ += kRightLfoRate * inverseSampleRate;
+    if (leftLfoPhase_ >= 1.0F) {
+      leftLfoPhase_ -= 1.0F;
+    }
+    if (rightLfoPhase_ >= 1.0F) {
+      rightLfoPhase_ -= 1.0F;
+    }
   }
 
   float sampleRate_ = 44100.0F;

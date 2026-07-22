@@ -8,8 +8,6 @@ namespace daft::audio::juno::detail {
 void JunoVoice::prepare(float sampleRate) {
   sampleRate_ = sampleRate;
   filter_.prepare(sampleRate);
-  chorus_.prepare(sampleRate);
-  chorus_.setMode(ChorusMode::kI);
   reset();
 }
 
@@ -23,7 +21,6 @@ void JunoVoice::reset() noexcept {
   active_ = false;
   midiNote_ = 0;
   filter_.reset();
-  chorus_.reset();
 }
 
 void JunoVoice::noteOn(std::uint8_t midiNote, float velocity) noexcept {
@@ -75,20 +72,16 @@ bool JunoVoice::setParameter(ParameterId parameter, float value) noexcept {
     case ParameterId::kReleaseSeconds:
       releaseSeconds_ = std::clamp(value, 0.0005F, 30.0F);
       return true;
-    case ParameterId::kChorusMode: {
-      const int mode = static_cast<int>(std::lround(std::clamp(value, 0.0F, 2.0F)));
-      chorus_.setMode(static_cast<ChorusMode>(mode));
-      return true;
-    }
+    case ParameterId::kChorusMode:
     case ParameterId::kOutputGain:
       return false;
   }
   return false;
 }
 
-void JunoVoice::process(float& left, float& right) noexcept {
+float JunoVoice::processMono() noexcept {
   if (!stepEnvelopeAndPhase()) {
-    return;
+    return 0.0F;
   }
 
   const float pulseWidth = std::clamp(pulseWidth_, 0.05F, 0.95F);
@@ -97,12 +90,7 @@ void JunoVoice::process(float& left, float& right) noexcept {
                                : 1.0F - ((phase_ - pulseWidth) / (1.0F - pulseWidth)) * 2.0F;
   const float subOscillator = (subPhase_ < 0.5F ? 1.0F : -1.0F) * subLevel_;
   const float filtered = filter_.process(oscillator + subOscillator, cutoffHz_, resonance_);
-
-  float voiceLeft = 0.0F;
-  float voiceRight = 0.0F;
-  chorus_.process(filtered, voiceLeft, voiceRight);
-  left += voiceLeft * envelopeLevel_ * velocity_;
-  right += voiceRight * envelopeLevel_ * velocity_;
+  return filtered * envelopeLevel_ * velocity_;
 }
 
 bool JunoVoice::stepEnvelopeAndPhase() noexcept {
