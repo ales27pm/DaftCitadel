@@ -30,12 +30,15 @@ const sourceFiles = [
   'audio-engine/src/Clock.cpp',
   'audio-engine/src/PluginHost.cpp',
   'audio-engine/src/PluginNode.cpp',
+  'audio-engine/src/instruments/juno/JunoDSPEngine.cpp',
+  'audio-engine/src/instruments/juno/JunoVoice.cpp',
   'audio-engine/platform/common/NodeFactory.cpp',
   'audio-engine/tests/TestMain.cpp',
   'audio-engine/tests/SchedulerTests.cpp',
   'audio-engine/tests/ClipPlayerNodeTests.cpp',
   'audio-engine/tests/PluginNodeTests.cpp',
   'audio-engine/tests/SceneGraphTests.cpp',
+  'audio-engine/tests/JunoCoreTests.cpp',
 ].map((file) => path.join(rootDir, file));
 const outputPath = path.join(
   os.tmpdir(),
@@ -50,7 +53,11 @@ const compileArgs = [
 ];
 
 if (sanitize) {
-  compileArgs.push('-fsanitize=address,undefined', '-fno-omit-frame-pointer');
+  compileArgs.push(
+    '-fsanitize=address,undefined',
+    '-fno-sanitize-recover=all',
+    '-fno-omit-frame-pointer',
+  );
 }
 compileArgs.push(...sourceFiles, '-o', outputPath);
 

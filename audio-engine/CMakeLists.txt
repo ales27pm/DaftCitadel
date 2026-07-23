@@ -17,6 +17,8 @@ add_library(daft_audio_engine
     src/Clock.cpp
     src/PluginHost.cpp
     src/PluginNode.cpp
+    src/instruments/juno/JunoDSPEngine.cpp
+    src/instruments/juno/JunoVoice.cpp
     platform/common/NodeFactory.cpp
 )
 
@@ -32,6 +34,7 @@ if(DAFT_AUDIO_ENGINE_ENABLE_SANITIZERS)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         target_compile_options(daft_audio_engine PRIVATE
             -fsanitize=address,undefined
+            -fno-sanitize-recover=all
             -fno-omit-frame-pointer
         )
         target_link_options(daft_audio_engine PRIVATE
@@ -51,11 +54,13 @@ if(DAFT_AUDIO_ENGINE_BUILD_TESTS)
         tests/ClipPlayerNodeTests.cpp
         tests/PluginNodeTests.cpp
         tests/SceneGraphTests.cpp
+        tests/JunoCoreTests.cpp
     )
     target_link_libraries(daft_audio_engine_tests PRIVATE daft_audio_engine)
     if(DAFT_AUDIO_ENGINE_ENABLE_SANITIZERS)
         target_compile_options(daft_audio_engine_tests PRIVATE
             -fsanitize=address,undefined
+            -fno-sanitize-recover=all
             -fno-omit-frame-pointer
         )
         target_link_options(daft_audio_engine_tests PRIVATE
