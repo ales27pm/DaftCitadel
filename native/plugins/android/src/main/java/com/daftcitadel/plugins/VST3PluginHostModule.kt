@@ -18,6 +18,17 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import org.json.JSONObject
 
+private fun currentTimestamp(): String {
+  return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+    java.time.OffsetDateTime.now().toString()
+  } else {
+    SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US).format(Date())
+  }
+}
+
+private const val RUNTIME_UNAVAILABLE_MESSAGE =
+  "VST3 hosting is disabled because the sandbox executable and audio render bridge are not packaged"
+
 @ReactModule(name = VST3PluginHostModule.NAME)
 class VST3PluginHostModule(private val reactContext: ReactApplicationContext) :
   ReactContextBaseJavaModule(reactContext), LifecycleEventListener {
@@ -26,7 +37,7 @@ class VST3PluginHostModule(private val reactContext: ReactApplicationContext) :
     sendEvent("pluginCrashed", Arguments.createMap().apply {
       putString("instanceId", instanceId)
       putMap("descriptor", descriptor.toWritableMap())
-      putString("timestamp", hostManager.timestamp())
+      putString("timestamp", currentTimestamp())
       putString("reason", reason)
       putBoolean("recovered", false)
       putString("restartToken", UUID.randomUUID().toString())
@@ -40,23 +51,22 @@ class VST3PluginHostModule(private val reactContext: ReactApplicationContext) :
 
   override fun getName(): String = NAME
 
+  override fun getConstants(): Map<String, Any> = mapOf("runtimeReady" to false)
+
   @ReactMethod
-  fun queryAvailablePlugins(format: String?, promise: Promise) {
-    hostManager.queryAvailablePlugins(format)
-      .map { it.toWritableMap() }
-      .let { Arguments.createArray().apply { it.forEach { pushMap(it) } } }
-      .also(promise::resolve)
+  fun queryAvailablePlugins(@Suppress("UNUSED_PARAMETER") format: String?, promise: Promise) {
+    // Discovery without a render-capable sandbox creates handles that can only
+    // pass audio through. Report no capability until the host is actually wired.
+    promise.resolve(Arguments.createArray())
   }
 
   @ReactMethod
-  fun instantiatePlugin(identifier: String, options: ReadableMap, promise: Promise) {
-    try {
-      val sandboxId = if (options.hasKey("sandboxIdentifier")) options.getString("sandboxIdentifier") else null
-      val instance = hostManager.instantiatePlugin(identifier, sandboxId)
-      promise.resolve(instance.toWritableMap())
-    } catch (error: Exception) {
-      promise.reject("instantiate_failed", error)
-    }
+  fun instantiatePlugin(
+    @Suppress("UNUSED_PARAMETER") identifier: String,
+    @Suppress("UNUSED_PARAMETER") options: ReadableMap,
+    promise: Promise,
+  ) {
+    promise.reject("runtime_unavailable", RUNTIME_UNAVAILABLE_MESSAGE)
   }
 
   @ReactMethod
@@ -116,10 +126,8 @@ class VST3PluginHostModule(private val reactContext: ReactApplicationContext) :
         "sandboxPermissionRequired",
         Arguments.createMap().apply {
           putString("identifier", identifier)
-          putArray("requiredEntitlements", Arguments.createArray().apply {
-            pushString("android.permission.READ_EXTERNAL_STORAGE")
-            pushString("android.permission.WRITE_EXTERNAL_STORAGE")
-          })
+          // App-specific filesDir sandboxes require no storage permission.
+          putArray("requiredEntitlements", Arguments.createArray())
           putString("reason", error.localizedMessage)
         }
       )
@@ -278,14 +286,6 @@ class Vst3HostManager(
   fun shutdown() {
     instances.values.forEach { it.dispose() }
     instances.clear()
-  }
-
-  fun timestamp(): String {
-    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      java.time.OffsetDateTime.now().toString()
-    } else {
-      SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US).format(Date())
-    }
   }
 
   private fun pluginRoots(): List<File> {

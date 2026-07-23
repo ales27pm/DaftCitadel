@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cctype>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -22,18 +23,6 @@
 #include "../ios/AudioEngineBridge.hpp"
 #endif
 
-/**
- * Create a DSPNode instance matching the given node type.
- *
- * Creates and configures a concrete daft::audio::DSPNode (e.g., GainNode, SineOscillatorNode, MixerNode)
- * based on a case-insensitive type name and applies parameters from `options`.
- * For mixer nodes the "inputcount" option (if present) determines the number of inputs and is not applied as a parameter.
- *
- * @param type Case-insensitive name of the node type to create (e.g., "gain", "sine", "mixer").
- * @param options Mapping of parameter names to numeric and string values to apply to the created node.
- * @param error Set to a human-readable message if the requested type is unsupported; left unchanged on success.
- * @returns A unique_ptr to the created DSPNode on success, or `nullptr` if the type is unsupported.
- */
 namespace daft::audio::bridge {
 
 struct NodeOptions {
@@ -114,11 +103,32 @@ inline std::optional<std::string> clipBufferKeyFromOptions(const NodeOptions& op
 }
 }  // namespace detail
 
+/**
+ * Create a DSPNode instance matching the given node type.
+ *
+ * Creates and configures a concrete daft::audio::DSPNode (e.g., GainNode, SineOscillatorNode, MixerNode)
+ * based on a case-insensitive type name and applies parameters from `options`.
+ * For mixer nodes the "inputcount" option (if present) determines the number of inputs and is not applied as a parameter.
+ *
+ * @param type Case-insensitive name of the node type to create (e.g., "gain", "sine", "mixer").
+ * @param options Mapping of parameter names to numeric and string values to apply to the created node.
+ * @param error Set to a human-readable message if the requested type is unsupported; left unchanged on success.
+ * @param engineGeneration Active iOS bridge generation used for clip-buffer ownership checks; ignored on Android.
+ * @returns A unique_ptr to the created DSPNode on success, or `nullptr` if the type is unsupported.
+ */
 inline std::unique_ptr<daft::audio::DSPNode> CreateNode(const std::string& type,
                                                         const NodeOptions& options,
-                                                        std::string& error) {
+                                                        std::string& error,
+                                                        [[maybe_unused]] std::uint64_t engineGeneration = 0) {
   const auto normalized = detail::normalize(type);
-  if (normalized == "gain" || normalized == "gainnode") {
+  if (normalized == "trackoutput") {
+    auto node = std::make_unique<daft::audio::TrackOutputNode>();
+    detail::applyParameters(*node, options, {});
+    return node;
+  }
+  // Other session routing endpoints and buses are transparent audio stages.
+  if (normalized == "gain" || normalized == "gainnode" || normalized == "trackinput" ||
+      normalized == "send" || normalized == "return" || normalized == "sidechaintap") {
     auto node = std::make_unique<daft::audio::GainNode>();
     detail::applyParameters(*node, options, {});
     return node;
@@ -143,7 +153,11 @@ inline std::unique_ptr<daft::audio::DSPNode> CreateNode(const std::string& type,
       error = "clipPlayer requires a bufferKey option";
       return nullptr;
     }
+#if defined(__ANDROID__)
     auto clipBuffer = AudioEngineBridge::clipBufferForKey(*key);
+#else
+    auto clipBuffer = AudioEngineBridge::clipBufferForKey(engineGeneration, *key);
+#endif
     if (!clipBuffer) {
       error = "clip buffer '" + *key + "' is not registered";
       return nullptr;

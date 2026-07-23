@@ -6,6 +6,7 @@
 #include <cmath>
 #include <exception>
 #include <mutex>
+#include <stdexcept>
 #include <vector>
 
 namespace daft::audio::bridge {
@@ -21,35 +22,89 @@ std::unique_ptr<SceneGraph> AudioEngineBridge::graph_;
 std::mutex AudioEngineBridge::mutex_;
 std::atomic<std::uint64_t> AudioEngineBridge::xruns_{0};
 std::atomic<double> AudioEngineBridge::lastRenderDurationMicros_{0.0};
+bool AudioEngineBridge::isPlaying_{false};
+std::atomic<AudioEngineBridge::EngineGeneration> AudioEngineBridge::generation_{0};
 std::unordered_map<std::string, AudioEngineBridge::ClipBufferEntry> AudioEngineBridge::clipBuffers_;
 
-void AudioEngineBridge::initialize(double sampleRate, std::uint32_t framesPerBuffer) {
+AudioEngineBridge::EngineGeneration AudioEngineBridge::initialize(double sampleRate,
+                                                                  std::uint32_t framesPerBuffer) {
   std::lock_guard<std::mutex> lock(mutex_);
   graph_ = std::make_unique<SceneGraph>(sampleRate, framesPerBuffer);
+  auto generation = generation_.load(std::memory_order_relaxed) + 1;
+  if (generation == 0) {
+    generation = 1;
+  }
+  generation_.store(generation, std::memory_order_release);
   xruns_.store(0);
   lastRenderDurationMicros_.store(0.0);
-  os_log(Logger(), "Audio engine initialized at %.2f Hz", sampleRate);
-}
-
-void AudioEngineBridge::shutdown() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  graph_.reset();
-  xruns_.store(0);
-  lastRenderDurationMicros_.store(0.0);
+  isPlaying_ = false;
   clipBuffers_.clear();
-  os_log(Logger(), "Audio engine shutdown");
+  os_log(Logger(), "Audio engine initialized at %.2f Hz (generation %llu)", sampleRate,
+         static_cast<unsigned long long>(generation));
+  return generation;
 }
 
-void AudioEngineBridge::render(float** outputs, std::size_t channelCount, std::size_t frameCount) {
+bool AudioEngineBridge::shutdownIfOwner(EngineGeneration generation) noexcept {
+  try {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto activeGeneration = generation_.load(std::memory_order_acquire);
+    if (generation == 0 || generation != activeGeneration) {
+      os_log_info(Logger(), "Ignored stale audio engine shutdown for generation %llu; active generation is %llu",
+                  static_cast<unsigned long long>(generation),
+                  static_cast<unsigned long long>(activeGeneration));
+      return false;
+    }
+    graph_.reset();
+    xruns_.store(0);
+    lastRenderDurationMicros_.store(0.0);
+    isPlaying_ = false;
+    clipBuffers_.clear();
+    os_log(Logger(), "Audio engine generation %llu shutdown",
+           static_cast<unsigned long long>(generation));
+    return true;
+  } catch (...) {
+    os_log_error(Logger(), "Audio engine shutdown failed for generation %llu",
+                 static_cast<unsigned long long>(generation));
+    return false;
+  }
+}
+
+bool AudioEngineBridge::isInitialized(EngineGeneration generation) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return ownsGenerationLocked(generation);
+}
+
+bool AudioEngineBridge::ownsGenerationLocked(EngineGeneration generation) noexcept {
+  return generation != 0 &&
+         generation == generation_.load(std::memory_order_acquire) && graph_ != nullptr;
+}
+
+void AudioEngineBridge::requireGenerationLocked(EngineGeneration generation) {
+  if (!ownsGenerationLocked(generation)) {
+    throw std::runtime_error("Audio engine generation is not active");
+  }
+}
+
+void AudioEngineBridge::render(EngineGeneration generation, float** outputs,
+                               std::size_t channelCount, std::size_t frameCount) {
+  // The embedding app owns AVAudioEngine/Audio Unit device setup and must call
+  // this function from its render callback. This bridge owns graph/transport state.
   AudioBufferView view(outputs, channelCount, frameCount);
   std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
   if (!lock.owns_lock()) {
     view.fill(0.0F);
-    xruns_.fetch_add(1);
-    lastRenderDurationMicros_.store(0.0);
+    if (generation != 0 &&
+        generation == generation_.load(std::memory_order_acquire)) {
+      xruns_.fetch_add(1);
+      lastRenderDurationMicros_.store(0.0);
+    }
     return;
   }
-  if (!graph_) {
+  if (!ownsGenerationLocked(generation)) {
+    view.fill(0.0F);
+    return;
+  }
+  if (!isPlaying_) {
     view.fill(0.0F);
     lastRenderDurationMicros_.store(0.0);
     return;
@@ -75,52 +130,72 @@ void AudioEngineBridge::render(float** outputs, std::size_t channelCount, std::s
   lastRenderDurationMicros_.store(micros);
 }
 
-bool AudioEngineBridge::addNode(const std::string& id, std::unique_ptr<DSPNode> node) {
+void AudioEngineBridge::startTransport(EngineGeneration generation) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!graph_) {
-    return false;
-  }
+  requireGenerationLocked(generation);
+  isPlaying_ = true;
+}
+
+void AudioEngineBridge::stopTransport(EngineGeneration generation) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  requireGenerationLocked(generation);
+  isPlaying_ = false;
+}
+
+void AudioEngineBridge::locateTransport(EngineGeneration generation, std::uint64_t frame) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  requireGenerationLocked(generation);
+  graph_->locate(frame);
+}
+
+AudioEngineBridge::TransportState AudioEngineBridge::getTransportState(
+    EngineGeneration generation) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  requireGenerationLocked(generation);
+  return {graph_->currentFrame(), isPlaying_};
+}
+
+bool AudioEngineBridge::addNode(EngineGeneration generation, const std::string& id,
+                                std::unique_ptr<DSPNode> node) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  requireGenerationLocked(generation);
   return graph_->addNode(id, std::move(node));
 }
 
-void AudioEngineBridge::removeNode(const std::string& id) {
+void AudioEngineBridge::removeNode(EngineGeneration generation, const std::string& id) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (graph_) {
-    graph_->removeNode(id);
-  }
+  requireGenerationLocked(generation);
+  graph_->removeNode(id);
 }
 
-bool AudioEngineBridge::connect(const std::string& source, const std::string& destination) {
+bool AudioEngineBridge::connect(EngineGeneration generation, const std::string& source,
+                                const std::string& destination) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!graph_) {
-    return false;
-  }
+  requireGenerationLocked(generation);
   return graph_->connect(source, destination);
 }
 
-void AudioEngineBridge::disconnect(const std::string& source, const std::string& destination) {
+void AudioEngineBridge::disconnect(EngineGeneration generation, const std::string& source,
+                                   const std::string& destination) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (graph_) {
-    graph_->disconnect(source, destination);
-  }
+  requireGenerationLocked(generation);
+  graph_->disconnect(source, destination);
 }
 
-void AudioEngineBridge::scheduleParameterAutomation(const std::string& nodeId, const std::string& parameter,
+void AudioEngineBridge::scheduleParameterAutomation(EngineGeneration generation,
+                                                    const std::string& nodeId,
+                                                    const std::string& parameter,
                                                     std::uint64_t frame, double value) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!graph_) {
-    return;
-  }
-  try {
-    graph_->scheduleAutomation(nodeId,
-                               [parameter, value](DSPNode& node) { node.setParameter(parameter, value); }, frame);
-  } catch (const std::exception& ex) {
-    os_log_error(Logger(), "Failed to schedule automation: %{public}s", ex.what());
-  }
+  requireGenerationLocked(generation);
+  graph_->scheduleAutomation(nodeId,
+                             [parameter, value](DSPNode& node) { node.setParameter(parameter, value); }, frame);
 }
 
-bool AudioEngineBridge::registerClipBuffer(const std::string& key, double sampleRate, std::size_t channelCount,
-                                           std::size_t frameCount, std::vector<std::vector<float>> channelData) {
+bool AudioEngineBridge::registerClipBuffer(EngineGeneration generation, const std::string& key,
+                                           double sampleRate, std::size_t channelCount,
+                                           std::size_t frameCount,
+                                           std::vector<std::vector<float>> channelData) {
   if (key.empty() || !std::isfinite(sampleRate) || sampleRate <= 0.0 || channelCount == 0 || frameCount == 0) {
     return false;
   }
@@ -140,18 +215,24 @@ bool AudioEngineBridge::registerClipBuffer(const std::string& key, double sample
   const std::size_t byteSize = channelCount * frameCount * sizeof(float);
 
   std::lock_guard<std::mutex> lock(mutex_);
-  auto& entry = clipBuffers_[key];
+  requireGenerationLocked(generation);
+  auto [entryIt, inserted] = clipBuffers_.try_emplace(key);
+  auto& entry = entryIt->second;
   entry.buffer = std::move(buffer);
   entry.byteSize = byteSize;
-  entry.referenceCount += 1;
+  if (inserted || entry.referenceCount == 0) {
+    entry.referenceCount = 1;
+  }
   return true;
 }
 
-bool AudioEngineBridge::unregisterClipBuffer(const std::string& key) {
+bool AudioEngineBridge::unregisterClipBuffer(EngineGeneration generation,
+                                             const std::string& key) {
   if (key.empty()) {
     return false;
   }
   std::lock_guard<std::mutex> lock(mutex_);
+  requireGenerationLocked(generation);
   auto it = clipBuffers_.find(key);
   if (it == clipBuffers_.end()) {
     return true;
@@ -166,17 +247,26 @@ bool AudioEngineBridge::unregisterClipBuffer(const std::string& key) {
   return true;
 }
 
-std::shared_ptr<const AudioEngineBridge::ClipBuffer> AudioEngineBridge::clipBufferForKey(const std::string& key) {
+std::shared_ptr<const AudioEngineBridge::ClipBuffer> AudioEngineBridge::clipBufferForKey(
+    EngineGeneration generation, const std::string& key) {
   std::lock_guard<std::mutex> lock(mutex_);
+  requireGenerationLocked(generation);
   if (const auto it = clipBuffers_.find(key); it != clipBuffers_.end()) {
     return it->second.buffer;
   }
   return nullptr;
 }
 
-AudioEngineBridge::RenderDiagnostics AudioEngineBridge::getDiagnostics() {
-  RenderDiagnostics diagnostics{xruns_.load(), lastRenderDurationMicros_.load(), 0};
+AudioEngineBridge::RenderDiagnostics AudioEngineBridge::getDiagnostics(
+    EngineGeneration generation) {
+  RenderDiagnostics diagnostics{0, 0.0, 0, false};
   std::lock_guard<std::mutex> lock(mutex_);
+  if (!ownsGenerationLocked(generation)) {
+    return diagnostics;
+  }
+  diagnostics.xruns = xruns_.load();
+  diagnostics.lastRenderDurationMicros = lastRenderDurationMicros_.load();
+  diagnostics.initialized = true;
   for (const auto& [_, entry] : clipBuffers_) {
     diagnostics.clipBufferBytes += entry.byteSize;
   }

@@ -1,6 +1,13 @@
 module.exports = {
   root: true,
-  ignorePatterns: ['__mocks__/**'],
+  ignorePatterns: [
+    '__mocks__/**',
+    'audio-engine/build*/**',
+    'android/**',
+    'coverage/**',
+    'ios/**',
+    'lib/**',
+  ],
   env: {
     es2021: true,
     node: true,
@@ -26,7 +33,7 @@ module.exports = {
     'import/no-default-export': 'warn',
     '@typescript-eslint/explicit-function-return-type': 'off',
     '@typescript-eslint/no-misused-promises': 'error',
-    'react/prop-types': 'off'
+    'react/prop-types': 'off',
   },
   settings: {
     react: {

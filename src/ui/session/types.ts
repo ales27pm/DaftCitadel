@@ -57,6 +57,15 @@ export interface TrackViewModel {
   plugins: TrackPluginViewModel[];
 }
 
+export type PlayheadReferenceSource = 'runtime' | 'diagnostics';
+
+export interface PlayheadReference {
+  source: PlayheadReferenceSource;
+  beats: number;
+  bpm: number;
+  updatedAt?: number;
+}
+
 export interface SessionTransportView {
   bpm: number;
   timeSignature: string;
@@ -65,6 +74,8 @@ export interface SessionTransportView {
   playheadBeats: number;
   playheadRatio: number;
   isPlaying: boolean;
+  diagnosticsGate: boolean;
+  playheadReference?: PlayheadReference;
 }
 
 export type DiagnosticsStatus = 'loading' | 'ready' | 'unavailable' | 'error';

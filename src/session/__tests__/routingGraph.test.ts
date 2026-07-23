@@ -148,4 +148,71 @@ describe('routing graph schema', () => {
       'Duplicate routing node id detected: track-1:input:main',
     );
   });
+
+  it('rejects non-finite connection gains', () => {
+    const graph = createDefaultTrackRoutingGraph('track-gain');
+    graph.connections[0].gain = Number.NaN;
+    const session: Session = {
+      id: 'session-gain',
+      name: 'Invalid gain',
+      revision: 1,
+      tracks: [
+        {
+          id: 'track-gain',
+          name: 'Track',
+          clips: [],
+          muted: false,
+          solo: false,
+          volume: 0,
+          pan: 0,
+          automationCurves: [],
+          routing: { graph },
+        },
+      ],
+      metadata: baseMetadata,
+    };
+
+    expect(() => validateSession(session)).toThrow(
+      'Connection track-gain:connection:direct has invalid gain',
+    );
+  });
+
+  it('rejects enabled audio routing cycles', () => {
+    const graph = createDefaultTrackRoutingGraph('track-cycle');
+    const input = graph.nodes.find((node) => node.type === 'trackInput');
+    const output = graph.nodes.find((node) => node.type === 'trackOutput');
+    if (!input || !output) {
+      throw new Error('Fixture graph missing endpoints');
+    }
+    graph.connections.push({
+      id: 'track-cycle:connection:feedback',
+      from: { nodeId: output.id },
+      to: { nodeId: input.id },
+      signal: 'audio',
+      enabled: true,
+    });
+    const session: Session = {
+      id: 'session-cycle',
+      name: 'Cycle',
+      revision: 1,
+      tracks: [
+        {
+          id: 'track-cycle',
+          name: 'Track',
+          clips: [],
+          muted: false,
+          solo: false,
+          volume: 0,
+          pan: 0,
+          automationCurves: [],
+          routing: { graph },
+        },
+      ],
+      metadata: baseMetadata,
+    };
+
+    expect(() => validateSession(session)).toThrow(
+      'Enabled audio routing connections must form an acyclic graph',
+    );
+  });
 });

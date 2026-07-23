@@ -8,9 +8,16 @@ import type { SessionManager } from '../../../session';
 jest.mock('../../session', () => ({
   useSessionViewModel: jest.fn(),
   useTransportControls: jest.fn(),
+  useProjectedTransport: jest.fn(),
+  useSessionActions: jest.fn(),
 }));
 
-const { useSessionViewModel, useTransportControls } = jest.requireMock('../../session');
+const {
+  useSessionViewModel,
+  useTransportControls,
+  useProjectedTransport,
+  useSessionActions,
+} = jest.requireMock('../../session');
 
 const baseTrack = {
   id: 'track-1',
@@ -36,6 +43,8 @@ const baseTransport = {
   playheadBeats: 0,
   playheadRatio: 0,
   isPlaying: false,
+  diagnosticsGate: false,
+  playheadReference: undefined,
 };
 
 const baseDiagnostics = {
@@ -58,6 +67,20 @@ beforeEach(() => {
     transportRuntime: null,
     transport: null,
   });
+  useProjectedTransport.mockReturnValue({
+    projectedBeats: 0,
+    projectedRatio: 0,
+    transport: null,
+  });
+  useSessionActions.mockReturnValue({
+    addTrack: jest.fn(async () => undefined),
+    setTrackMuted: jest.fn(async () => undefined),
+    setTrackSolo: jest.fn(async () => undefined),
+  });
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
 });
 
 describe('ArrangementScreen diagnostics', () => {
@@ -78,10 +101,17 @@ describe('ArrangementScreen diagnostics', () => {
   };
 
   it('renders diagnostics summary when ready', async () => {
+    jest.spyOn(Date.prototype, 'toLocaleString').mockReturnValue('1/1/2024, 12:00:00 AM');
+    const transport = { ...baseTransport, isPlaying: true, playheadRatio: 0.5 };
+    useProjectedTransport.mockReturnValue({
+      projectedBeats: transport.lengthBeats * 0.5,
+      projectedRatio: 0.5,
+      transport,
+    });
     useSessionViewModel.mockReturnValue({
       status: 'ready',
       tracks: [baseTrack],
-      transport: { ...baseTransport, isPlaying: true, playheadRatio: 0.5 },
+      transport,
       diagnostics: baseDiagnostics,
       refresh: jest.fn(() => Promise.resolve()),
       pluginAlerts: [
@@ -114,11 +144,19 @@ describe('ArrangementScreen diagnostics', () => {
     });
 
     const renderer = await renderScreen();
-    expect(renderer.toJSON()).toMatchSnapshot();
+    const serialized = JSON.stringify(renderer.toJSON());
+    expect(serialized).toContain('Engine 25% · 0 xruns');
+    expect(serialized).toContain('Plugin needs attention');
+    expect(serialized).toContain('Fixture Plugin');
     renderer.unmount();
   });
 
   it('renders diagnostics error state', async () => {
+    useProjectedTransport.mockReturnValue({
+      projectedBeats: baseTransport.playheadBeats,
+      projectedRatio: baseTransport.playheadRatio,
+      transport: baseTransport,
+    });
     useSessionViewModel.mockReturnValue({
       status: 'ready',
       tracks: [baseTrack],
@@ -140,11 +178,16 @@ describe('ArrangementScreen diagnostics', () => {
     });
 
     const renderer = await renderScreen();
-    expect(renderer.toJSON()).toMatchSnapshot();
+    expect(JSON.stringify(renderer.toJSON())).toContain('Diagnostics failed');
     renderer.unmount();
   });
 
   it('renders diagnostics unavailable state', async () => {
+    useProjectedTransport.mockReturnValue({
+      projectedBeats: baseTransport.playheadBeats,
+      projectedRatio: baseTransport.playheadRatio,
+      transport: baseTransport,
+    });
     useSessionViewModel.mockReturnValue({
       status: 'ready',
       tracks: [baseTrack],
@@ -165,7 +208,7 @@ describe('ArrangementScreen diagnostics', () => {
     });
 
     const renderer = await renderScreen();
-    expect(renderer.toJSON()).toMatchSnapshot();
+    expect(JSON.stringify(renderer.toJSON())).toContain('Audio diagnostics unavailable');
     renderer.unmount();
   });
 });

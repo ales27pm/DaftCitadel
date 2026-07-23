@@ -5,9 +5,11 @@ export const ScrollView = 'ScrollView';
 export const SafeAreaView = 'SafeAreaView';
 export const Text = 'Text';
 export const Pressable = 'Pressable';
+export const ActivityIndicator = 'ActivityIndicator';
 export const TouchableOpacity = 'TouchableOpacity';
 export const FlatList = 'FlatList';
 export const SectionList = 'SectionList';
+export const Switch = 'Switch';
 
 export const StyleSheet = {
   create: <T extends Record<string, unknown>>(styles: T): T => styles,
@@ -179,9 +181,7 @@ const computeTransportFrame = (now: number): number => {
   if (elapsedMs <= 0 || audioEngineState.sampleRate <= 0) {
     return audioEngineState.transport.startFrame;
   }
-  const framesAdvanced = Math.floor(
-    (elapsedMs / 1000) * audioEngineState.sampleRate,
-  );
+  const framesAdvanced = Math.floor((elapsedMs / 1000) * audioEngineState.sampleRate);
   return audioEngineState.transport.startFrame + framesAdvanced;
 };
 
@@ -235,7 +235,7 @@ const audioEngineModule = {
     sampleRate: number,
     channels: number,
     frames: number,
-    channelData: Array<ArrayBuffer | ArrayBufferView>,
+    channelData: Array<string | ArrayBuffer | ArrayBufferView>,
   ) => {
     const key = bufferKey.trim();
     if (!key) {
@@ -255,14 +255,19 @@ const audioEngineModule = {
     }
     const floatChannels = channelData.map((payload, index) => {
       let source: ArrayBuffer;
-      if (isArrayBufferLike(payload)) {
-        source = payload;
+      if (typeof payload === 'string') {
+        const decoded = Buffer.from(payload, 'base64');
+        source = Uint8Array.from(decoded).buffer;
+      } else if (isArrayBufferLike(payload)) {
+        const bytes = new Uint8Array(payload);
+        source = Uint8Array.from(bytes).buffer;
       } else if (ArrayBuffer.isView(payload)) {
         const view = payload as ArrayBufferView;
-        source = view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
+        const bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+        source = Uint8Array.from(bytes).buffer;
       } else {
         throw new Error(
-          `channelData[${index}] must be an ArrayBuffer or ArrayBufferView`,
+          `channelData[${index}] must be base64, an ArrayBuffer, or an ArrayBufferView`,
         );
       }
       const view = new Float32Array(source);
@@ -410,9 +415,11 @@ type MockLoggerModule = {
 const loggerEntries: LoggerEntry[] = [];
 
 const createLoggerModule = (): MockLoggerModule => ({
-  logWithLevel: jest.fn((level: string, message: string, metadata?: Record<string, unknown>) => {
-    loggerEntries.push({ level, message, metadata });
-  }),
+  logWithLevel: jest.fn(
+    (level: string, message: string, metadata?: Record<string, unknown>) => {
+      loggerEntries.push({ level, message, metadata });
+    },
+  ),
   __getLogs: () => [...loggerEntries],
   __clearLogs: () => {
     loggerEntries.splice(0, loggerEntries.length);
@@ -424,6 +431,9 @@ const loggerModule = createLoggerModule();
 const pluginHostEmitter = new MockNativeEventEmitter();
 
 const pluginHostModule = {
+  // Unit tests model a fully wired native render host. Production bridges must
+  // expose the same explicit signal before JS advertises plugin capability.
+  runtimeReady: true,
   queryAvailablePlugins: async () => [],
   instantiatePlugin: async () => ({
     instanceId: 'mock-instance',
@@ -553,17 +563,26 @@ export class NativeEventEmitter extends MockNativeEventEmitter {
 }
 
 export const TurboModuleRegistry = {
+  get: <T>(name: string): T | null => (NativeModules[name] as T) ?? null,
   getEnforcing: <T>(name: string): T => NativeModules[name] as T,
 };
 
-export const Platform: { OS: 'ios' | 'android' | 'macos'; Version: number } = {
+export const Platform: {
+  OS: 'ios' | 'android' | 'macos';
+  Version: number;
+  select: <T>(specifics: Record<string, T | undefined>) => T | undefined;
+} = {
   OS: 'ios',
   Version: 17,
+  select: <T>(specifics: Record<string, T | undefined>): T | undefined =>
+    specifics[Platform.OS] ?? specifics.native ?? specifics.default,
 };
 
 export const PermissionsAndroid = {
   PERMISSIONS: {
-    WRITE_EXTERNAL_STORAGE: 'android.permission.WRITE_EXTERNAL_STORAGE',
+    ACCESS_FINE_LOCATION: 'android.permission.ACCESS_FINE_LOCATION',
+    ACCESS_COARSE_LOCATION: 'android.permission.ACCESS_COARSE_LOCATION',
+    NEARBY_WIFI_DEVICES: 'android.permission.NEARBY_WIFI_DEVICES',
   },
   RESULTS: {
     GRANTED: 'granted',
@@ -571,6 +590,8 @@ export const PermissionsAndroid = {
   },
   check: async () => true,
   request: async () => 'granted',
+  requestMultiple: async (permissions: string[]) =>
+    Object.fromEntries(permissions.map((permission) => [permission, 'granted'])),
 };
 
 export type TurboModule = unknown;

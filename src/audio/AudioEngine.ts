@@ -1,3 +1,5 @@
+import { Buffer } from 'buffer';
+
 import { NativeAudioEngine, isNativeModuleAvailable } from './NativeAudioEngine';
 import { AutomationLane, publishAutomationLane, ClockSyncService } from './Automation';
 
@@ -63,10 +65,21 @@ const normalizeChannelPayload = (payload: ChannelPayload): NormalizedChannel => 
     if (!(payload instanceof Float32Array)) {
       throw new Error('channelData typed views must be Float32Array (Float32 PCM)');
     }
+    if (isArrayBufferPayload(payload.buffer)) {
+      return {
+        buffer: payload.buffer,
+        byteOffset: payload.byteOffset,
+        byteLength: payload.byteLength,
+      };
+    }
+    // RN 0.81 types ArrayBufferView buffers as ArrayBufferLike, which can be a
+    // SharedArrayBuffer. Native bridge payloads require an owned ArrayBuffer.
+    const owned = new Uint8Array(payload.byteLength);
+    owned.set(new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength));
     return {
-      buffer: payload.buffer,
-      byteOffset: payload.byteOffset,
-      byteLength: payload.byteLength,
+      buffer: owned.buffer,
+      byteOffset: 0,
+      byteLength: owned.byteLength,
     };
   }
   if (isNodeBufferLike(payload)) {
@@ -107,6 +120,7 @@ export type RenderDiagnostics = {
   xruns: number;
   lastRenderDurationMicros: number;
   clipBufferBytes: number;
+  initialized?: boolean;
 };
 
 export class AudioEngine {
@@ -150,11 +164,20 @@ export class AudioEngine {
       return;
     }
 
-    await Promise.all(
-      nodes.map((node) =>
-        NativeAudioEngine.addNode(node.id, node.type, node.options ?? {}),
-      ),
-    );
+    const addedNodeIds: string[] = [];
+    try {
+      // Native graph mutation is ordered so a failed batch can be rolled back
+      // deterministically instead of leaving an unknown Promise.all prefix.
+      for (const node of nodes) {
+        await NativeAudioEngine.addNode(node.id, node.type, node.options ?? {});
+        addedNodeIds.push(node.id);
+      }
+    } catch (error) {
+      await Promise.allSettled(
+        addedNodeIds.reverse().map((nodeId) => NativeAudioEngine.removeNode(nodeId)),
+      );
+      throw error;
+    }
   }
 
   public async connect(source: string, destination: string): Promise<void> {
@@ -214,7 +237,9 @@ export class AudioEngine {
       diagnostics === null ||
       !Number.isFinite(diagnostics.xruns) ||
       !Number.isFinite(diagnostics.lastRenderDurationMicros) ||
-      !Number.isFinite(diagnostics.clipBufferBytes)
+      !Number.isFinite(diagnostics.clipBufferBytes) ||
+      (diagnostics.initialized !== undefined &&
+        typeof diagnostics.initialized !== 'boolean')
     ) {
       throw new Error('AudioEngine returned invalid diagnostics payload');
     }
@@ -276,7 +301,7 @@ export class AudioEngine {
           `channelData[${index}] byteLength ${contiguousBuffer.byteLength} is insufficient for ${frames} frames`,
         );
       }
-      return contiguousBuffer;
+      return Buffer.from(new Uint8Array(contiguousBuffer)).toString('base64');
     });
     await NativeAudioEngine.registerClipBuffer(
       bufferKey,
@@ -299,7 +324,9 @@ export class AudioEngine {
       return;
     }
 
-    await Promise.all(nodeIds.map((nodeId) => NativeAudioEngine.removeNode(nodeId)));
+    for (const nodeId of nodeIds) {
+      await NativeAudioEngine.removeNode(nodeId);
+    }
   }
 }
 

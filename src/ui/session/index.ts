@@ -8,8 +8,13 @@ export type {
   SessionTransportView,
 } from './types';
 export { buildTracks, buildTransport } from './selectors';
-export { SessionStoryProvider, SessionAppProvider } from './fixtures';
+export { SessionStoryProvider } from './fixtures';
+export { SessionAppProvider } from './SessionAppProvider';
 export { useTransportControls } from './useTransportControls';
+export { useProjectedTransport } from './useProjectedTransport';
+export { createSessionActions } from './session-actions';
+export type { AddTrackOptions, SessionActions } from './session-actions';
+export { useSessionActions } from './useSessionActions';
 export {
   createDemoSessionEnvironment,
   createPassiveSessionEnvironment,

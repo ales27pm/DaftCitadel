@@ -1,0 +1,335 @@
+import React from 'react';
+import TestRenderer, { act } from 'react-test-renderer';
+import { NativeModules, Platform } from 'react-native';
+
+import {
+  NativeAudioUnavailableError,
+  PassiveAudioEngineBridge,
+  type SessionEnvironment,
+} from '../environment';
+import { SessionAppProvider } from '../SessionAppProvider';
+import { useSessionViewModel } from '../SessionViewModelProvider';
+import { InMemorySessionStorageAdapter, SessionManager } from '../../../session';
+import { demoSession } from '../../../session/fixtures/demoSession';
+import * as environmentModule from '../environment';
+
+const setDevFlag = (value: boolean) => {
+  Object.defineProperty(globalThis, '__DEV__', {
+    value,
+    configurable: true,
+    writable: true,
+  });
+};
+
+describe('SessionAppProvider', () => {
+  const originalDev = Boolean((globalThis as { __DEV__?: boolean }).__DEV__);
+  const originalPlatform = Platform.OS;
+  const originalNodeEnv = process.env.NODE_ENV;
+  const originalNativeBridgeFlag = process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE;
+
+  beforeEach(() => {
+    delete process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE;
+  });
+
+  const createDeferred = <T,>() => {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return {
+      promise,
+      resolve,
+      reject,
+    };
+  };
+
+  const createTestEnvironment = async (
+    sessionId: string,
+  ): Promise<SessionEnvironment> => {
+    const storage = new InMemorySessionStorageAdapter();
+    await storage.initialize();
+    const audioBridge = new PassiveAudioEngineBridge();
+    const manager = new SessionManager(storage, audioBridge);
+    await manager.createSession({ ...demoSession, id: sessionId });
+    return {
+      manager,
+      audioBridge,
+      sessionId,
+      dispose: jest.fn(),
+    };
+  };
+
+  afterEach(() => {
+    jest.resetAllMocks();
+    Platform.OS = originalPlatform;
+    setDevFlag(originalDev);
+    process.env.NODE_ENV = originalNodeEnv;
+    if (originalNativeBridgeFlag === undefined) {
+      delete process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE;
+    } else {
+      process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE = originalNativeBridgeFlag;
+    }
+  });
+
+  const renderWithConsumer = async () => {
+    let status: string | undefined;
+    let name: string | undefined;
+
+    const Consumer = () => {
+      const viewModel = useSessionViewModel();
+      status = viewModel.status;
+      name = viewModel.sessionName;
+      return null;
+    };
+
+    let renderer: TestRenderer.ReactTestRenderer;
+    await act(async () => {
+      renderer = TestRenderer.create(
+        React.createElement(
+          SessionAppProvider,
+          null,
+          React.createElement(Consumer, null),
+        ),
+      );
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    return { renderer: renderer!, status, name };
+  };
+
+  it('bootstraps the production environment on mobile release builds', async () => {
+    setDevFlag(false);
+    Platform.OS = 'ios';
+    const environment = await createTestEnvironment('prod-session');
+    const productionSpy = jest
+      .spyOn(environmentModule, 'createProductionSessionEnvironment')
+      .mockResolvedValue(environment);
+    const passiveSpy = jest
+      .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+      .mockImplementation(() => {
+        throw new Error('Passive environment should not be used');
+      });
+
+    const { status, name } = await renderWithConsumer();
+
+    expect(productionSpy).toHaveBeenCalledTimes(1);
+    expect(passiveSpy).not.toHaveBeenCalled();
+    expect(status).toBe('ready');
+    expect(name).toBe('Demo Performance');
+  });
+
+  it('keeps the Jest runtime passive by default', async () => {
+    setDevFlag(true);
+    Platform.OS = 'ios';
+    const passiveEnvironment = await createTestEnvironment('dev-session');
+    const passiveSpy = jest
+      .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+      .mockResolvedValue(passiveEnvironment);
+    const productionSpy = jest
+      .spyOn(environmentModule, 'createProductionSessionEnvironment')
+      .mockImplementation(() => {
+        throw new Error('Production environment should not be initialised');
+      });
+
+    const { status, name } = await renderWithConsumer();
+
+    expect(passiveSpy).toHaveBeenCalledTimes(1);
+    expect(productionSpy).not.toHaveBeenCalled();
+    expect(status).toBe('ready');
+    expect(name).toBe('Demo Performance');
+  });
+
+  it('uses the production bridge by default in a custom mobile dev client', async () => {
+    setDevFlag(true);
+    process.env.NODE_ENV = 'development';
+    Platform.OS = 'android';
+    const environment = await createTestEnvironment('native-dev-default-session');
+    const productionSpy = jest
+      .spyOn(environmentModule, 'createProductionSessionEnvironment')
+      .mockResolvedValue(environment);
+    const passiveSpy = jest
+      .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+      .mockImplementation(() => {
+        throw new Error('Passive environment should not be used');
+      });
+
+    const { status } = await renderWithConsumer();
+
+    expect(productionSpy).toHaveBeenCalledTimes(1);
+    expect(passiveSpy).not.toHaveBeenCalled();
+    expect(status).toBe('ready');
+  });
+
+  it('keeps Expo Go passive when the local audio module is absent', async () => {
+    setDevFlag(true);
+    process.env.NODE_ENV = 'development';
+    Platform.OS = 'ios';
+    const modules = NativeModules as Record<string, unknown>;
+    const originalAudioModule = modules.AudioEngineModule;
+    delete modules.AudioEngineModule;
+
+    try {
+      const passiveEnvironment = await createTestEnvironment('expo-go-session');
+      const passiveSpy = jest
+        .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+        .mockResolvedValue(passiveEnvironment);
+      const productionSpy = jest.spyOn(
+        environmentModule,
+        'createProductionSessionEnvironment',
+      );
+      const { status } = await renderWithConsumer();
+
+      expect(productionSpy).not.toHaveBeenCalled();
+      expect(passiveSpy).toHaveBeenCalledTimes(1);
+      expect(status).toBe('ready');
+    } finally {
+      modules.AudioEngineModule = originalAudioModule;
+    }
+  });
+
+  it('allows native audio to be disabled explicitly in a custom dev client', async () => {
+    setDevFlag(true);
+    process.env.NODE_ENV = 'development';
+    Platform.OS = 'android';
+    process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE = 'false';
+    const environment = await createTestEnvironment('native-dev-disabled-session');
+    const passiveSpy = jest
+      .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+      .mockResolvedValue(environment);
+    const productionSpy = jest.spyOn(
+      environmentModule,
+      'createProductionSessionEnvironment',
+    );
+
+    const { status } = await renderWithConsumer();
+
+    expect(passiveSpy).toHaveBeenCalledTimes(1);
+    expect(productionSpy).not.toHaveBeenCalled();
+    expect(status).toBe('ready');
+  });
+
+  it('uses the production bridge in a custom mobile dev build when opted in', async () => {
+    setDevFlag(true);
+    Platform.OS = 'android';
+    process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE = 'true';
+    const environment = await createTestEnvironment('native-dev-session');
+    const productionSpy = jest
+      .spyOn(environmentModule, 'createProductionSessionEnvironment')
+      .mockResolvedValue(environment);
+    const passiveSpy = jest
+      .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+      .mockImplementation(() => {
+        throw new Error('Passive environment should not be used');
+      });
+
+    const { status } = await renderWithConsumer();
+
+    expect(productionSpy).toHaveBeenCalledTimes(1);
+    expect(passiveSpy).not.toHaveBeenCalled();
+    expect(status).toBe('ready');
+  });
+
+  it('keeps web passive even when the native bridge flag is enabled', async () => {
+    setDevFlag(true);
+    Platform.OS = 'web';
+    process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE = 'true';
+    const environment = await createTestEnvironment('web-dev-session');
+    const passiveSpy = jest
+      .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+      .mockResolvedValue(environment);
+    const productionSpy = jest
+      .spyOn(environmentModule, 'createProductionSessionEnvironment')
+      .mockImplementation(() => {
+        throw new Error('Production environment should not be used on web');
+      });
+
+    const { status } = await renderWithConsumer();
+
+    expect(passiveSpy).toHaveBeenCalledTimes(1);
+    expect(productionSpy).not.toHaveBeenCalled();
+    expect(status).toBe('ready');
+  });
+
+  it('falls back to passive environment when native audio is unavailable', async () => {
+    setDevFlag(false);
+    Platform.OS = 'android';
+    const fallbackEnvironment = await createTestEnvironment('fallback-session');
+    const passiveSpy = jest
+      .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+      .mockResolvedValue(fallbackEnvironment);
+    const productionSpy = jest
+      .spyOn(environmentModule, 'createProductionSessionEnvironment')
+      .mockRejectedValue(new NativeAudioUnavailableError('Audio unavailable'));
+
+    const { status, name } = await renderWithConsumer();
+
+    expect(productionSpy).toHaveBeenCalledTimes(1);
+    expect(passiveSpy).toHaveBeenCalledTimes(1);
+    expect(status).toBe('ready');
+    expect(name).toBe('Demo Performance');
+  });
+
+  it('disposes the active environment when the provider unmounts', async () => {
+    setDevFlag(true);
+    Platform.OS = 'ios';
+    const environment = await createTestEnvironment('teardown-session');
+    const dispose = jest.fn().mockResolvedValue(undefined);
+    environment.dispose = dispose;
+    jest
+      .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+      .mockResolvedValue(environment);
+
+    const { renderer } = await renderWithConsumer();
+
+    await act(async () => {
+      renderer.unmount();
+      await Promise.resolve();
+    });
+
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs the end-session system when bootstrap resolves after unmount', async () => {
+    setDevFlag(true);
+    Platform.OS = 'ios';
+    const environment = await createTestEnvironment('cancelled-session');
+    const deferred = createDeferred<SessionEnvironment>();
+    const disposeSpy = jest
+      .spyOn(environmentModule, 'disposeSessionEnvironment')
+      .mockImplementation(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    const passiveSpy = jest
+      .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+      .mockReturnValue(deferred.promise);
+    const productionSpy = jest
+      .spyOn(environmentModule, 'createProductionSessionEnvironment')
+      .mockImplementation(() => {
+        throw new Error('Production environment should not be initialised');
+      });
+
+    let renderer: TestRenderer.ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = TestRenderer.create(React.createElement(SessionAppProvider, null, null));
+      await Promise.resolve();
+    });
+
+    expect(renderer).not.toBeNull();
+
+    await act(async () => {
+      renderer!.unmount();
+    });
+
+    await act(async () => {
+      deferred.resolve(environment);
+      await Promise.resolve();
+    });
+
+    expect(productionSpy).not.toHaveBeenCalled();
+    expect(passiveSpy).toHaveBeenCalledTimes(1);
+    expect(disposeSpy).toHaveBeenCalledWith(environment, 'app session environment');
+  });
+});

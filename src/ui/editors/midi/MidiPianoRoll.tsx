@@ -1,19 +1,13 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   ScrollView,
   StyleProp,
   View,
   ViewStyle,
   useWindowDimensions,
 } from 'react-native';
-import Animated, {
-  runOnJS,
-  useAnimatedReaction,
-  useAnimatedScrollHandler,
-  useDerivedValue,
-  useSharedValue,
-} from 'react-native-reanimated';
-import type { AnimatedScrollEvent } from 'react-native-reanimated';
 
 import { ThemeIntent, mapIntentToColor } from '../../design-system/tokens';
 import { useTheme } from '../../design-system/theme';
@@ -52,17 +46,26 @@ export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
 }) => {
   const theme = useTheme();
   const { width: viewportWidth } = useWindowDimensions();
-  const scrollX = useSharedValue(0);
   const [gridState, setGridState] = useState<GridMetrics>({
     startBeat: 0,
-    visibleBeats: 0,
+    visibleBeats: Math.ceil(Math.max(1, viewportWidth || 0) / pixelsPerBeat),
   });
 
-  const onScroll = useAnimatedScrollHandler({
-    onScroll: (event: AnimatedScrollEvent) => {
-      scrollX.value = event.contentOffset.x;
+  const onScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const nextState = {
+        startBeat: Math.floor(event.nativeEvent.contentOffset.x / pixelsPerBeat),
+        visibleBeats: Math.ceil(Math.max(1, viewportWidth || 0) / pixelsPerBeat),
+      };
+      setGridState((current) =>
+        current.startBeat === nextState.startBeat &&
+        current.visibleBeats === nextState.visibleBeats
+          ? current
+          : nextState,
+      );
     },
-  });
+    [pixelsPerBeat, viewportWidth],
+  );
 
   const noteHeight = useMemo(() => Math.max(18, Math.floor(720 / KEY_COUNT)), []);
 
@@ -71,26 +74,12 @@ export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
     [pixelsPerBeat, totalBars],
   );
 
-  const gridLines = useDerivedValue<GridMetrics>(() => {
-    const windowWidth = Math.max(1, viewportWidth || 0);
-    const visibleBeats = Math.ceil(windowWidth / pixelsPerBeat);
-    const startBeat = Math.floor(scrollX.value / pixelsPerBeat);
-    return { visibleBeats, startBeat };
+  useEffect(() => {
+    const visibleBeats = Math.ceil(Math.max(1, viewportWidth || 0) / pixelsPerBeat);
+    setGridState((current) =>
+      current.visibleBeats === visibleBeats ? current : { ...current, visibleBeats },
+    );
   }, [pixelsPerBeat, viewportWidth]);
-
-  useAnimatedReaction<GridMetrics>(
-    () => gridLines.value,
-    (value, previous) => {
-      if (
-        !previous ||
-        value.startBeat !== previous.startBeat ||
-        value.visibleBeats !== previous.visibleBeats
-      ) {
-        runOnJS(setGridState)(value);
-      }
-    },
-    [gridLines],
-  );
 
   const horizontalContentStyle = useMemo(() => ({ width: contentWidth }), [contentWidth]);
   const verticalContentStyle = useMemo(
@@ -137,7 +126,7 @@ export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
   );
 
   return (
-    <Animated.ScrollView
+    <ScrollView
       horizontal
       nestedScrollEnabled
       onScroll={onScroll}
@@ -182,6 +171,6 @@ export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
           })}
         </View>
       </ScrollView>
-    </Animated.ScrollView>
+    </ScrollView>
   );
 };

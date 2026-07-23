@@ -1,0 +1,6 @@
+# Internal agent working dirs
+backups/
+context/
+reports/
+tmp/
+.lock

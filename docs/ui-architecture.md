@@ -42,6 +42,7 @@ This document summarizes the UI architecture added for the Daft Citadel interfac
 
 - `useAdaptiveLayout` centralizes breakpoint detection (`phone`, `tablet`, `desktop`) and queries `AccessibilityInfo` for screen-reader and reduced-motion settings.
 - Screens log diagnostics (see `SettingsScreen`) and adjust paddings/arrangements based on the returned `breakpoint`.
+- User preferences use Expo SQLite's local-storage polyfill through `src/ui/settings/`, providing synchronous, subscribed settings on iOS, Android, and web. Performance scene launching consumes the persisted auto-play and diagnostics preferences.
 - When adding adaptive UI behaviors, read `prefersReducedMotion` before triggering complex animations, and offer alternative flows for `screenReaderEnabled` users.
 
 ## Platform Considerations

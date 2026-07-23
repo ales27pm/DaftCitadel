@@ -10,8 +10,12 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 get_filename_component(PROJECT_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../../.." ABSOLUTE)
 set(AUDIO_ENGINE_DIR "${PROJECT_ROOT}/audio-engine")
 
+if(NOT EXISTS "${AUDIO_ENGINE_DIR}/CMakeLists.txt")
+    message(FATAL_ERROR "Unable to resolve audio-engine from JNI source directory: ${CMAKE_CURRENT_LIST_DIR}")
+endif()
+
 set(DAFT_AUDIO_ENGINE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-add_subdirectory(${AUDIO_ENGINE_DIR} ${CMAKE_BINARY_DIR}/audio-engine)
+add_subdirectory("${AUDIO_ENGINE_DIR}" "${CMAKE_BINARY_DIR}/audio-engine")
 
 add_library(daft_audio_engine_module SHARED
     AudioEngineModule.cpp
@@ -20,9 +24,10 @@ add_library(daft_audio_engine_module SHARED
 
 target_include_directories(daft_audio_engine_module
     PRIVATE
-        ${AUDIO_ENGINE_DIR}/include
-        ${AUDIO_ENGINE_DIR}/platform/android
-        ${AUDIO_ENGINE_DIR}/platform/common
+        "${PROJECT_ROOT}"
+        "${AUDIO_ENGINE_DIR}/include"
+        "${AUDIO_ENGINE_DIR}/platform/android"
+        "${AUDIO_ENGINE_DIR}/platform/common"
 )
 
 target_link_libraries(daft_audio_engine_module

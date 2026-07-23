@@ -1,24 +1,19 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { LayoutChangeEvent, StyleProp, ViewStyle } from 'react-native';
+import React, { useEffect, useMemo, useRef } from 'react';
+import { StyleProp, ViewStyle } from 'react-native';
 import { Canvas, Path, Skia } from '@shopify/react-native-skia';
-import {
-  SharedValue,
-  useSharedValue,
-  useAnimatedReaction,
-  runOnJS,
-} from 'react-native-reanimated';
 
 import { useTheme } from '../../design-system';
 import { buildWaveformPath } from './path';
 
-const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
+const clamp01 = (value: number): number =>
+  Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
 
 export interface WaveformEditorProps {
   waveform: Float32Array;
   width: number;
   height?: number;
   style?: StyleProp<ViewStyle>;
-  playhead?: SharedValue<number>;
+  playhead?: number;
   onPlayheadChange?: (position: number) => void;
 }
 
@@ -31,42 +26,20 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
   onPlayheadChange,
 }) => {
   const theme = useTheme();
-  const [canvasWidth, setCanvasWidth] = useState(width);
-  const internalPlayhead = useSharedValue(0);
-  const playheadValue = playhead ?? internalPlayhead;
+  const canvasWidth = Number.isFinite(width) ? Math.max(1, width) : 1;
+  const progress = clamp01(playhead ?? 0);
+  const lastReportedProgress = useRef(progress);
   const canvasStyle = useMemo(
     () => [{ width: canvasWidth, height }, style],
     [canvasWidth, height, style],
   );
-  const [progress, setProgress] = useState<number>(() =>
-    clamp01(playheadValue.value ?? 0),
-  );
 
   useEffect(() => {
-    if (Number.isFinite(width) && width > 0 && width !== canvasWidth) {
-      setCanvasWidth(width);
+    if (lastReportedProgress.current !== progress) {
+      lastReportedProgress.current = progress;
+      onPlayheadChange?.(progress);
     }
-  }, [canvasWidth, width]);
-
-  useAnimatedReaction<number>(
-    () => clamp01(playheadValue.value),
-    (value, previous) => {
-      if (value !== previous) {
-        runOnJS(setProgress)(value);
-        if (onPlayheadChange) {
-          runOnJS(onPlayheadChange)(value);
-        }
-      }
-    },
-    [onPlayheadChange],
-  );
-
-  const handleLayout = (event: LayoutChangeEvent) => {
-    const newWidth = event.nativeEvent.layout.width;
-    if (Number.isFinite(newWidth) && newWidth > 0 && newWidth !== canvasWidth) {
-      setCanvasWidth(newWidth);
-    }
-  };
+  }, [onPlayheadChange, progress]);
 
   const progressPath = useMemo(() => {
     const x = progress * canvasWidth;
@@ -82,7 +55,7 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
   );
 
   return (
-    <Canvas style={canvasStyle} onLayout={handleLayout}>
+    <Canvas style={canvasStyle}>
       <Path
         path={waveformPath}
         color={theme.colors.waveform}

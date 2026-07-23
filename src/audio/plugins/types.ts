@@ -44,6 +44,7 @@ export interface PluginInstanceOptions {
   sandboxIdentifier?: string;
   automationBindings?: PluginAutomationBinding[];
   cpuBudgetPercent?: number;
+  restartToken?: string;
 }
 
 export interface PluginInstanceHandle {

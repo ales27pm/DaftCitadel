@@ -1,4 +1,5 @@
 import Foundation
+import CoreLocation
 import os.log
 import React
 #if canImport(CoreWLAN)
@@ -12,15 +13,21 @@ import NetworkExtension
 #endif
 
 @objc(CollabNetworkDiagnostics)
-final class CollabNetworkDiagnostics: RCTEventEmitter {
+final class CollabNetworkDiagnostics: RCTEventEmitter, CLLocationManagerDelegate {
   private enum DiagnosticsError: LocalizedError {
     case interfaceUnavailable
+    case locationPermissionDenied
+    case locationServicesUnavailable
     case wifiInformationUnavailable
 
     var errorDescription: String? {
       switch self {
       case .interfaceUnavailable:
         return "Wi-Fi interface unavailable"
+      case .locationPermissionDenied:
+        return "Location permission is required for Wi-Fi diagnostics."
+      case .locationServicesUnavailable:
+        return "Location services are unavailable for Wi-Fi diagnostics."
       case .wifiInformationUnavailable:
         return "Wi-Fi metrics are unavailable on this device."
       }
@@ -32,6 +39,10 @@ final class CollabNetworkDiagnostics: RCTEventEmitter {
   private let metricsQueue = DispatchQueue(label: "com.daftcitadel.collab.diagnostics")
   private var pollTimer: DispatchSourceTimer?
   private var pollInterval: TimeInterval = 5.0
+  private var monitoringRequested = false
+  // These authorization fields are accessed only from the main queue.
+  private var locationManager: CLLocationManager?
+  private var locationAuthorizationCompletions: [(Result<Void, Error>) -> Void] = []
 
   override static func requiresMainQueueSetup() -> Bool {
     return false
@@ -82,28 +93,59 @@ final class CollabNetworkDiagnostics: RCTEventEmitter {
     _ resolve: @escaping RCTPromiseResolveBlock,
     rejecter reject: @escaping RCTPromiseRejectBlock
   ) {
-    metricsQueue.async {
-      do {
-        let metrics = try self.fetchMetrics()
-        resolve(metrics)
-      } catch {
+    ensureLocationAuthorization { result in
+      switch result {
+      case .success:
+        self.metricsQueue.async {
+          do {
+            let metrics = try self.fetchMetrics()
+            resolve(metrics)
+          } catch {
+            self.logFailure(error: error)
+            reject("collab_metrics_unavailable", error.localizedDescription, error)
+          }
+        }
+      case .failure(let error):
         self.logFailure(error: error)
-        reject("collab_metrics_unavailable", error.localizedDescription, error)
+        reject("collab_metrics_permission_denied", error.localizedDescription, error)
       }
     }
   }
 
   private func startMonitoring() {
     metricsQueue.async {
+      self.monitoringRequested = true
       guard self.pollTimer == nil else {
         return
       }
-      self.scheduleTimerLocked()
+      self.ensureLocationAuthorization { result in
+        self.metricsQueue.async {
+          guard self.monitoringRequested, self.pollTimer == nil else {
+            return
+          }
+          switch result {
+          case .success:
+            self.scheduleTimerLocked()
+          case .failure(let error):
+            self.logFailure(error: error)
+            DispatchQueue.main.async {
+              self.sendEvent(
+                withName: self.eventName,
+                body: [
+                  "error": error.localizedDescription,
+                  "timestamp": Date().timeIntervalSince1970 * 1000.0,
+                ]
+              )
+            }
+          }
+        }
+      }
     }
   }
 
   private func stopMonitoring() {
     metricsQueue.async {
+      self.monitoringRequested = false
       self.pollTimer?.cancel()
       self.pollTimer = nil
     }
@@ -154,6 +196,56 @@ final class CollabNetworkDiagnostics: RCTEventEmitter {
     )
   }
 
+  private func ensureLocationAuthorization(
+    completion: @escaping (Result<Void, Error>) -> Void
+  ) {
+    DispatchQueue.main.async {
+      guard CLLocationManager.locationServicesEnabled() else {
+        completion(.failure(DiagnosticsError.locationServicesUnavailable))
+        return
+      }
+
+      let manager = self.locationManager ?? CLLocationManager()
+      switch manager.authorizationStatus {
+      case .authorizedAlways, .authorizedWhenInUse:
+        completion(.success(()))
+      case .denied, .restricted:
+        completion(.failure(DiagnosticsError.locationPermissionDenied))
+      case .notDetermined:
+        self.locationAuthorizationCompletions.append(completion)
+        if self.locationManager == nil {
+          self.locationManager = manager
+          manager.delegate = self
+          manager.requestWhenInUseAuthorization()
+        }
+      @unknown default:
+        completion(.failure(DiagnosticsError.locationPermissionDenied))
+      }
+    }
+  }
+
+  func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+    guard manager.authorizationStatus != .notDetermined else {
+      return
+    }
+
+    let result: Result<Void, Error>
+    switch manager.authorizationStatus {
+    case .authorizedAlways, .authorizedWhenInUse:
+      result = .success(())
+    case .denied, .restricted, .notDetermined:
+      result = .failure(DiagnosticsError.locationPermissionDenied)
+    @unknown default:
+      result = .failure(DiagnosticsError.locationPermissionDenied)
+    }
+
+    let completions = locationAuthorizationCompletions
+    locationAuthorizationCompletions.removeAll()
+    manager.delegate = nil
+    locationManager = nil
+    completions.forEach { $0(result) }
+  }
+
   private func fetchMetrics() throws -> [String: Any] {
 #if targetEnvironment(macCatalyst)
     return try fetchMetricsUsingCoreWLAN()
@@ -168,9 +260,8 @@ final class CollabNetworkDiagnostics: RCTEventEmitter {
 
 #if canImport(CoreWLAN)
   private func fetchMetricsUsingCoreWLAN() throws -> [String: Any] {
-    guard let client = CWWiFiClient.shared(),
-          let interface = client.interface()
-    else {
+    let client = CWWiFiClient.shared()
+    guard let interface = client.interface() else {
       throw DiagnosticsError.interfaceUnavailable
     }
 
@@ -205,8 +296,9 @@ final class CollabNetworkDiagnostics: RCTEventEmitter {
     }
 
     if #available(macOS 11.0, macCatalyst 14.0, *) {
-      if let phyMode = interface.activePHYMode()?.rawValue {
-        payload["phyMode"] = phyMode
+      let phyMode = interface.activePHYMode()
+      if phyMode != .modeNone {
+        payload["phyMode"] = phyMode.rawValue
       }
     }
 
@@ -231,20 +323,25 @@ final class CollabNetworkDiagnostics: RCTEventEmitter {
         "timestamp": Date().timeIntervalSince1970 * 1000.0,
       ]
 
-      if let interfaceName = network.interfaceName, !interfaceName.isEmpty {
-        payload["interface"] = interfaceName
-      }
-      if let ssid = network.ssid, !ssid.isEmpty {
+      let ssid = network.ssid
+      if !ssid.isEmpty {
         payload["ssid"] = ssid
       }
-      if let bssid = network.bssid, !bssid.isEmpty {
+      let bssid = network.bssid
+      if !bssid.isEmpty {
         payload["bssid"] = bssid
+      }
+      let signalStrength = network.signalStrength
+      if signalStrength.isFinite {
+        payload["signalStrength"] = min(1.0, max(0.0, signalStrength))
       }
 
       result = .success(payload)
     }
 
-    semaphore.wait()
+    guard semaphore.wait(timeout: .now() + .seconds(5)) == .success else {
+      throw DiagnosticsError.wifiInformationUnavailable
+    }
 
     switch result {
     case .success(let payload):

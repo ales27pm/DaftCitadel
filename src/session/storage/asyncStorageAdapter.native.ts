@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { deserializeSession, serializeSession } from '../../session/serialization';
 import { Session } from '../models';
+import { AsyncMutex, deepClone } from '../util';
 import {
   RevisionConflictError,
   SessionRecord,
@@ -16,7 +17,23 @@ type StoredSessionRecord = {
   updatedAt: string;
 };
 
+type StoredTransactionJournal = {
+  version: 1;
+  originals: Array<[sessionId: string, raw: string | null]>;
+};
+
 const SESSION_KEY_PREFIX = 'session';
+const namespaceMutexes = new Map<string, AsyncMutex>();
+
+const mutexForPrefix = (prefix: string): AsyncMutex => {
+  const existing = namespaceMutexes.get(prefix);
+  if (existing) {
+    return existing;
+  }
+  const mutex = new AsyncMutex();
+  namespaceMutexes.set(prefix, mutex);
+  return mutex;
+};
 
 const validateSessionId = (sessionId: string) => {
   if (!sessionId || /[\\/]/.test(sessionId)) {
@@ -58,10 +75,14 @@ const parseRecord = (raw: string | null): StoredSessionRecord | null => {
 
 export class AsyncStorageSessionStorageAdapter implements SessionStorageAdapter {
   private readonly prefix: string;
+  private readonly journalKey: string;
+  private readonly mutex: AsyncMutex;
   private initialized = false;
 
   constructor(directory: string) {
     this.prefix = buildPrefix(directory);
+    this.journalKey = `${SESSION_KEY_PREFIX}-transaction:${encodeURIComponent(directory)}`;
+    this.mutex = mutexForPrefix(this.prefix);
   }
 
   async initialize(): Promise<void> {
@@ -83,11 +104,19 @@ export class AsyncStorageSessionStorageAdapter implements SessionStorageAdapter 
     return `${this.prefix}${sessionId}`;
   }
 
-  private async getRecord(sessionId: string): Promise<StoredSessionRecord | null> {
-    await this.initialize();
+  private async runExclusive<T>(operation: () => Promise<T>): Promise<T> {
+    const release = await this.mutex.acquire();
     try {
-      const raw = await AsyncStorage.getItem(this.keyFor(sessionId));
-      return parseRecord(raw);
+      await this.recoverPendingTransaction();
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+
+  private async getRawRecord(sessionId: string): Promise<string | null> {
+    try {
+      return await AsyncStorage.getItem(this.keyFor(sessionId));
     } catch (error) {
       throw new SessionStorageError(
         `Failed to read session: ${(error as Error).message}`,
@@ -95,9 +124,13 @@ export class AsyncStorageSessionStorageAdapter implements SessionStorageAdapter 
     }
   }
 
-  private async setRecord(sessionId: string, record: StoredSessionRecord): Promise<void> {
+  private async getRecord(sessionId: string): Promise<StoredSessionRecord | null> {
+    return parseRecord(await this.getRawRecord(sessionId));
+  }
+
+  private async setRawRecord(sessionId: string, raw: string): Promise<void> {
     try {
-      await AsyncStorage.setItem(this.keyFor(sessionId), JSON.stringify(record));
+      await AsyncStorage.setItem(this.keyFor(sessionId), raw);
     } catch (error) {
       throw new SessionStorageError(
         `Failed to write session: ${(error as Error).message}`,
@@ -105,43 +138,11 @@ export class AsyncStorageSessionStorageAdapter implements SessionStorageAdapter 
     }
   }
 
-  async read(sessionId: string): Promise<Session | null> {
-    const record = await this.getRecord(sessionId);
-    if (!record) {
-      return null;
-    }
-    try {
-      return deserializeSession(record.payload);
-    } catch (error) {
-      throw new SessionStorageError(
-        `Failed to deserialize session: ${(error as Error).message}`,
-      );
-    }
+  private async setRecord(sessionId: string, record: StoredSessionRecord): Promise<void> {
+    await this.setRawRecord(sessionId, JSON.stringify(record));
   }
 
-  async write(session: Session, options?: WriteOptions): Promise<void> {
-    const existing = await this.getRecord(session.id);
-    if (options?.expectedRevision !== undefined) {
-      const currentRevision = existing?.revision ?? 0;
-      if (currentRevision !== options.expectedRevision) {
-        throw new RevisionConflictError(
-          session.id,
-          options.expectedRevision,
-          currentRevision,
-        );
-      }
-    }
-
-    const record: StoredSessionRecord = {
-      payload: serializeSession(session),
-      revision: session.revision,
-      updatedAt: new Date().toISOString(),
-    };
-    await this.setRecord(session.id, record);
-  }
-
-  async delete(sessionId: string): Promise<void> {
-    await this.initialize();
+  private async removeRecord(sessionId: string): Promise<void> {
     try {
       await AsyncStorage.removeItem(this.keyFor(sessionId));
     } catch (error) {
@@ -151,31 +152,156 @@ export class AsyncStorageSessionStorageAdapter implements SessionStorageAdapter 
     }
   }
 
-  async list(): Promise<SessionRecord[]> {
-    await this.initialize();
+  private async writeJournal(
+    originals: ReadonlyMap<string, string | null>,
+  ): Promise<void> {
+    const journal: StoredTransactionJournal = {
+      version: 1,
+      originals: Array.from(originals),
+    };
     try {
-      const keys = await AsyncStorage.getAllKeys();
-      const sessionKeys = keys.filter((key: string) => key.startsWith(this.prefix));
-      if (sessionKeys.length === 0) {
-        return [];
-      }
-      const entries = await AsyncStorage.multiGet(sessionKeys);
-      const records: SessionRecord[] = [];
-      for (const [, value] of entries) {
-        const record = parseRecord(value);
-        if (record) {
-          records.push({
-            updatedAt: record.updatedAt,
-            session: deserializeSession(record.payload),
-          });
-        }
-      }
-      return records;
+      await AsyncStorage.setItem(this.journalKey, JSON.stringify(journal));
     } catch (error) {
       throw new SessionStorageError(
-        `Failed to list sessions: ${(error as Error).message}`,
+        `Failed to prepare the AsyncStorage transaction journal: ${(error as Error).message}`,
       );
     }
+  }
+
+  private async recoverPendingTransaction(): Promise<void> {
+    let rawJournal: string | null;
+    try {
+      rawJournal = await AsyncStorage.getItem(this.journalKey);
+    } catch (error) {
+      throw new SessionStorageError(
+        `Failed to read the AsyncStorage transaction journal: ${(error as Error).message}`,
+      );
+    }
+    if (!rawJournal) {
+      return;
+    }
+
+    let journal: StoredTransactionJournal;
+    try {
+      const parsed = JSON.parse(rawJournal) as Partial<StoredTransactionJournal>;
+      if (parsed.version !== 1 || !Array.isArray(parsed.originals)) {
+        throw new Error('Invalid journal shape');
+      }
+      journal = parsed as StoredTransactionJournal;
+    } catch (error) {
+      throw new SessionStorageError(
+        `Failed to parse the AsyncStorage transaction journal: ${(error as Error).message}`,
+      );
+    }
+
+    const restoreErrors: Error[] = [];
+    for (const entry of journal.originals) {
+      try {
+        if (
+          !Array.isArray(entry) ||
+          entry.length !== 2 ||
+          typeof entry[0] !== 'string' ||
+          (entry[1] !== null && typeof entry[1] !== 'string')
+        ) {
+          throw new Error('Invalid journal entry');
+        }
+        const [sessionId, raw] = entry;
+        if (raw === null) {
+          await this.removeRecord(sessionId);
+        } else {
+          await this.setRawRecord(sessionId, raw);
+        }
+      } catch (error) {
+        restoreErrors.push(error as Error);
+      }
+    }
+    if (restoreErrors.length > 0) {
+      throw new SessionStorageError(
+        `Failed to recover the AsyncStorage transaction journal: ${restoreErrors.map(({ message }) => message).join('; ')}`,
+      );
+    }
+    try {
+      await AsyncStorage.removeItem(this.journalKey);
+    } catch (error) {
+      throw new SessionStorageError(
+        `Failed to clear the AsyncStorage transaction journal: ${(error as Error).message}`,
+      );
+    }
+  }
+
+  async read(sessionId: string): Promise<Session | null> {
+    await this.initialize();
+    return this.runExclusive(async () => {
+      const record = await this.getRecord(sessionId);
+      if (!record) {
+        return null;
+      }
+      try {
+        return deserializeSession(record.payload);
+      } catch (error) {
+        throw new SessionStorageError(
+          `Failed to deserialize session: ${(error as Error).message}`,
+        );
+      }
+    });
+  }
+
+  async write(session: Session, options?: WriteOptions): Promise<void> {
+    await this.initialize();
+    await this.runExclusive(async () => {
+      const existing = await this.getRecord(session.id);
+      if (options?.expectedRevision !== undefined) {
+        const currentRevision = existing?.revision ?? 0;
+        if (currentRevision !== options.expectedRevision) {
+          throw new RevisionConflictError(
+            session.id,
+            options.expectedRevision,
+            currentRevision,
+          );
+        }
+      }
+
+      const record: StoredSessionRecord = {
+        payload: serializeSession(session),
+        revision: session.revision,
+        updatedAt: new Date().toISOString(),
+      };
+      await this.setRecord(session.id, record);
+    });
+  }
+
+  async delete(sessionId: string): Promise<void> {
+    await this.initialize();
+    await this.runExclusive(() => this.removeRecord(sessionId));
+  }
+
+  async list(): Promise<SessionRecord[]> {
+    await this.initialize();
+    return this.runExclusive(async () => {
+      try {
+        const keys = await AsyncStorage.getAllKeys();
+        const sessionKeys = keys.filter((key: string) => key.startsWith(this.prefix));
+        if (sessionKeys.length === 0) {
+          return [];
+        }
+        const entries = await AsyncStorage.multiGet(sessionKeys);
+        const records: SessionRecord[] = [];
+        for (const [, value] of entries) {
+          const record = parseRecord(value);
+          if (record) {
+            records.push({
+              updatedAt: record.updatedAt,
+              session: deserializeSession(record.payload),
+            });
+          }
+        }
+        return records;
+      } catch (error) {
+        throw new SessionStorageError(
+          `Failed to list sessions: ${(error as Error).message}`,
+        );
+      }
+    });
   }
 
   async beginTransaction(): Promise<SessionStorageTransaction> {
@@ -187,18 +313,76 @@ export class AsyncStorageSessionStorageAdapter implements SessionStorageAdapter 
     return this.read(sessionId);
   }
 
-  async writeDirect(session: Session): Promise<void> {
-    await this.write(session, { expectedRevision: undefined });
-  }
+  async commitTransaction(
+    writes: ReadonlyMap<string, StagedWrite>,
+    deletions: ReadonlySet<string>,
+  ): Promise<void> {
+    await this.initialize();
+    await this.runExclusive(async () => {
+      const targetIds = new Set([...writes.keys(), ...deletions]);
+      const originals = new Map<string, string | null>();
+      const prepared = new Map<string, string>();
 
-  async deleteDirect(sessionId: string): Promise<void> {
-    await this.delete(sessionId);
+      for (const [sessionId, staged] of writes) {
+        const existing = await this.getRecord(sessionId);
+        if (
+          staged.expectedRevision !== undefined &&
+          (existing?.revision ?? 0) !== staged.expectedRevision
+        ) {
+          throw new RevisionConflictError(
+            sessionId,
+            staged.expectedRevision,
+            existing?.revision ?? 0,
+          );
+        }
+        prepared.set(
+          sessionId,
+          JSON.stringify({
+            payload: serializeSession(staged.session),
+            revision: staged.session.revision,
+            updatedAt: new Date().toISOString(),
+          } satisfies StoredSessionRecord),
+        );
+      }
+
+      for (const sessionId of targetIds) {
+        originals.set(sessionId, await this.getRawRecord(sessionId));
+      }
+
+      await this.writeJournal(originals);
+
+      try {
+        for (const [sessionId, raw] of prepared) {
+          await this.setRawRecord(sessionId, raw);
+        }
+        for (const sessionId of deletions) {
+          await this.removeRecord(sessionId);
+        }
+        await AsyncStorage.removeItem(this.journalKey);
+      } catch (error) {
+        try {
+          await this.recoverPendingTransaction();
+        } catch (rollbackError) {
+          throw new SessionStorageError(
+            `Transaction failed (${(error as Error).message}) and rollback could not restore AsyncStorage: ${(rollbackError as Error).message}`,
+          );
+        }
+        if (
+          error instanceof RevisionConflictError ||
+          error instanceof SessionStorageError
+        ) {
+          throw error;
+        }
+        throw new SessionStorageError((error as Error).message);
+      }
+    });
   }
 }
 
 interface StagedWrite {
   session: Session;
   expectedRevision?: number;
+  originalRevision: number;
 }
 
 class AsyncStorageSessionStorageTransaction implements SessionStorageTransaction {
@@ -218,6 +402,7 @@ class AsyncStorageSessionStorageTransaction implements SessionStorageTransaction
     this.assertOpen();
     const previous = this.writes.get(session.id);
     const baseline = previous?.session ?? (await this.adapter.readDirect(session.id));
+    const originalRevision = previous?.originalRevision ?? baseline?.revision ?? 0;
     if (options?.expectedRevision !== undefined) {
       const currentRevision = baseline?.revision ?? 0;
       if (currentRevision !== options.expectedRevision) {
@@ -229,10 +414,13 @@ class AsyncStorageSessionStorageTransaction implements SessionStorageTransaction
       }
     }
     const expectedRevision =
-      options?.expectedRevision !== undefined
-        ? options.expectedRevision
-        : previous?.expectedRevision;
-    this.writes.set(session.id, { session, expectedRevision });
+      previous?.expectedRevision ??
+      (options?.expectedRevision !== undefined ? originalRevision : undefined);
+    this.writes.set(session.id, {
+      session: deepClone(session),
+      expectedRevision,
+      originalRevision,
+    });
     this.deletions.delete(session.id);
   }
 
@@ -242,7 +430,8 @@ class AsyncStorageSessionStorageTransaction implements SessionStorageTransaction
       return null;
     }
     if (this.writes.has(sessionId)) {
-      return this.writes.get(sessionId)?.session ?? null;
+      const session = this.writes.get(sessionId)?.session;
+      return session ? deepClone(session) : null;
     }
     return this.adapter.readDirect(sessionId);
   }
@@ -255,14 +444,7 @@ class AsyncStorageSessionStorageTransaction implements SessionStorageTransaction
 
   async commit(): Promise<void> {
     this.assertOpen();
-    for (const [, staged] of this.writes.entries()) {
-      await this.adapter.write(staged.session, {
-        expectedRevision: staged.expectedRevision,
-      });
-    }
-    for (const sessionId of this.deletions) {
-      await this.adapter.delete(sessionId);
-    }
+    await this.adapter.commitTransaction(this.writes, this.deletions);
     this.closed = true;
   }
 

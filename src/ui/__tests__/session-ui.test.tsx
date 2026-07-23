@@ -29,9 +29,9 @@ describe('Session-integrated screens', () => {
   it('renders arrangement data from the active session', async () => {
     const tree = await renderWithProviders(React.createElement(ArrangementScreen));
     const serialized = JSON.stringify(tree.toJSON());
-    expect(serialized).toContain('Waveform Overview');
+    expect(serialized).toContain('Timeline overview');
     expect(serialized).toContain('Drums');
-    expect(serialized).toContain('MIDI Piano Roll');
+    expect(serialized).toContain('Tracks');
   });
 
   it('renders mixer diagnostics and track meters', async () => {
@@ -39,13 +39,13 @@ describe('Session-integrated screens', () => {
     const serialized = JSON.stringify(tree.toJSON());
     expect(serialized).toContain('Audio Engine Diagnostics');
     expect(serialized).toContain('Mixer');
-    expect(serialized).toMatch(/Render load/);
+    expect(serialized).toContain('LEVEL ESTIMATE');
   });
 
   it('renders performance transport and scenes', async () => {
     const tree = await renderWithProviders(React.createElement(PerformanceScreen));
     const serialized = JSON.stringify(tree.toJSON());
-    expect(serialized).toContain('Scene Launcher');
+    expect(serialized).toContain('Scenes');
     expect(serialized).toContain('Pad Bed');
     expect(serialized).toMatch(/BPM/);
   });

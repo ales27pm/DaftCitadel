@@ -1,0 +1,26 @@
+# Changelog Agents
+
+<!-- managed-by: agents_sync.py v1 -->
+
+## Overview
+
+Chronological log of notable automation and documentation updates related to Daft Citadel agents. Use this to understand when requirements changed, which scripts were touched, and what follow-up actions were taken.
+
+## Entries
+
+- 2025-11-03 — Hardened `npm run manage:agents` to re-run `agents_sync.py plan` after applying updates, fail if drift persists, and expose sandbox overrides plus Jest integration coverage to keep automation reliable. Follow-up: extend the stub coverage to mimic common contributor failure modes (missing docs, permission errors).
+- 2025-11-04 — Recorded the transport selector purity work across ROADMAP and session docs after adopting [`useProjectedTransport`](../src/ui/session/useProjectedTransport.ts) for playhead projection. Follow-up: expand PerformanceScreen docs once diagnostics HUD sparklines land.
+- 2025-11-02 — Wired `npm run manage:agents` to invoke `agents_sync.py apply --no-commit` so ROADMAP, architecture docs, and AGENTS.md stay synchronized without ad-hoc edits. Follow-up: monitor CI logs to ensure the new `--fail-on-change` plan check surfaces drift clearly.
+- 2025-11-02 — Recorded the SessionAudioBridge resilience upgrade across ROADMAP, ARCHITECTURE, and plugin-hosting docs so contributors know descriptor failures now retain audio. Follow-up: audit PluginHost native bindings to ensure retry tokens surface the refreshed instance identifiers.
+- 2025-11-02 — Documented SessionAppProvider runtime selection and fallback behaviour across README, ROADMAP, and architecture guides after landing the live session bootstrap. Follow-up: verify SessionAudioBridge diff workstreams update docs when completed.
+- 2025-11-01 — Rebuilt agent documentation to replace placeholder templates with actionable workflows covering roadmap, architecture, and contribution processes. Follow-up: ensure future automation runs preserve curated sections.
+- 2025-11-01 — Corrected architecture/roadmap guidance to match current TypeScript modules and updated the agent workflow documentation for `plan --json`. Follow-up: audit remaining docs for stale references during the next automation sweep.
+- 2025-10-22 — Added diagnostics best practices to repository-wide AGENTS.md to clarify ethical packet capture expectations. Follow-up: notify security review board of the new guidance.
+- 2025-10-05 — Introduced mandatory `npm run manage:agents` check in CI after recurring drift incidents. Follow-up: retroactively update onboarding docs with the new requirement.
+- 2025-09-17 — Scoped `src/audio/AGENTS.md` to enforce TurboModule parity between platforms. Follow-up: audit Android bridge for missing feature flags.
+
+## Maintenance Tips
+
+- Keep entries immutable; append new bullet points rather than editing history.
+- Reference relevant pull requests or incident tickets when available to aid future investigations.
+- Verify that each entry notes any scripts or directories impacted so contributors know where to focus when regressions occur.
