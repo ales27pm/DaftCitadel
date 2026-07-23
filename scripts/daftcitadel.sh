@@ -1975,6 +1975,146 @@ if $ENABLE_EXPANDED_SYNTHS; then
             log "[INFO] Manual download remains available: https://github.com/DISTRHO/DISTRHO-Ports"
         fi
     fi
+    rm -rf /tmp/vital /tmp/vital.zip
+
+    # TAL-Vocoder via DISTRHO Ports (Ubuntu-packaged build)
+    log "[PLUGINS] Installing DISTRHO Ports collection for TAL instruments"
+    apt_install_available dpf-plugins
+    if [[ -d /usr/lib/lv2/TAL-Vocoder-2.lv2 || -d /usr/lib/vst3/TAL-Vocoder-2.vst3 ]]; then
+        log "[PLUGINS] TAL-Vocoder deployed via DISTRHO Ports packages"
+    else
+        log "[WARN] TAL-Vocoder files not detected after DISTRHO Ports install; verify package contents"
+        log "[INFO] Manual download remains available: https://github.com/DISTRHO/DISTRHO-Ports"
+    fi
+
+    # Tyrell N6
+    if [[ ! -d /usr/lib/vst3/TyrellN6.vst3 ]]; then
+        TYRELL_PRIMARY_URL="https://u-he.com/downloads/TyrellN6/TyrellN6_Linux.tar.xz"
+        TYRELL_MIRRORS=(
+            "https://dl.u-he.com/downloads/TyrellN6/TyrellN6_Linux.tar.xz"
+            "https://uhe-dl.b-cdn.net/TyrellN6_307_Linux.tar.xz"
+        )
+        TYRELL_ARCHIVE=$(mktemp /tmp/tyrell.XXXXXX.tar.xz)
+        glibc_version=$(ldd --version | head -n 1 | awk '{print $NF}')
+        if version_lt "$glibc_version" "2.28"; then
+            log "[WARN] Tyrell N6 requires glibc 2.28+, detected $glibc_version"
+        fi
+        tyrell_installed=false
+        TYRELL_SOURCES=("$TYRELL_PRIMARY_URL" "${TYRELL_MIRRORS[@]}")
+        for mirror in "${TYRELL_SOURCES[@]}"; do
+            if dl "$mirror" "$TYRELL_ARCHIVE"; then
+                if tar -tJf "$TYRELL_ARCHIVE" >/dev/null 2>&1; then
+                    TYRELL_WORKDIR=$(mktemp -d /tmp/tyrell.XXXXXX)
+                    if tar -xJf "$TYRELL_ARCHIVE" -C "$TYRELL_WORKDIR" >/dev/null 2>&1; then
+                        TYRELL_SRC=$(find "$TYRELL_WORKDIR" -maxdepth 2 -type d -name 'TyrellN6' | head -n 1)
+                        if [[ -n "$TYRELL_SRC" && -f "$TYRELL_SRC/TyrellN6.64.so" ]]; then
+                            install -d -m 755 /opt/u-he
+                            rm -rf /opt/u-he/TyrellN6
+                            cp -a "$TYRELL_SRC" /opt/u-he/TyrellN6
+                            chown -R root:root /opt/u-he/TyrellN6
+
+                            install -d -m 755 /usr/lib/vst
+                            install -m 755 "$TYRELL_SRC/TyrellN6.64.so" /usr/lib/vst/TyrellN6.64.so
+
+                            install -d -m 755 /usr/lib/vst3/TyrellN6.vst3/Contents/x86_64-linux
+                            install -m 755 "$TYRELL_SRC/TyrellN6.64.so" /usr/lib/vst3/TyrellN6.vst3/Contents/x86_64-linux/TyrellN6.so
+                            install -d -m 755 /usr/lib/vst3/TyrellN6.vst3/Contents/Resources/Documentation
+
+                            TYRELL_DOC=$(find "$TYRELL_SRC" -maxdepth 1 -type f -iname '*user guide.pdf' | head -n 1)
+                            if [[ -n "$TYRELL_DOC" ]]; then
+                                install -m 644 "$TYRELL_DOC" \
+                                    "/usr/lib/vst3/TyrellN6.vst3/Contents/Resources/Documentation/$(basename "$TYRELL_DOC")"
+                            fi
+                            TYRELL_LICENSE=$(find "$TYRELL_SRC" -maxdepth 1 -type f -iname 'license.txt' | head -n 1)
+                            if [[ -n "$TYRELL_LICENSE" ]]; then
+                                install -m 644 "$TYRELL_LICENSE" \
+                                    "/usr/lib/vst3/TyrellN6.vst3/Contents/Resources/Documentation/$(basename "$TYRELL_LICENSE")"
+                            fi
+
+                            install -d -m 755 /usr/lib/clap
+                            install -m 755 "$TYRELL_SRC/TyrellN6.64.so" /usr/lib/clap/TyrellN6.clap
+
+                            as_user "mkdir -p ~/.u-he ~/.vst ~/.vst3 ~/.clap"
+                            as_user "ln -snf /opt/u-he/TyrellN6 ~/.u-he/TyrellN6"
+                            as_user "ln -snf /usr/lib/vst/TyrellN6.64.so ~/.vst/TyrellN6.64.so"
+                            as_user "ln -snf /usr/lib/vst3/TyrellN6.vst3 ~/.vst3/TyrellN6.vst3"
+                            as_user "ln -snf /usr/lib/clap/TyrellN6.clap ~/.clap/TyrellN6.clap"
+
+                            tyrell_installed=true
+                            log "[PLUGINS] Installed Tyrell N6 from $mirror"
+                            rm -rf "$TYRELL_WORKDIR"
+                            break
+                        else
+                            log "[WARN] Tyrell N6 payload from $mirror missing expected content"
+                        fi
+                    else
+                        log "[WARN] Unable to extract Tyrell N6 archive from $mirror"
+                    fi
+                    rm -rf "${TYRELL_WORKDIR:-}"
+                else
+                    log "[WARN] Tyrell N6 archive from $mirror is not a valid tarball"
+                fi
+            else
+                log "[WARN] Failed to download Tyrell N6 from $mirror"
+            fi
+            rm -f "$TYRELL_ARCHIVE"
+        done
+        rm -f "$TYRELL_ARCHIVE"
+        if ! $tyrell_installed; then
+            log "[WARN] Tyrell N6 download unavailable; skipping automated install"
+            log "[INFO] Manual download available from https://u-he.com/products/tyrelln6/"
+        fi
+    fi
+
+    # OB-Xd
+    obxd_target_version="2.17.0"
+    obxd_current_version=""
+    if [[ -f /usr/lib/vst3/OB-Xd.vst3/Contents/Resources/moduleinfo.json ]]; then
+        obxd_current_version=$(json_get_field \
+            /usr/lib/vst3/OB-Xd.vst3/Contents/Resources/moduleinfo.json \
+            "Version")
+    fi
+
+    if [[ "$obxd_current_version" != "$obxd_target_version" ]]; then
+        OBXD_ARCHIVE=$(mktemp -t obxd.XXXXXX.zip)
+        OBXD_WORKDIR=$(mktemp -d -t obxd.XXXXXX)
+        download_and_verify \
+            "https://github.com/reales/OB-Xd/releases/download/2.17/Obxd217FreeLinux.zip" \
+            "$OBXD_ARCHIVE" \
+            "c70c01aba78c499e67ccfa1916204a4ddcff9982ec17ca33a95e5ed605cc9472"
+        if unzip -q "$OBXD_ARCHIVE" -d "$OBXD_WORKDIR"; then
+            if [[ -d "$OBXD_WORKDIR/OB-Xd.vst3" && -f "$OBXD_WORKDIR/OB-Xd.so" ]]; then
+                install -d -m 755 /usr/lib/vst3
+                rm -rf /usr/lib/vst3/OB-Xd.vst3
+                cp -a "$OBXD_WORKDIR/OB-Xd.vst3" /usr/lib/vst3/
+                chmod -R go-w /usr/lib/vst3/OB-Xd.vst3
+
+                install -d -m 755 /usr/lib/vst
+                install -m 755 "$OBXD_WORKDIR/OB-Xd.so" /usr/lib/vst/OB-Xd.so
+
+                install -d -m 755 /opt/discoDSP
+                rm -rf /opt/discoDSP/OB-Xd
+                if [[ -d "$OBXD_WORKDIR/discoDSP/OB-Xd" ]]; then
+                    cp -a "$OBXD_WORKDIR/discoDSP/OB-Xd" /opt/discoDSP/
+                    chmod -R go-w /opt/discoDSP/OB-Xd
+                fi
+
+                install -d -m 755 /usr/share/doc/obxd
+                if [[ -f "$OBXD_WORKDIR/OB-Xd Manual.pdf" ]]; then
+                    install -m 644 "$OBXD_WORKDIR/OB-Xd Manual.pdf" \
+                        "/usr/share/doc/obxd/OB-Xd Manual.pdf"
+                fi
+                if [[ -f "$OBXD_WORKDIR/License.txt" ]]; then
+                    install -m 644 "$OBXD_WORKDIR/License.txt" \
+                        /usr/share/doc/obxd/License.txt
+                fi
+
+                as_user "mkdir -p ~/.vst ~/.vst3 ~/Documents ~/Documents/discoDSP"
+                as_user "ln -snf /usr/lib/vst/OB-Xd.so ~/.vst/OB-Xd.so"
+                as_user "ln -snf /usr/lib/vst3/OB-Xd.vst3 ~/.vst3/OB-Xd.vst3"
+                if [[ -d /opt/discoDSP/OB-Xd ]]; then
+                    as_user "ln -snf /opt/discoDSP/OB-Xd ~/Documents/discoDSP/OB-Xd"
+                fi
 
     run_step "Install Tyrell N6" install_tyrell_n6
     register_plugin_hint \
