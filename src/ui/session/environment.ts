@@ -1,4 +1,4 @@
-import { NativeModules, Platform } from 'react-native';
+import { AppState, NativeModules, Platform, type AppStateStatus } from 'react-native';
 import { useEffect } from 'react';
 
 import {
@@ -938,7 +938,27 @@ export const useSessionEnvironmentLifecycle = (
       return undefined;
     }
     let disposed = false;
+    let appState: AppStateStatus = AppState.currentState;
+    environment.audioBridge.setInstrumentInputEnabled?.(appState === 'active');
+    const appStateSubscription = AppState.addEventListener('change', (nextState) => {
+      const leftForeground = appState === 'active' && nextState !== 'active';
+      appState = nextState;
+      environment.audioBridge.setInstrumentInputEnabled?.(nextState === 'active');
+      if (!leftForeground) {
+        return;
+      }
+      const stopTransport = environment.audioBridge.stopTransport;
+      if (typeof stopTransport !== 'function') {
+        return;
+      }
+      void Promise.resolve()
+        .then(() => stopTransport.call(environment.audioBridge))
+        .catch((error) => {
+          console.error(`Failed to stop transport while backgrounding ${context}`, error);
+        });
+    });
     return () => {
+      appStateSubscription.remove();
       if (disposed) {
         return;
       }

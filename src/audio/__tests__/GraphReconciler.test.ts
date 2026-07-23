@@ -63,6 +63,33 @@ describe('GraphReconciler', () => {
     );
   });
 
+  it('keeps Juno nodes in place when only realtime parameters change', async () => {
+    const { reconciler, configureNodes, removeNodes } = createHarness();
+    const initial = {
+      id: 'juno',
+      type: 'juno106',
+      options: { cutoffHz: 1200, resonance: 0.2 },
+    };
+    const changed = {
+      ...initial,
+      options: { cutoffHz: 3200, resonance: 0.7 },
+    };
+    const nodes = new Map([[initial.id, initial]]);
+
+    await reconciler.apply(nodes, new Set());
+    configureNodes.mockClear();
+    removeNodes.mockClear();
+
+    expect(reconciler.hasChanges(new Map([[changed.id, changed]]), new Set())).toBe(
+      false,
+    );
+    const result = await reconciler.apply(new Map([[changed.id, changed]]), new Set());
+
+    expect(removeNodes).not.toHaveBeenCalled();
+    expect(configureNodes).not.toHaveBeenCalled();
+    expect([...result.replacedNodeIds]).toEqual([]);
+  });
+
   it('reports nodes removed without replacement', async () => {
     const { reconciler, removeNodes } = createHarness();
     const node = { id: 'track:output', type: 'trackOutput' };

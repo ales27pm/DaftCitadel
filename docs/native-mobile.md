@@ -42,6 +42,20 @@ cannot exercise `AudioEngineModule`, `AudioSampleLoaderModule`, or
 `EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE=false` only when a custom client must
 be forced into passive mode for debugging.
 
+The native audio graph also includes the persisted Juno-106 instrument, live
+MIDI/parameter bridge, and hard-silence lifecycle handling. See the
+[`Juno-106 instrument guide`](juno106-instrument.md) for its architecture,
+Performance workflow, realtime bounds, presets/SysEx APIs, and focused
+validation commands.
+
+The current development client also exposes native transport loops through
+`setTransportLoop(startFrame, endFrame, enabled)`. Enabled ranges are half-open
+(`[startFrame, endFrame)`) and wrap inside the portable render callback, including
+when a device buffer crosses the end frame. Persisted Juno timeline events in the
+range are replayed on every pass; transient live-touch MIDI is canceled at a wrap
+so gestures cannot replay as phantom notes. This capability requires rebuilding
+the development client after native changes and is not available in Expo Go.
+
 ## Native module layout
 
 - `modules/daft-citadel-native/android/build.gradle` adds the existing Kotlin,

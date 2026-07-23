@@ -90,11 +90,11 @@ export interface ThemeTokens {
 export const lightTokens: ThemeTokens = {
   scheme: 'light',
   colors: {
-    background: '#05070C',
-    surface: '#0B1018',
-    surfaceVariant: '#111926',
-    surfaceElevated: '#182334',
-    surfacePressed: '#223047',
+    background: '#0C1620',
+    surface: '#111C2A',
+    surfaceVariant: '#162030',
+    surfaceElevated: '#162030',
+    surfacePressed: '#182334',
     border: '#273446',
     textPrimary: '#F4F7FB',
     textSecondary: '#A9B5C5',
@@ -121,7 +121,7 @@ export const lightTokens: ThemeTokens = {
   radii: {
     sm: 8,
     md: 10,
-    lg: 14,
+    lg: 12,
     pill: 999,
   },
   elevation: {
@@ -134,7 +134,7 @@ export const lightTokens: ThemeTokens = {
     overlay: 0.64,
   },
   typography: {
-    fontFamily: 'System',
+    fontFamily: 'Inter_400Regular',
     weights: {
       regular: '400',
       medium: '600',

@@ -77,6 +77,12 @@ internal class AudioTrackDeviceDriver(
   }
 
   @Synchronized
+  fun isRunning(): Boolean =
+    running.get() &&
+      audioTrack?.playState == AudioTrack.PLAYSTATE_PLAYING &&
+      renderThread?.isAlive == true
+
+  @Synchronized
   fun stop() {
     running.set(false)
     val track = audioTrack

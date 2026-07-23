@@ -2,6 +2,7 @@ import { AudioEngine, OUTPUT_BUS } from '../AudioEngine';
 import { NativeAudioEngine } from '../NativeAudioEngine';
 import { NativeModules } from 'react-native';
 import { AutomationLane, ClockSyncService } from '../Automation';
+import { JunoParameterId, MidiEventType } from '../Instruments';
 
 type AudioEngineMockState = {
   initialized: boolean;
@@ -21,6 +22,15 @@ type AudioEngineMockState = {
     clipBufferBytes: number;
   };
   automations: Map<string, Map<string, { frame: number; value: number }[]>>;
+  midiEvents: Map<
+    string,
+    Array<{ frame: number; type: number; channel: number; data1: number; data2: number }>
+  >;
+  instrumentParameters: Map<string, Map<number, number>>;
+  scheduledInstrumentParameters: Map<
+    string,
+    Array<{ frame: number; parameterId: number; value: number }>
+  >;
   clipBuffers: Map<
     string,
     {
@@ -54,6 +64,9 @@ describe('NativeAudioEngine TurboModule', () => {
     state.diagnostics.xruns = 0;
     state.diagnostics.lastRenderDurationMicros = 0;
     state.automations.clear();
+    state.midiEvents.clear();
+    state.instrumentParameters.clear();
+    state.scheduledInstrumentParameters.clear();
     state.clipBuffers.clear();
     state.transport.frame = 0;
     state.transport.startFrame = 0;
@@ -373,6 +386,145 @@ describe('NativeAudioEngine TurboModule', () => {
       await engine.releaseClipBuffer('ephemeral');
       diagnostics = await NativeAudioEngine.getRenderDiagnostics();
       expect(diagnostics.clipBufferBytes).toBe(0);
+    });
+  });
+
+  describe('Instrument control', () => {
+    let engine: AudioEngine;
+
+    beforeEach(async () => {
+      engine = new AudioEngine({ sampleRate: 48000, framesPerBuffer: 256, bpm: 120 });
+      await engine.init();
+      await engine.configureNodes([{ id: 'juno', type: 'juno106' }]);
+    });
+
+    afterEach(async () => {
+      await engine.dispose();
+    });
+
+    it('forwards live MIDI relative to the current transport frame', async () => {
+      await engine.locateTransport(1024);
+      await engine.sendMidiEvent(' juno ', {
+        type: MidiEventType.NoteOn,
+        channel: 0,
+        data1: 60,
+        data2: 100,
+        frameOffset: 12,
+      });
+
+      expect(resolveMockState().midiEvents.get('juno')).toEqual([
+        {
+          frame: 1036,
+          type: MidiEventType.NoteOn,
+          channel: 0,
+          data1: 60,
+          data2: 100,
+        },
+      ]);
+    });
+
+    it('sorts and atomically replaces a scheduled MIDI batch', async () => {
+      await engine.sendMidiEvents('juno', [
+        {
+          frame: 240,
+          type: MidiEventType.NoteOff,
+          channel: 0,
+          data1: 64,
+          data2: 0,
+        },
+        {
+          frame: 120,
+          type: MidiEventType.NoteOn,
+          channel: 0,
+          data1: 64,
+          data2: 96,
+        },
+      ]);
+      await engine.sendMidiEvents(
+        'juno',
+        [
+          {
+            frame: 480,
+            type: MidiEventType.NoteOn,
+            channel: 0,
+            data1: 67,
+            data2: 110,
+          },
+        ],
+        { replace: true },
+      );
+
+      expect(resolveMockState().midiEvents.get('juno')).toEqual([
+        {
+          frame: 480,
+          type: MidiEventType.NoteOn,
+          channel: 0,
+          data1: 67,
+          data2: 110,
+        },
+      ]);
+    });
+
+    it('sets numeric instrument parameters and sends all-notes-off', async () => {
+      await engine.setInstrumentParameter('juno', {
+        parameterId: JunoParameterId.CutoffHz,
+        value: 1800,
+      });
+      await engine.sendMidiEvent('juno', {
+        type: MidiEventType.NoteOn,
+        channel: 0,
+        data1: 60,
+        data2: 100,
+      });
+      await engine.allNotesOff('juno');
+
+      expect(
+        resolveMockState()
+          .instrumentParameters.get('juno')
+          ?.get(JunoParameterId.CutoffHz),
+      ).toBe(1800);
+      expect(resolveMockState().midiEvents.get('juno')).toEqual([]);
+    });
+
+    it('sorts and replaces sample-accurate instrument parameter automation', async () => {
+      await engine.sendInstrumentParameters(
+        'juno',
+        [
+          { frame: 512, parameterId: JunoParameterId.CutoffHz, value: 2400 },
+          { frame: 128, parameterId: JunoParameterId.CutoffHz, value: 600 },
+        ],
+        { replace: true },
+      );
+
+      expect(resolveMockState().scheduledInstrumentParameters.get('juno')).toEqual([
+        { frame: 128, parameterId: JunoParameterId.CutoffHz, value: 600 },
+        { frame: 512, parameterId: JunoParameterId.CutoffHz, value: 2400 },
+      ]);
+    });
+
+    it('rejects malformed realtime payloads before crossing the bridge', async () => {
+      await expect(
+        engine.sendMidiEvent('juno', {
+          type: MidiEventType.NoteOn,
+          channel: 0,
+          data1: 128,
+          data2: 100,
+        }),
+      ).rejects.toThrow('MIDI data1');
+      await expect(
+        engine.sendMidiEvents('juno', [
+          {
+            frame: -1,
+            type: MidiEventType.NoteOn,
+            channel: 0,
+            data1: 60,
+            data2: 100,
+          },
+        ]),
+      ).rejects.toThrow('event frame');
+      await expect(
+        engine.setInstrumentParameter('juno', { parameterId: 0, value: 1 }),
+      ).rejects.toThrow('parameterId');
     });
   });
 
@@ -1062,6 +1214,18 @@ describe('NativeAudioEngine TurboModule', () => {
     it('rejects invalid transport seek positions', async () => {
       await expect(engine.locateTransport(-1)).rejects.toThrow(
         'frame must be non-negative',
+      );
+    });
+
+    it('rejects invalid enabled transport-loop ranges before native dispatch', async () => {
+      await expect(engine.setTransportLoop(512, 512, true)).rejects.toThrow(
+        'startFrame to be less than endFrame',
+      );
+      await expect(engine.setTransportLoop(1024, 512, true)).rejects.toThrow(
+        'startFrame to be less than endFrame',
+      );
+      await expect(engine.setTransportLoop(-1, 512, false)).rejects.toThrow(
+        'startFrame must be a non-negative safe integer',
       );
     });
 

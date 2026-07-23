@@ -16,6 +16,7 @@
 
 #include "audio_engine/DSPNode.h"
 #include "audio_engine/PluginNode.h"
+#include "audio_engine/instruments/juno/Juno106Node.h"
 
 #if defined(__ANDROID__)
 #include "../android/AudioEngineBridge.h"
@@ -136,6 +137,32 @@ inline std::unique_ptr<daft::audio::DSPNode> CreateNode(const std::string& type,
   if (normalized == "sine" || normalized == "sineoscillator" || normalized == "oscillator") {
     auto node = std::make_unique<daft::audio::SineOscillatorNode>();
     detail::applyParameters(*node, options, {});
+    return node;
+  }
+  if (normalized == "juno" || normalized == "juno106" ||
+      normalized == "instrument:juno106") {
+    std::size_t polyphony = daft::audio::juno::JunoDSPEngine::kDefaultPolyphony;
+    if (const auto value = options.numericValue("polyphony")) {
+      if (!std::isfinite(*value) || *value < 1.0 || std::floor(*value) != *value ||
+          *value > static_cast<double>(daft::audio::juno::JunoDSPEngine::kMaximumPolyphony)) {
+        error = "juno106 polyphony must be an integer within the supported range";
+        return nullptr;
+      }
+      polyphony = static_cast<std::size_t>(*value);
+    }
+
+    std::uint32_t maximumFrames = daft::audio::juno::Juno106Node::kDefaultMaximumFramesPerBlock;
+    if (const auto value = options.numericValue("maximumframesperblock")) {
+      if (!std::isfinite(*value) || *value < 1.0 || std::floor(*value) != *value ||
+          *value > static_cast<double>(daft::audio::juno::JunoDSPEngine::kMaximumFramesPerBlock)) {
+        error = "juno106 maximumFramesPerBlock must be an integer within the supported range";
+        return nullptr;
+      }
+      maximumFrames = static_cast<std::uint32_t>(*value);
+    }
+
+    auto node = std::make_unique<daft::audio::juno::Juno106Node>(maximumFrames, polyphony);
+    detail::applyParameters(*node, options, {"polyphony", "maximumframesperblock"});
     return node;
   }
   if (normalized == "mixer" || normalized == "mixernode") {

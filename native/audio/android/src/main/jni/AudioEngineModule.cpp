@@ -6,8 +6,10 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "audio-engine/platform/android/AudioEngineBridge.h"
 #include "audio-engine/platform/common/NodeFactory.h"
@@ -188,6 +190,50 @@ NodeOptions ConvertOptions(JNIEnv* env, jobject map) {
   env->DeleteLocalRef(stringClass);
 
   return options;
+}
+
+daft::audio::InstrumentEvent MakeMidiEvent(std::uint64_t frame, jint type,
+                                           jint channel, jint data1, jint data2) {
+  using daft::audio::InstrumentEvent;
+  using daft::audio::InstrumentEventType;
+  if (type < 0 || type > static_cast<jint>(InstrumentEventType::kPolyAftertouch) ||
+      channel < 0 || channel > 15 || data1 < 0 || data1 > 127 || data2 < 0 ||
+      data2 > 127) {
+    throw std::invalid_argument("Invalid MIDI event fields");
+  }
+
+  InstrumentEvent event{};
+  event.frame = frame;
+  event.type = static_cast<InstrumentEventType>(type);
+  event.channel = static_cast<std::uint8_t>(channel);
+  switch (event.type) {
+    case InstrumentEventType::kNoteOn:
+    case InstrumentEventType::kNoteOff:
+    case InstrumentEventType::kControlChange:
+    case InstrumentEventType::kPolyAftertouch:
+      event.data = static_cast<std::uint8_t>(data1);
+      event.value = static_cast<float>(data2) / 127.0F;
+      break;
+    case InstrumentEventType::kPitchBend: {
+      const int encoded = (data2 << 7) | data1;
+      event.value = static_cast<float>(encoded - 8192) / 8192.0F;
+      break;
+    }
+    case InstrumentEventType::kChannelAftertouch:
+      event.value = static_cast<float>(data1) / 127.0F;
+      break;
+    case InstrumentEventType::kParameter:
+    case InstrumentEventType::kAllNotesOff:
+      throw std::invalid_argument("Unsupported MIDI event type");
+  }
+  return event;
+}
+
+void RequireMatchingArrayLength(JNIEnv* env, jsize expected, jarray array,
+                                const char* field) {
+  if (array == nullptr || env->GetArrayLength(array) != expected) {
+    throw std::invalid_argument(std::string(field) + " length must match frames");
+  }
 }
 
 }  // namespace
@@ -422,6 +468,154 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeScheduleAutomation(JNIEnv* en
 }
 
 JNIEXPORT void JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeSendMidiEvent(
+    JNIEnv* env, jobject /*thiz*/, jstring nodeId, jint type, jint channel,
+    jint data1, jint data2, jlong frameOffset) {
+  if (frameOffset < 0) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException",
+                       "frameOffset must be non-negative");
+    return;
+  }
+  try {
+    auto event = MakeMidiEvent(0U, type, channel, data1, data2);
+    AudioEngineBridge::scheduleInstrumentEventFromNow(
+        ToStdString(env, nodeId), event, static_cast<std::uint64_t>(frameOffset));
+  } catch (const std::invalid_argument& ex) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException", ex.what());
+  } catch (const std::exception& ex) {
+    ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeSendMidiEvents(
+    JNIEnv* env, jobject /*thiz*/, jstring nodeId, jlongArray frames,
+    jintArray types, jintArray channels, jintArray data1, jintArray data2,
+    jboolean replace) {
+  try {
+    if (frames == nullptr) {
+      throw std::invalid_argument("frames are required");
+    }
+    const jsize count = env->GetArrayLength(frames);
+    RequireMatchingArrayLength(env, count, types, "types");
+    RequireMatchingArrayLength(env, count, channels, "channels");
+    RequireMatchingArrayLength(env, count, data1, "data1");
+    RequireMatchingArrayLength(env, count, data2, "data2");
+
+    std::vector<jlong> nativeFrames(static_cast<std::size_t>(count));
+    std::vector<jint> nativeTypes(static_cast<std::size_t>(count));
+    std::vector<jint> nativeChannels(static_cast<std::size_t>(count));
+    std::vector<jint> nativeData1(static_cast<std::size_t>(count));
+    std::vector<jint> nativeData2(static_cast<std::size_t>(count));
+    env->GetLongArrayRegion(frames, 0, count, nativeFrames.data());
+    env->GetIntArrayRegion(types, 0, count, nativeTypes.data());
+    env->GetIntArrayRegion(channels, 0, count, nativeChannels.data());
+    env->GetIntArrayRegion(data1, 0, count, nativeData1.data());
+    env->GetIntArrayRegion(data2, 0, count, nativeData2.data());
+    if (env->ExceptionCheck() == JNI_TRUE) {
+      return;
+    }
+
+    std::vector<daft::audio::InstrumentEvent> events;
+    events.reserve(static_cast<std::size_t>(count));
+    for (jsize index = 0; index < count; ++index) {
+      if (nativeFrames[static_cast<std::size_t>(index)] < 0) {
+        throw std::invalid_argument("MIDI event frame must be non-negative");
+      }
+      events.push_back(MakeMidiEvent(
+          static_cast<std::uint64_t>(nativeFrames[static_cast<std::size_t>(index)]),
+          nativeTypes[static_cast<std::size_t>(index)],
+          nativeChannels[static_cast<std::size_t>(index)],
+          nativeData1[static_cast<std::size_t>(index)],
+          nativeData2[static_cast<std::size_t>(index)]));
+    }
+    AudioEngineBridge::scheduleInstrumentEvents(ToStdString(env, nodeId), events,
+                                                 replace == JNI_TRUE);
+  } catch (const std::invalid_argument& ex) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException", ex.what());
+  } catch (const std::exception& ex) {
+    ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeSetInstrumentParameter(
+    JNIEnv* env, jobject /*thiz*/, jstring nodeId, jint parameterId,
+    jdouble value, jlong frameOffset) {
+  if (parameterId <= 0 || parameterId > 65535 || !std::isfinite(value) ||
+      frameOffset < 0) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException",
+                       "Invalid instrument parameter event");
+    return;
+  }
+  try {
+    const daft::audio::InstrumentEvent event{
+        0U, daft::audio::InstrumentEventType::kParameter,
+        static_cast<std::uint16_t>(parameterId), 0U, 0U,
+        static_cast<float>(value)};
+    AudioEngineBridge::scheduleInstrumentEventFromNow(
+        ToStdString(env, nodeId), event, static_cast<std::uint64_t>(frameOffset));
+  } catch (const std::exception& ex) {
+    ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeSendInstrumentParameters(
+    JNIEnv* env, jobject /*thiz*/, jstring nodeId, jlongArray frames,
+    jintArray parameterIds, jdoubleArray values, jboolean replace) {
+  try {
+    if (frames == nullptr) {
+      throw std::invalid_argument("frames are required");
+    }
+    const jsize count = env->GetArrayLength(frames);
+    RequireMatchingArrayLength(env, count, parameterIds, "parameterIds");
+    RequireMatchingArrayLength(env, count, values, "values");
+
+    std::vector<jlong> nativeFrames(static_cast<std::size_t>(count));
+    std::vector<jint> nativeParameterIds(static_cast<std::size_t>(count));
+    std::vector<jdouble> nativeValues(static_cast<std::size_t>(count));
+    env->GetLongArrayRegion(frames, 0, count, nativeFrames.data());
+    env->GetIntArrayRegion(parameterIds, 0, count, nativeParameterIds.data());
+    env->GetDoubleArrayRegion(values, 0, count, nativeValues.data());
+    if (env->ExceptionCheck() == JNI_TRUE) {
+      return;
+    }
+
+    std::vector<daft::audio::InstrumentEvent> events;
+    events.reserve(static_cast<std::size_t>(count));
+    for (jsize index = 0; index < count; ++index) {
+      const auto offset = static_cast<std::size_t>(index);
+      if (nativeFrames[offset] < 0 || nativeParameterIds[offset] <= 0 ||
+          nativeParameterIds[offset] > 65535 || !std::isfinite(nativeValues[offset])) {
+        throw std::invalid_argument("Invalid instrument parameter event");
+      }
+      events.push_back({
+          static_cast<std::uint64_t>(nativeFrames[offset]),
+          daft::audio::InstrumentEventType::kParameter,
+          static_cast<std::uint16_t>(nativeParameterIds[offset]), 0U, 0U,
+          static_cast<float>(nativeValues[offset])});
+    }
+    AudioEngineBridge::scheduleInstrumentEvents(ToStdString(env, nodeId), events,
+                                                 replace == JNI_TRUE);
+  } catch (const std::invalid_argument& ex) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException", ex.what());
+  } catch (const std::exception& ex) {
+    ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeAllNotesOff(
+    JNIEnv* env, jobject /*thiz*/, jstring nodeId) {
+  try {
+    AudioEngineBridge::allNotesOff(ToStdString(env, nodeId));
+  } catch (const std::exception& ex) {
+    ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
+  }
+}
+
+JNIEXPORT void JNICALL
 Java_com_daftcitadel_audio_AudioEngineModule_nativeStartTransport(JNIEnv* env, jobject /*thiz*/) {
   try {
     AudioEngineBridge::startTransport();
@@ -447,6 +641,28 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeLocateTransport(JNIEnv* env, 
   }
   try {
     AudioEngineBridge::locateTransport(static_cast<std::uint64_t>(frame));
+  } catch (const std::exception& ex) {
+    ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeSetTransportLoop(
+    JNIEnv* env, jobject /*thiz*/, jlong startFrame, jlong endFrame,
+    jboolean enabled) {
+  if (startFrame < 0 || endFrame < 0 ||
+      (enabled == JNI_TRUE && startFrame >= endFrame)) {
+    ThrowJavaException(
+        env, "java/lang/IllegalArgumentException",
+        "Enabled transport loop requires non-negative frames and startFrame < endFrame");
+    return;
+  }
+  try {
+    AudioEngineBridge::setTransportLoop(
+        static_cast<std::uint64_t>(startFrame),
+        static_cast<std::uint64_t>(endFrame), enabled == JNI_TRUE);
+  } catch (const std::invalid_argument& ex) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException", ex.what());
   } catch (const std::exception& ex) {
     ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
   }

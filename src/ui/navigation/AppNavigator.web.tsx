@@ -35,11 +35,11 @@ const styles = StyleSheet.create({
     minHeight: 0,
   },
   tabBar: {
-    minHeight: 64,
+    minHeight: 84,
     flexDirection: 'row',
     alignItems: 'stretch',
     justifyContent: 'center',
-    gap: 4,
+    gap: 8,
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderTopWidth: 1,
@@ -50,9 +50,12 @@ const styles = StyleSheet.create({
     maxWidth: 180,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 10,
-    gap: 2,
+    gap: 4,
     paddingHorizontal: 4,
+  },
+  tabLabel: {
+    fontSize: 9,
+    letterSpacing: 1,
   },
 });
 
@@ -67,13 +70,15 @@ const WebTabNavigator: React.FC = () => {
         backgroundColor: theme.colors.surface,
         borderTopColor: theme.colors.border,
       },
-      selectedTab: { backgroundColor: theme.colors.surfaceVariant },
+      root: { backgroundColor: theme.colors.background },
+      selectedLabel: { color: theme.colors.accentPrimary },
+      inactiveLabel: { color: theme.colors.textTertiary },
     }),
     [theme],
   );
 
   return (
-    <View style={[styles.root, { backgroundColor: theme.colors.background }]}>
+    <View style={[styles.root, dynamicStyles.root]}>
       <View style={styles.screen}>
         <ActiveScreen />
       </View>
@@ -84,24 +89,26 @@ const WebTabNavigator: React.FC = () => {
           return (
             <Pressable
               key={tab.name}
+              accessibilityLabel={spec.accessibilityLabel}
               accessibilityRole="tab"
               accessibilityState={{ selected }}
               onPress={() => setActiveTab(tab.name)}
-              style={[styles.tab, selected && dynamicStyles.selectedTab]}
+              style={styles.tab}
             >
               <StudioIcon
-                color={selected ? theme.colors.accentPrimary : theme.colors.textSecondary}
+                color={selected ? theme.colors.accentPrimary : theme.colors.textTertiary}
                 name={spec.icon}
                 size={18}
               />
               <StudioText
                 variant="caption"
-                weight="medium"
-                style={{
-                  color: selected ? theme.colors.textPrimary : theme.colors.textSecondary,
-                }}
+                weight="bold"
+                style={[
+                  styles.tabLabel,
+                  selected ? dynamicStyles.selectedLabel : dynamicStyles.inactiveLabel,
+                ]}
               >
-                {tab.name}
+                {spec.label}
               </StudioText>
             </Pressable>
           );

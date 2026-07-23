@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <exception>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <vector>
@@ -139,6 +140,7 @@ void AudioEngineBridge::startTransport(EngineGeneration generation) {
 void AudioEngineBridge::stopTransport(EngineGeneration generation) {
   std::lock_guard<std::mutex> lock(mutex_);
   requireGenerationLocked(generation);
+  graph_->panicInstruments();
   isPlaying_ = false;
 }
 
@@ -146,6 +148,15 @@ void AudioEngineBridge::locateTransport(EngineGeneration generation, std::uint64
   std::lock_guard<std::mutex> lock(mutex_);
   requireGenerationLocked(generation);
   graph_->locate(frame);
+}
+
+void AudioEngineBridge::setTransportLoop(EngineGeneration generation,
+                                         std::uint64_t startFrame,
+                                         std::uint64_t endFrame,
+                                         bool enabled) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  requireGenerationLocked(generation);
+  graph_->setTransportLoop(startFrame, endFrame, enabled);
 }
 
 AudioEngineBridge::TransportState AudioEngineBridge::getTransportState(
@@ -190,6 +201,39 @@ void AudioEngineBridge::scheduleParameterAutomation(EngineGeneration generation,
   requireGenerationLocked(generation);
   graph_->scheduleAutomation(nodeId,
                              [parameter, value](DSPNode& node) { node.setParameter(parameter, value); }, frame);
+}
+
+void AudioEngineBridge::scheduleInstrumentEventFromNow(
+    EngineGeneration generation, const std::string& nodeId, InstrumentEvent event,
+    std::uint64_t frameOffset) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  requireGenerationLocked(generation);
+  const auto currentFrame = graph_->currentFrame();
+  if (frameOffset > std::numeric_limits<std::uint64_t>::max() - currentFrame) {
+    throw std::out_of_range("Instrument event frame overflow");
+  }
+  if (event.type == InstrumentEventType::kParameter && frameOffset == 0U) {
+    graph_->setInstrumentParameter(nodeId, event.parameter, event.value);
+    return;
+  }
+  event.frame = currentFrame + frameOffset;
+  event.retainAcrossPanic = false;
+  graph_->scheduleInstrumentEvents(nodeId, std::span<const InstrumentEvent>(&event, 1U));
+}
+
+void AudioEngineBridge::scheduleInstrumentEvents(
+    EngineGeneration generation, const std::string& nodeId,
+    std::span<const InstrumentEvent> events, bool replace) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  requireGenerationLocked(generation);
+  graph_->scheduleInstrumentEvents(nodeId, events, replace);
+}
+
+void AudioEngineBridge::allNotesOff(EngineGeneration generation,
+                                    const std::string& nodeId) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  requireGenerationLocked(generation);
+  graph_->allNotesOff(nodeId);
 }
 
 bool AudioEngineBridge::registerClipBuffer(EngineGeneration generation, const std::string& key,

@@ -11,11 +11,27 @@ export type AppTabName = keyof AppTabParamList;
 
 export const APP_TABS: ReadonlyArray<{
   name: AppTabName;
+  label: string;
   icon: StudioIconName;
   accessibilityLabel: string;
 }> = [
-  { name: 'Arrangement', icon: 'arrangement', accessibilityLabel: 'Arrangement' },
-  { name: 'Mixer', icon: 'mixer', accessibilityLabel: 'Mixer' },
-  { name: 'Performance', icon: 'performance', accessibilityLabel: 'Performance' },
-  { name: 'Settings', icon: 'settings', accessibilityLabel: 'Settings' },
+  {
+    name: 'Arrangement',
+    label: 'ARRANGE',
+    icon: 'arrangement',
+    accessibilityLabel: 'Arrangement',
+  },
+  { name: 'Mixer', label: 'MIXER', icon: 'mixer', accessibilityLabel: 'Mixer' },
+  {
+    name: 'Performance',
+    label: 'PERFORM',
+    icon: 'performance',
+    accessibilityLabel: 'Performance',
+  },
+  {
+    name: 'Settings',
+    label: 'SETTINGS',
+    icon: 'settings',
+    accessibilityLabel: 'Settings',
+  },
 ];

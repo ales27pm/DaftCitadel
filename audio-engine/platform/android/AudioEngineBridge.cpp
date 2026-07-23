@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <exception>
+#include <limits>
 
 #include "audio_engine/DSPNode.h"
 
@@ -120,6 +121,9 @@ void AudioEngineBridge::startTransport() {
 
 void AudioEngineBridge::stopTransport() {
   std::lock_guard<std::mutex> lock(mutex_);
+  if (graph_) {
+    graph_->panicInstruments();
+  }
   isPlaying_ = false;
 }
 
@@ -129,6 +133,16 @@ void AudioEngineBridge::locateTransport(std::uint64_t frame) {
     throw std::runtime_error("Audio engine is not initialized");
   }
   graph_->locate(frame);
+}
+
+void AudioEngineBridge::setTransportLoop(std::uint64_t startFrame,
+                                         std::uint64_t endFrame,
+                                         bool enabled) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!graph_) {
+    throw std::runtime_error("Audio engine is not initialized");
+  }
+  graph_->setTransportLoop(startFrame, endFrame, enabled);
 }
 
 AudioEngineBridge::TransportState AudioEngineBridge::getTransportState() {
@@ -192,6 +206,44 @@ void AudioEngineBridge::scheduleParameterAutomation(const std::string& nodeId, c
   }
   graph_->scheduleAutomation(nodeId,
                              [parameter, value](DSPNode& node) { node.setParameter(parameter, value); }, frame);
+}
+
+void AudioEngineBridge::scheduleInstrumentEventFromNow(
+    const std::string& nodeId, InstrumentEvent event,
+    std::uint64_t frameOffset) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!graph_) {
+    throw std::runtime_error("Audio engine is not initialized");
+  }
+  const auto currentFrame = graph_->currentFrame();
+  if (frameOffset > std::numeric_limits<std::uint64_t>::max() - currentFrame) {
+    throw std::out_of_range("Instrument event frame overflow");
+  }
+  if (event.type == InstrumentEventType::kParameter && frameOffset == 0U) {
+    graph_->setInstrumentParameter(nodeId, event.parameter, event.value);
+    return;
+  }
+  event.frame = currentFrame + frameOffset;
+  event.retainAcrossPanic = false;
+  graph_->scheduleInstrumentEvents(nodeId, std::span<const InstrumentEvent>(&event, 1U));
+}
+
+void AudioEngineBridge::scheduleInstrumentEvents(
+    const std::string& nodeId, std::span<const InstrumentEvent> events,
+    bool replace) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!graph_) {
+    throw std::runtime_error("Audio engine is not initialized");
+  }
+  graph_->scheduleInstrumentEvents(nodeId, events, replace);
+}
+
+void AudioEngineBridge::allNotesOff(const std::string& nodeId) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!graph_) {
+    throw std::runtime_error("Audio engine is not initialized");
+  }
+  graph_->allNotesOff(nodeId);
 }
 
 bool AudioEngineBridge::registerClipBuffer(const std::string& key, double sampleRate, std::size_t channelCount,

@@ -30,6 +30,8 @@ const sourceFiles = [
   'audio-engine/src/Clock.cpp',
   'audio-engine/src/PluginHost.cpp',
   'audio-engine/src/PluginNode.cpp',
+  'audio-engine/src/instruments/InstrumentNode.cpp',
+  'audio-engine/src/instruments/juno/Juno106Node.cpp',
   'audio-engine/src/instruments/juno/JunoDSPEngine.cpp',
   'audio-engine/src/instruments/juno/JunoVoice.cpp',
   'audio-engine/platform/common/NodeFactory.cpp',
@@ -39,6 +41,7 @@ const sourceFiles = [
   'audio-engine/tests/PluginNodeTests.cpp',
   'audio-engine/tests/SceneGraphTests.cpp',
   'audio-engine/tests/JunoCoreTests.cpp',
+  'audio-engine/tests/InstrumentNodeTests.cpp',
 ].map((file) => path.join(rootDir, file));
 const outputPath = path.join(
   os.tmpdir(),

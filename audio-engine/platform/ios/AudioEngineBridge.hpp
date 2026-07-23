@@ -52,6 +52,9 @@ class AudioEngineBridge {
   static void startTransport(EngineGeneration generation);
   static void stopTransport(EngineGeneration generation);
   static void locateTransport(EngineGeneration generation, std::uint64_t frame);
+  static void setTransportLoop(EngineGeneration generation,
+                               std::uint64_t startFrame,
+                               std::uint64_t endFrame, bool enabled);
   static TransportState getTransportState(EngineGeneration generation);
 
   static bool addNode(EngineGeneration generation, const std::string& id,
@@ -65,6 +68,15 @@ class AudioEngineBridge {
                                           const std::string& nodeId,
                                           const std::string& parameter,
                                           std::uint64_t frame, double value);
+  static void scheduleInstrumentEventFromNow(EngineGeneration generation,
+                                             const std::string& nodeId,
+                                             InstrumentEvent event,
+                                             std::uint64_t frameOffset);
+  static void scheduleInstrumentEvents(EngineGeneration generation,
+                                       const std::string& nodeId,
+                                       std::span<const InstrumentEvent> events,
+                                       bool replace);
+  static void allNotesOff(EngineGeneration generation, const std::string& nodeId);
   static bool registerClipBuffer(EngineGeneration generation, const std::string& key,
                                  double sampleRate, std::size_t channelCount,
                                  std::size_t frameCount,

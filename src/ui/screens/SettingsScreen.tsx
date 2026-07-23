@@ -3,14 +3,13 @@ import { ScrollView, StyleSheet, Switch, View, type ViewStyle } from 'react-nati
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
-  SectionHeader,
   StatusBadge,
   StudioButton,
-  StudioHeader,
   StudioIcon,
   StudioPanel,
   StudioText,
   useTheme,
+  type StudioIconName,
   type StudioTone,
 } from '../design-system';
 import { useAdaptiveLayout } from '../layout';
@@ -36,39 +35,111 @@ const SETTINGS: ReadonlyArray<{
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1 },
+  header: {
+    borderBottomWidth: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
   scrollContent: { paddingBottom: 32 },
   page: { alignSelf: 'center', width: '100%' },
-  header: { marginBottom: 18 },
-  group: { marginBottom: 14 },
-  preferenceList: { gap: 10, marginTop: 16 },
-  preferenceRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 14,
-    justifyContent: 'space-between',
+  section: { marginBottom: 24 },
+  sectionTitle: {
+    letterSpacing: 2,
+    marginBottom: 8,
+    paddingLeft: 4,
+    textTransform: 'uppercase',
   },
-  preferenceCopy: { flex: 1, minWidth: 0 },
-  description: { marginTop: 3 },
-  disclosureHeader: {
+  sectionBody: { overflow: 'hidden' },
+  row: {
     alignItems: 'center',
+    borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: 12,
-    justifyContent: 'space-between',
+    minHeight: 58,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
   },
-  disclosureTitle: {
+  lastRow: { borderBottomWidth: 0 },
+  rowIcon: {
     alignItems: 'center',
-    flex: 1,
-    flexDirection: 'row',
-    gap: 10,
-    minWidth: 0,
+    borderRadius: 8,
+    height: 32,
+    justifyContent: 'center',
+    width: 32,
   },
-  disclosureCopy: { flex: 1, minWidth: 0 },
-  details: { gap: 10, marginTop: 16 },
+  rowCopy: { flex: 1, minWidth: 0 },
+  rowDescription: { marginTop: 2 },
   detailGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  detailCard: { flexBasis: 220, flexGrow: 1, minWidth: 0 },
+  detailCard: { flexBasis: 210, flexGrow: 1, minWidth: 0 },
   detailValue: { marginTop: 4 },
-  errorMessage: { marginTop: 10 },
+  expandedDetails: { gap: 10, padding: 14 },
+  errorMessage: { marginTop: 2 },
 });
+
+interface SettingsSectionProps {
+  title: string;
+  children: React.ReactNode;
+}
+
+const SettingsSection: React.FC<SettingsSectionProps> = ({ title, children }) => (
+  <View style={styles.section}>
+    <StudioText variant="caption" tone="muted" weight="bold" style={styles.sectionTitle}>
+      {title}
+    </StudioText>
+    <StudioPanel padding={0} style={styles.sectionBody}>
+      {children}
+    </StudioPanel>
+  </View>
+);
+
+interface SettingsRowProps {
+  icon: StudioIconName;
+  label: string;
+  description?: string;
+  value?: string;
+  right?: React.ReactNode;
+  last?: boolean;
+}
+
+const SettingsRow: React.FC<SettingsRowProps> = ({
+  icon,
+  label,
+  description,
+  value,
+  right,
+  last = false,
+}) => {
+  const theme = useTheme();
+  return (
+    <View
+      style={[
+        styles.row,
+        { borderBottomColor: theme.colors.border },
+        last && styles.lastRow,
+      ]}
+    >
+      <View style={[styles.rowIcon, { backgroundColor: theme.colors.surfaceElevated }]}>
+        <StudioIcon name={icon} color={theme.colors.accentTertiary} size={17} />
+      </View>
+      <View style={styles.rowCopy}>
+        <StudioText variant="label" weight="medium" numberOfLines={1}>
+          {label}
+        </StudioText>
+        {description ? (
+          <StudioText variant="caption" tone="secondary" style={styles.rowDescription}>
+            {description}
+          </StudioText>
+        ) : null}
+      </View>
+      {value ? (
+        <StudioText selectable variant="caption" tone="secondary">
+          {value}
+        </StudioText>
+      ) : null}
+      {right}
+    </View>
+  );
+};
 
 const diagnosticsPresentation = (
   status: ReturnType<typeof useSessionViewModel>['diagnostics']['status'],
@@ -97,24 +168,18 @@ export const SettingsScreen: React.FC = () => {
     sessionId,
     sessionName,
     tracks,
+    transport,
+    transportRuntime,
     diagnostics,
     error: sessionError,
   } = useSessionViewModel();
   const [troubleshootingExpanded, setTroubleshootingExpanded] = useState(false);
-  const compactDisclosure = adaptive.workspaceMode === 'deck';
-  const disclosureButtonLabel = compactDisclosure
-    ? troubleshootingExpanded
-      ? 'Hide'
-      : 'Details'
-    : troubleshootingExpanded
-      ? 'Hide details'
-      : 'Show details';
 
   const pageStyle = useMemo<ViewStyle>(
     () => ({
       maxWidth: Math.min(adaptive.maxContentWidth, 720),
       paddingHorizontal: adaptive.contentPadding,
-      paddingTop: adaptive.isLandscape ? 10 : 18,
+      paddingTop: adaptive.isLandscape ? 14 : 18,
     }),
     [adaptive.contentPadding, adaptive.isLandscape, adaptive.maxContentWidth],
   );
@@ -122,98 +187,135 @@ export const SettingsScreen: React.FC = () => {
   const renderLoad = Number.isFinite(diagnostics.renderLoad)
     ? Math.max(0, Math.min(1, diagnostics.renderLoad))
     : 0;
+  const diagnosticsReady = diagnostics.status === 'ready';
   const sessionStatusTone: StudioTone =
     status === 'error' ? 'critical' : status === 'ready' ? 'success' : 'secondary';
+  const sampleRate = transportRuntime?.sampleRate;
 
   return (
     <SafeAreaView
       edges={['top', 'left', 'right']}
       style={[styles.safeArea, { backgroundColor: theme.colors.background }]}
     >
+      <View
+        accessibilityRole="header"
+        style={[
+          styles.header,
+          {
+            backgroundColor: theme.colors.surface,
+            borderBottomColor: theme.colors.border,
+          },
+        ]}
+      >
+        <StudioText variant="screenTitle" tone="mint" weight="bold">
+          SETTINGS
+        </StudioText>
+      </View>
+
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         contentInsetAdjustmentBehavior="automatic"
       >
         <View style={[styles.page, pageStyle]}>
-          <View style={styles.header}>
-            <StudioHeader
-              compact={adaptive.isLandscape}
-              eyebrow="Daft Citadel"
-              title="Settings"
-              detail="Performance behavior and support information"
+          <SettingsSection title="Project">
+            <SettingsRow
+              icon="arrangement"
+              label={sessionName ?? 'Session starting'}
+              description="Current Daft Citadel session"
+              value={status === 'ready' ? 'READY' : status.toUpperCase()}
             />
-          </View>
-
-          <StudioPanel style={styles.group}>
-            <SectionHeader
-              title="Performance preferences"
-              detail="Choose how live controls behave without changing session content."
+            <SettingsRow
+              icon="mixer"
+              label="Tracks"
+              value={`${tracks.length} ${tracks.length === 1 ? 'track' : 'tracks'}`}
             />
-            <View style={styles.preferenceList}>
-              {SETTINGS.map((setting) => {
-                const enabled = preferences[setting.key];
-                return (
-                  <StudioPanel
-                    key={setting.key}
-                    padding={12}
-                    variant="subtle"
-                    style={styles.preferenceRow}
-                  >
-                    <View style={styles.preferenceCopy}>
-                      <StudioText variant="label" weight="bold">
-                        {setting.label}
-                      </StudioText>
-                      <StudioText
-                        variant="caption"
-                        tone="secondary"
-                        style={styles.description}
-                      >
-                        {setting.description}
-                      </StudioText>
-                    </View>
-                    <Switch
-                      accessibilityLabel={setting.label}
-                      ios_backgroundColor={theme.colors.surfacePressed}
-                      onValueChange={(value) => setPreference(setting.key, value)}
-                      trackColor={{
-                        false: theme.colors.surfacePressed,
-                        true: theme.colors.accentPrimary,
-                      }}
-                      value={enabled}
-                    />
-                  </StudioPanel>
-                );
-              })}
-            </View>
-          </StudioPanel>
+            <SettingsRow
+              icon="diagnostics"
+              label="Tempo"
+              value={transport ? `${Math.round(transport.bpm)} BPM` : 'Unavailable'}
+              last
+            />
+          </SettingsSection>
 
-          <StudioPanel style={styles.group}>
-            <View style={styles.disclosureHeader}>
-              <View style={styles.disclosureTitle}>
-                <StudioIcon name="diagnostics" size={22} />
-                <View style={styles.disclosureCopy}>
-                  <StudioText variant="sectionTitle" weight="bold">
-                    Troubleshooting
-                  </StudioText>
-                  <StudioText variant="caption" tone="secondary">
-                    Session, audio engine, and accessibility status.
-                  </StudioText>
-                </View>
-              </View>
-              <StudioButton
-                compact
-                accessibilityLabel={`${
-                  troubleshootingExpanded ? 'Hide' : 'Show'
-                } troubleshooting details`}
-                icon={troubleshootingExpanded ? 'chevronUp' : 'chevronDown'}
-                label={disclosureButtonLabel}
-                variant="ghost"
-                onPress={() => setTroubleshootingExpanded((expanded) => !expanded)}
+          <SettingsSection title="Performance preferences">
+            {SETTINGS.map((setting, index) => (
+              <SettingsRow
+                key={setting.key}
+                icon={setting.key === 'autoPlayScenes' ? 'play' : 'diagnostics'}
+                label={setting.label}
+                description={setting.description}
+                last={index === SETTINGS.length - 1}
+                right={
+                  <Switch
+                    accessibilityLabel={setting.label}
+                    ios_backgroundColor={theme.colors.surfacePressed}
+                    onValueChange={(value) => setPreference(setting.key, value)}
+                    trackColor={{
+                      false: theme.colors.surfacePressed,
+                      true: theme.colors.accentPrimary,
+                    }}
+                    value={preferences[setting.key]}
+                  />
+                }
               />
-            </View>
+            ))}
+          </SettingsSection>
+
+          <SettingsSection title="Audio engine">
+            <SettingsRow
+              icon="engine"
+              label="Engine status"
+              right={
+                <StatusBadge
+                  label={diagnosticsState.label}
+                  tone={diagnosticsState.tone}
+                />
+              }
+            />
+            <SettingsRow
+              icon="waveform"
+              label="Render load"
+              value={
+                diagnosticsReady ? `${Math.round(renderLoad * 100)}%` : 'Unavailable'
+              }
+            />
+            <SettingsRow
+              icon="diagnostics"
+              label="Sample rate"
+              value={
+                sampleRate && sampleRate > 0 ? `${sampleRate} Hz` : 'Runtime managed'
+              }
+              last
+            />
+          </SettingsSection>
+
+          <SettingsSection title="About">
+            <SettingsRow icon="engine" label="Daft Citadel DAW" value="v1.0.0" />
+            <SettingsRow icon="performance" label="Theme" value="Dark / Neon" last />
+          </SettingsSection>
+
+          <SettingsSection title="Troubleshooting">
+            <SettingsRow
+              icon="diagnostics"
+              label="Troubleshooting"
+              description="Session, audio engine, and accessibility status."
+              last={!troubleshootingExpanded}
+              right={
+                <StudioButton
+                  compact
+                  accessibilityLabel={`${
+                    troubleshootingExpanded ? 'Hide' : 'Show'
+                  } troubleshooting details`}
+                  icon={troubleshootingExpanded ? 'chevronUp' : 'chevronDown'}
+                  label={troubleshootingExpanded ? 'Hide details' : 'Show details'}
+                  variant="ghost"
+                  onPress={() => setTroubleshootingExpanded((expanded) => !expanded)}
+                />
+              }
+            />
 
             {troubleshootingExpanded ? (
-              <View style={styles.details}>
+              <View style={styles.expandedDetails}>
                 <View style={styles.detailGrid}>
                   <StudioPanel
                     accessibilityLabel="Session status"
@@ -247,11 +349,16 @@ export const SettingsScreen: React.FC = () => {
                       AUDIO ENGINE
                     </StudioText>
                     <StudioText variant="label" weight="bold" style={styles.detailValue}>
-                      {(renderLoad * 100).toFixed(0)}% render load
+                      {diagnosticsReady
+                        ? `${(renderLoad * 100).toFixed(0)}% render load`
+                        : 'Render load unavailable'}
                     </StudioText>
                     <StudioText variant="caption" tone="secondary">
-                      {diagnostics.xruns} {diagnostics.xruns === 1 ? 'xrun' : 'xruns'}{' '}
-                      detected
+                      {diagnosticsReady
+                        ? `${diagnostics.xruns} ${
+                            diagnostics.xruns === 1 ? 'xrun' : 'xruns'
+                          } detected`
+                        : 'XRun count unavailable'}
                     </StudioText>
                     <StatusBadge
                       icon="engine"
@@ -281,6 +388,7 @@ export const SettingsScreen: React.FC = () => {
                 {sessionError || diagnostics.error ? (
                   <StudioText
                     accessibilityRole="alert"
+                    selectable
                     variant="body"
                     tone="critical"
                     style={styles.errorMessage}
@@ -292,7 +400,7 @@ export const SettingsScreen: React.FC = () => {
                 ) : null}
               </View>
             ) : null}
-          </StudioPanel>
+          </SettingsSection>
         </View>
       </ScrollView>
     </SafeAreaView>

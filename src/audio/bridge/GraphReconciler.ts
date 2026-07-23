@@ -32,6 +32,30 @@ export class GraphReconciler {
     return connectionKey(source, destination);
   }
 
+  hasChanges(
+    nodes: ReadonlyMap<NodeId, NodeConfiguration>,
+    connections: ReadonlySet<ConnectionKey>,
+  ): boolean {
+    if (
+      nodes.size !== this.nodeState.size ||
+      connections.size !== this.connectionState.size
+    ) {
+      return true;
+    }
+    for (const [nodeId, node] of nodes) {
+      const existing = this.nodeState.get(nodeId);
+      if (!existing || !this.nodeConfigurationEquals(existing, node)) {
+        return true;
+      }
+    }
+    for (const connection of connections) {
+      if (!this.connectionState.has(connection)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   async apply(
     nodes: Map<NodeId, NodeConfiguration>,
     connections: Set<ConnectionKey>,
@@ -182,6 +206,12 @@ export class GraphReconciler {
   ): boolean {
     if (lhs.id !== rhs.id || lhs.type !== rhs.type) {
       return false;
+    }
+    // Juno parameters are mutable realtime state. The session bridge applies
+    // option changes through the instrument parameter API so held voices and
+    // chorus history survive a knob or preset update.
+    if (lhs.type === 'juno106') {
+      return true;
     }
     const leftOptions = lhs.options ?? {};
     const rightOptions = rhs.options ?? {};

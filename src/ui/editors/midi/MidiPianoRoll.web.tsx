@@ -3,6 +3,7 @@ import { ScrollView, StyleProp, View, ViewStyle } from 'react-native';
 
 import { ThemeIntent, mapIntentToColor } from '../../design-system/tokens';
 import { useTheme } from '../../design-system/theme';
+import { parseTimeSignature, quarterNoteBeatsPerBar } from '../../utils/timeSignature';
 
 export interface MidiNote {
   id: string;
@@ -16,6 +17,7 @@ export interface MidiNote {
 export interface MidiPianoRollProps {
   notes: MidiNote[];
   totalBars: number;
+  timeSignature: string;
   pixelsPerBeat?: number;
   style?: StyleProp<ViewStyle>;
 }
@@ -28,13 +30,20 @@ const DEFAULT_PIXELS_PER_BEAT = 48;
 export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
   notes,
   totalBars,
+  timeSignature,
   pixelsPerBeat = DEFAULT_PIXELS_PER_BEAT,
   style,
 }) => {
   const theme = useTheme();
+  const { denominator, numerator } = parseTimeSignature(timeSignature);
   const noteHeight = 18;
-  const totalBeats = Math.max(1, totalBars * 4);
-  const contentWidth = totalBeats * pixelsPerBeat;
+  const signatureBeatInQuarterNotes = 4 / denominator;
+  const totalSignatureBeats = Math.max(1, totalBars * numerator);
+  const totalQuarterNoteBeats = Math.max(
+    signatureBeatInQuarterNotes,
+    totalBars * quarterNoteBeatsPerBar(timeSignature),
+  );
+  const contentWidth = totalQuarterNoteBeats * pixelsPerBeat;
   const contentHeight = KEY_COUNT * noteHeight;
   const horizontalContentStyle = useMemo(() => ({ width: contentWidth }), [contentWidth]);
   const verticalContentStyle = useMemo(
@@ -51,17 +60,23 @@ export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
     [contentHeight, contentWidth, theme.colors.surfaceVariant],
   );
   const buildGridLineStyle = useCallback(
-    (beat: number): ViewStyle => ({
+    (gridIndex: number): ViewStyle => ({
       position: 'absolute',
       top: 0,
       bottom: 0,
-      left: beat * pixelsPerBeat,
+      left: gridIndex * signatureBeatInQuarterNotes * pixelsPerBeat,
       width: 1,
       backgroundColor:
-        beat % 4 === 0 ? theme.colors.accentSecondary : theme.colors.surface,
-      opacity: beat % 4 === 0 ? 0.45 : 0.25,
+        gridIndex % numerator === 0 ? theme.colors.accentSecondary : theme.colors.surface,
+      opacity: gridIndex % numerator === 0 ? 0.45 : 0.25,
     }),
-    [pixelsPerBeat, theme.colors.accentSecondary, theme.colors.surface],
+    [
+      numerator,
+      pixelsPerBeat,
+      signatureBeatInQuarterNotes,
+      theme.colors.accentSecondary,
+      theme.colors.surface,
+    ],
   );
   const buildNoteStyle = useCallback(
     (note: MidiNote): ViewStyle => {
@@ -98,11 +113,11 @@ export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
         contentContainerStyle={verticalContentStyle}
       >
         <View style={rollStyle}>
-          {Array.from({ length: totalBeats + 1 }).map((_, beat) => (
+          {Array.from({ length: totalSignatureBeats + 1 }).map((_, gridIndex) => (
             <View
-              key={`grid-${beat}`}
+              key={`grid-${gridIndex}`}
               pointerEvents="none"
-              style={buildGridLineStyle(beat)}
+              style={buildGridLineStyle(gridIndex)}
             />
           ))}
           {notes.map((note) => (

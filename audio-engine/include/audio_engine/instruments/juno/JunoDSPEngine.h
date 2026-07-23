@@ -18,6 +18,8 @@ enum class ParameterId : std::uint16_t {
   kReleaseSeconds = 0x0006,
   kChorusMode = 0x0007,
   kOutputGain = 0x0008,
+  kLfoRateHz = 0x0009,
+  kLfoDepth = 0x000a,
 };
 
 enum class ChorusMode : std::uint8_t {
@@ -41,6 +43,8 @@ struct EngineConfig {
 // queues land in the realtime foundation phase.
 class JunoDSPEngine final {
  public:
+  static constexpr std::size_t kMidiChannelCount = 16;
+  static constexpr std::size_t kMidiNoteCount = 128;
   static constexpr std::size_t kDefaultPolyphony = 6;
   static constexpr std::size_t kMaximumPolyphony = 64;
   static constexpr std::uint32_t kMaximumFramesPerBlock = 65536;
@@ -48,6 +52,13 @@ class JunoDSPEngine final {
   // guarantee for every patch or polyphony setting. The float output is not
   // limited, so callers raising this gain must manage downstream gain/limiting.
   static constexpr float kDefaultOutputGain = 0.2F;
+  static constexpr float kMinimumLfoRateHz = 0.05F;
+  static constexpr float kMaximumLfoRateHz = 20.0F;
+  static constexpr float kDefaultLfoRateHz = 0.8F;
+  static constexpr float kMinimumLfoDepth = 0.0F;
+  static constexpr float kMaximumLfoDepth = 1.0F;
+  static constexpr float kDefaultLfoDepth = 0.0F;
+  static constexpr float kMaximumLfoPitchSemitones = 2.0F;
 
   JunoDSPEngine();
   ~JunoDSPEngine();
@@ -62,7 +73,15 @@ class JunoDSPEngine final {
 
   [[nodiscard]] bool noteOn(int midiNote, float velocity) noexcept;
   [[nodiscard]] bool noteOff(int midiNote) noexcept;
+  [[nodiscard]] bool noteOn(std::uint8_t channel, int midiNote, float velocity) noexcept;
+  [[nodiscard]] bool noteOff(std::uint8_t channel, int midiNote) noexcept;
   void allNotesOff() noexcept;
+  [[nodiscard]] bool allNotesOff(std::uint8_t channel) noexcept;
+  [[nodiscard]] bool setSustainPedal(std::uint8_t channel, bool enabled) noexcept;
+  [[nodiscard]] bool setPitchBend(std::uint8_t channel, float normalizedBend) noexcept;
+  [[nodiscard]] bool setChannelAftertouch(std::uint8_t channel, float pressure) noexcept;
+  [[nodiscard]] bool setPolyAftertouch(std::uint8_t channel, int midiNote,
+                                       float pressure) noexcept;
   [[nodiscard]] bool setParameter(ParameterId parameter, float value) noexcept;
 
   void render(std::span<float> left, std::span<float> right) noexcept;

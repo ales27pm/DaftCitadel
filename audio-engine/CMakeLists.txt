@@ -17,6 +17,8 @@ add_library(daft_audio_engine
     src/Clock.cpp
     src/PluginHost.cpp
     src/PluginNode.cpp
+    src/instruments/InstrumentNode.cpp
+    src/instruments/juno/Juno106Node.cpp
     src/instruments/juno/JunoDSPEngine.cpp
     src/instruments/juno/JunoVoice.cpp
     platform/common/NodeFactory.cpp
@@ -55,6 +57,7 @@ if(DAFT_AUDIO_ENGINE_BUILD_TESTS)
         tests/PluginNodeTests.cpp
         tests/SceneGraphTests.cpp
         tests/JunoCoreTests.cpp
+        tests/InstrumentNodeTests.cpp
     )
     target_link_libraries(daft_audio_engine_tests PRIVATE daft_audio_engine)
     if(DAFT_AUDIO_ENGINE_ENABLE_SANITIZERS)

@@ -2,6 +2,12 @@ import { Buffer } from 'buffer';
 
 import { NativeAudioEngine, isNativeModuleAvailable } from './NativeAudioEngine';
 import { AutomationLane, publishAutomationLane, ClockSyncService } from './Automation';
+import type {
+  InstrumentParameterChange,
+  InstrumentParameterEvent,
+  LiveMidiEvent,
+  MidiEvent,
+} from './Instruments';
 
 type ChannelPayload =
   | ArrayBuffer
@@ -105,6 +111,38 @@ const normalizeChannelPayload = (payload: ChannelPayload): NormalizedChannel => 
   );
 };
 
+const validateNodeId = (nodeId: string): string => {
+  const normalized = nodeId.trim();
+  if (normalized.length === 0) {
+    throw new Error('nodeId must be a non-empty string');
+  }
+  return normalized;
+};
+
+const validateFrame = (frame: number, field: string): number => {
+  if (!Number.isSafeInteger(frame) || frame < 0) {
+    throw new Error(`${field} must be a non-negative safe integer`);
+  }
+  return frame;
+};
+
+const validateMidiData = (
+  event: Pick<MidiEvent, 'type' | 'channel' | 'data1' | 'data2'>,
+): void => {
+  if (!Number.isInteger(event.type) || event.type < 0 || event.type > 5) {
+    throw new Error('MIDI event type is unsupported');
+  }
+  if (!Number.isInteger(event.channel) || event.channel < 0 || event.channel > 15) {
+    throw new Error('MIDI channel must be an integer between 0 and 15');
+  }
+  if (!Number.isInteger(event.data1) || event.data1 < 0 || event.data1 > 127) {
+    throw new Error('MIDI data1 must be an integer between 0 and 127');
+  }
+  if (!Number.isInteger(event.data2) || event.data2 < 0 || event.data2 > 127) {
+    throw new Error('MIDI data2 must be an integer between 0 and 127');
+  }
+};
+
 export type NodeConfiguration = {
   id: string;
   type: string;
@@ -192,6 +230,105 @@ export class AudioEngine {
     await publishAutomationLane(nodeId, lane);
   }
 
+  public async sendMidiEvent(nodeId: string, event: LiveMidiEvent): Promise<void> {
+    const normalizedNodeId = validateNodeId(nodeId);
+    validateMidiData(event);
+    const frameOffset = validateFrame(event.frameOffset ?? 0, 'frameOffset');
+    await NativeAudioEngine.sendMidiEvent(
+      normalizedNodeId,
+      event.type,
+      event.channel,
+      event.data1,
+      event.data2,
+      frameOffset,
+    );
+  }
+
+  public async sendMidiEvents(
+    nodeId: string,
+    events: ReadonlyArray<MidiEvent>,
+    options: { replace?: boolean } = {},
+  ): Promise<void> {
+    const normalizedNodeId = validateNodeId(nodeId);
+    if (!Array.isArray(events)) {
+      throw new Error('events must be an array');
+    }
+    const normalizedEvents = events.map((event) => {
+      validateMidiData(event);
+      return {
+        ...event,
+        frame: validateFrame(event.frame, 'event frame'),
+      };
+    });
+    normalizedEvents.sort((left, right) => left.frame - right.frame);
+    await NativeAudioEngine.sendMidiEvents(
+      normalizedNodeId,
+      normalizedEvents,
+      options.replace ?? false,
+    );
+  }
+
+  public async setInstrumentParameter(
+    nodeId: string,
+    change: InstrumentParameterChange,
+  ): Promise<void> {
+    const normalizedNodeId = validateNodeId(nodeId);
+    if (
+      !Number.isInteger(change.parameterId) ||
+      change.parameterId <= 0 ||
+      change.parameterId > 0xffff
+    ) {
+      throw new Error('parameterId must be an unsigned 16-bit integer');
+    }
+    if (!Number.isFinite(change.value)) {
+      throw new Error('instrument parameter value must be finite');
+    }
+    const frameOffset = validateFrame(change.frameOffset ?? 0, 'frameOffset');
+    await NativeAudioEngine.setInstrumentParameter(
+      normalizedNodeId,
+      change.parameterId,
+      change.value,
+      frameOffset,
+    );
+  }
+
+  public async sendInstrumentParameters(
+    nodeId: string,
+    events: ReadonlyArray<InstrumentParameterEvent>,
+    options: { replace?: boolean } = {},
+  ): Promise<void> {
+    const normalizedNodeId = validateNodeId(nodeId);
+    if (!Array.isArray(events)) {
+      throw new Error('events must be an array');
+    }
+    const normalizedEvents = events.map((event) => {
+      if (
+        !Number.isInteger(event.parameterId) ||
+        event.parameterId <= 0 ||
+        event.parameterId > 0xffff
+      ) {
+        throw new Error('parameterId must be an unsigned 16-bit integer');
+      }
+      if (!Number.isFinite(event.value)) {
+        throw new Error('instrument parameter value must be finite');
+      }
+      return {
+        ...event,
+        frame: validateFrame(event.frame, 'event frame'),
+      };
+    });
+    normalizedEvents.sort((left, right) => left.frame - right.frame);
+    await NativeAudioEngine.sendInstrumentParameters(
+      normalizedNodeId,
+      normalizedEvents,
+      options.replace ?? false,
+    );
+  }
+
+  public async allNotesOff(nodeId: string): Promise<void> {
+    await NativeAudioEngine.allNotesOff(validateNodeId(nodeId));
+  }
+
   public async startTransport(): Promise<void> {
     await NativeAudioEngine.startTransport();
   }
@@ -208,6 +345,27 @@ export class AudioEngine {
       throw new Error('frame must be non-negative');
     }
     await NativeAudioEngine.locateTransport(Math.floor(frame));
+  }
+
+  public async setTransportLoop(
+    startFrame: number,
+    endFrame: number,
+    enabled: boolean,
+  ): Promise<void> {
+    const normalizedStart = validateFrame(startFrame, 'startFrame');
+    const normalizedEnd = validateFrame(endFrame, 'endFrame');
+    if (enabled && normalizedStart >= normalizedEnd) {
+      throw new Error(
+        'Enabled transport loop requires startFrame to be less than endFrame',
+      );
+    }
+    const setNativeLoop = NativeAudioEngine.setTransportLoop;
+    if (typeof setNativeLoop !== 'function') {
+      throw new Error(
+        'Native transport loops are unavailable; install a development build that includes the current native audio module',
+      );
+    }
+    await setNativeLoop(normalizedStart, normalizedEnd, enabled);
   }
 
   public async getTransportState(): Promise<TransportState> {

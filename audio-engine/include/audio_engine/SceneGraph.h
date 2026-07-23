@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -14,6 +15,7 @@
 #include "audio_engine/DSPNode.h"
 #include "audio_engine/Scheduler.h"
 #include "audio_engine/Clock.h"
+#include "audio_engine/instruments/InstrumentNode.h"
 
 namespace daft::audio {
 
@@ -33,10 +35,23 @@ class SceneGraph {
   /** Render one planar buffer and advance the transport clock. */
   void render(AudioBufferView outputBuffer);
   void locate(std::uint64_t frame);
+  /** Configure a native, half-open transport loop [startFrame, endFrame). */
+  void setTransportLoop(std::uint64_t startFrame, std::uint64_t endFrame,
+                        bool enabled);
 
   /** Schedule a node lookup and callback at an absolute transport frame. */
   void scheduleAutomation(const std::string& nodeId, std::function<void(DSPNode&)> cb,
                           std::uint64_t frame);
+
+  /** Queue bounded, sample-accurate events on an instrument node. */
+  void scheduleInstrumentEvents(const std::string& nodeId,
+                                std::span<const InstrumentEvent> events,
+                                bool replace = false);
+  void setInstrumentParameter(const std::string& nodeId,
+                              std::uint16_t parameter, float value);
+  void allNotesOff(const std::string& nodeId);
+  void allNotesOff();
+  void panicInstruments() noexcept;
 
   [[nodiscard]] double sampleRate() const { return sampleRate_; }
   [[nodiscard]] std::uint64_t currentFrame() const { return clock_.frameTime(); }
@@ -84,11 +99,17 @@ class SceneGraph {
   std::vector<std::string> renderOrder_;
   std::unordered_map<std::string, std::vector<std::string>> inboundEdges_;
   std::vector<std::string> outputSources_;
+  std::uint64_t loopStartFrame_ = 0;
+  std::uint64_t loopEndFrame_ = 0;
+  bool transportLoopEnabled_ = false;
 
   [[nodiscard]] bool wouldIntroduceCycle(const std::string& source,
                                          const std::string& destination) const;
   void rebuildTopology();
   void ensureNodeBuffers(std::size_t channelCount, std::size_t frameCount);
+  void renderSection(AudioBufferView outputBuffer, std::size_t frameOffset,
+                     std::size_t frameCount);
+  void rewindTransportLoop();
 };
 
 }  // namespace daft::audio

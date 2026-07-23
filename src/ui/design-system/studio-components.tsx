@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 
 import { useTheme } from './theme';
+import { parseTimeSignature } from '../utils/timeSignature';
 
 export type StudioTone =
   | 'primary'
@@ -132,29 +133,29 @@ export interface StudioTextProps extends TextProps {
 }
 
 const FONT_SIZES: Record<StudioTextVariant, number> = {
-  caption: 12,
+  caption: 11,
   label: 14,
   body: 16,
   bodyLarge: 18,
-  sectionTitle: 20,
-  screenTitle: 28,
-  metric: 44,
+  sectionTitle: 18,
+  screenTitle: 20,
+  metric: 40,
 };
 
 const LINE_HEIGHTS: Record<StudioTextVariant, number> = {
-  caption: 16,
+  caption: 15,
   label: 18,
   body: 22,
   bodyLarge: 24,
-  sectionTitle: 26,
-  screenTitle: 34,
-  metric: 48,
+  sectionTitle: 24,
+  screenTitle: 26,
+  metric: 44,
 };
 
 const FONT_WEIGHTS: Record<NonNullable<StudioTextProps['weight']>, TextProps['style']> = {
-  regular: { fontWeight: '400' },
-  medium: { fontWeight: '600' },
-  bold: { fontWeight: '700' },
+  regular: { fontFamily: 'Inter_400Regular' },
+  medium: { fontFamily: 'Inter_600SemiBold' },
+  bold: { fontFamily: 'Inter_700Bold' },
 };
 
 export const StudioText: React.FC<PropsWithChildren<StudioTextProps>> = ({
@@ -173,10 +174,9 @@ export const StudioText: React.FC<PropsWithChildren<StudioTextProps>> = ({
       style={[
         {
           color: toneColor(theme.colors, tone),
-          fontFamily: Platform.OS === 'ios' ? 'System' : undefined,
           fontSize: FONT_SIZES[variant],
           lineHeight: LINE_HEIGHTS[variant],
-          letterSpacing: variant === 'caption' ? 0.15 : 0,
+          letterSpacing: variant === 'screenTitle' ? 2 : variant === 'caption' ? 0.5 : 0,
           fontVariant: isNumeric ? (['tabular-nums'] as const) : undefined,
         },
         FONT_WEIGHTS[weight],
@@ -437,9 +437,14 @@ export const TransportBar: React.FC<TransportBarProps> = ({
   onRewind,
   compact = false,
 }) => {
-  const bar = Math.floor(positionBeats / 4) + 1;
-  const beat = Math.floor(positionBeats % 4) + 1;
-  const tick = Math.floor((positionBeats % 1) * 100);
+  const safePositionBeats = Number.isFinite(positionBeats)
+    ? Math.max(0, positionBeats)
+    : 0;
+  const { denominator, numerator } = parseTimeSignature(timeSignature);
+  const signatureBeats = safePositionBeats * (denominator / 4);
+  const bar = Math.floor((signatureBeats + Number.EPSILON) / numerator) + 1;
+  const beat = Math.floor((signatureBeats + Number.EPSILON) % numerator) + 1;
+  const tick = Math.floor((signatureBeats % 1) * 100);
   const position = `${bar}.${beat}.${tick.toString().padStart(2, '0')}`;
   return (
     <StudioPanel

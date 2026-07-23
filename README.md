@@ -117,6 +117,11 @@ explicit local steps on machines with the Android or iOS SDK. See
 [`docs/native-mobile.md`](docs/native-mobile.md) for prerequisites, entitlements,
 and native verification commands.
 
+For the built-in playable synth, see the
+[`Juno-106 instrument guide`](docs/juno106-instrument.md) for its Performance
+workflow, persisted MIDI and automation model, preset/SysEx APIs, realtime
+bounds, shutdown behavior, and validation matrix.
+
 ## React Native session bootstrap
 
 The React Native shell mounts `SessionAppProvider` (`src/ui/session/SessionAppProvider.tsx`) as the root session boundary. The provider selects the correct environment at runtime:

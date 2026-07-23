@@ -22,6 +22,8 @@ class BBDChorus final {
 
   void setMode(ChorusMode mode) noexcept { mode_ = mode; }
 
+  [[nodiscard]] std::size_t drainFrameCount() const noexcept { return buffer_.size(); }
+
   void reset() noexcept {
     std::fill(buffer_.begin(), buffer_.end(), 0.0F);
     writeIndex_ = 0;
