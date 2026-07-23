@@ -126,6 +126,97 @@ std::string ToStdString(NSString* value, const char* fieldName) {
   return std::string(utf8);
 }
 
+constexpr std::uint64_t kMaximumSafeJavaScriptInteger = 9007199254740991ULL;
+
+double ReadFiniteNumber(id value, NSString* fieldName) {
+  if (![value isKindOfClass:[NSNumber class]]) {
+    throw std::invalid_argument(ToStdString(fieldName, "fieldName") + " must be a number");
+  }
+  const double number = [(NSNumber*)value doubleValue];
+  if (!std::isfinite(number)) {
+    throw std::invalid_argument(ToStdString(fieldName, "fieldName") + " must be finite");
+  }
+  return number;
+}
+
+std::uint64_t ReadUnsignedInteger(id value, NSString* fieldName,
+                                  std::uint64_t maximum) {
+  const double number = ReadFiniteNumber(value, fieldName);
+  if (number < 0.0 || number > static_cast<double>(maximum) || std::floor(number) != number) {
+    throw std::invalid_argument(ToStdString(fieldName, "fieldName") +
+                                " must be a non-negative integer within range");
+  }
+  return static_cast<std::uint64_t>(number);
+}
+
+daft::audio::InstrumentEvent MakeMidiEvent(std::uint64_t frame, std::uint8_t type,
+                                           std::uint8_t channel, std::uint8_t data1,
+                                           std::uint8_t data2) {
+  using daft::audio::InstrumentEvent;
+  using daft::audio::InstrumentEventType;
+  if (type > static_cast<std::uint8_t>(InstrumentEventType::kPolyAftertouch)) {
+    throw std::invalid_argument("Unsupported MIDI event type");
+  }
+
+  InstrumentEvent event{};
+  event.frame = frame;
+  event.type = static_cast<InstrumentEventType>(type);
+  event.channel = channel;
+  switch (event.type) {
+    case InstrumentEventType::kNoteOn:
+    case InstrumentEventType::kNoteOff:
+    case InstrumentEventType::kControlChange:
+    case InstrumentEventType::kPolyAftertouch:
+      event.data = data1;
+      event.value = static_cast<float>(data2) / 127.0F;
+      break;
+    case InstrumentEventType::kPitchBend: {
+      const int encoded = (static_cast<int>(data2) << 7) | static_cast<int>(data1);
+      event.value = static_cast<float>(encoded - 8192) / 8192.0F;
+      break;
+    }
+    case InstrumentEventType::kChannelAftertouch:
+      event.value = static_cast<float>(data1) / 127.0F;
+      break;
+    case InstrumentEventType::kParameter:
+    case InstrumentEventType::kAllNotesOff:
+      throw std::invalid_argument("Unsupported MIDI event type");
+  }
+  return event;
+}
+
+daft::audio::InstrumentEvent ConvertMidiEvent(NSDictionary* payload) {
+  if (![payload isKindOfClass:[NSDictionary class]]) {
+    throw std::invalid_argument("MIDI event must be an object");
+  }
+  const auto frame = ReadUnsignedInteger(payload[@"frame"], @"frame",
+                                         kMaximumSafeJavaScriptInteger);
+  const auto type = ReadUnsignedInteger(payload[@"type"], @"type", 5U);
+  const auto channel = ReadUnsignedInteger(payload[@"channel"], @"channel", 15U);
+  const auto data1 = ReadUnsignedInteger(payload[@"data1"], @"data1", 127U);
+  const auto data2 = ReadUnsignedInteger(payload[@"data2"], @"data2", 127U);
+  return MakeMidiEvent(frame, static_cast<std::uint8_t>(type),
+                       static_cast<std::uint8_t>(channel),
+                       static_cast<std::uint8_t>(data1),
+                       static_cast<std::uint8_t>(data2));
+}
+
+daft::audio::InstrumentEvent ConvertInstrumentParameterEvent(NSDictionary* payload) {
+  if (![payload isKindOfClass:[NSDictionary class]]) {
+    throw std::invalid_argument("Instrument parameter event must be an object");
+  }
+  const auto frame = ReadUnsignedInteger(payload[@"frame"], @"frame",
+                                         kMaximumSafeJavaScriptInteger);
+  const auto parameter = ReadUnsignedInteger(payload[@"parameterId"], @"parameterId",
+                                             std::numeric_limits<std::uint16_t>::max());
+  if (parameter == 0U) {
+    throw std::invalid_argument("parameterId must be greater than zero");
+  }
+  return {frame, daft::audio::InstrumentEventType::kParameter,
+          static_cast<std::uint16_t>(parameter), 0U, 0U,
+          static_cast<float>(ReadFiniteNumber(payload[@"value"], @"value"))};
+}
+
 NSString* NSStringFromStdString(const std::string& value) {
   NSString* converted = [NSString stringWithUTF8String:value.c_str()];
   return converted ?: @"Native audio operation failed";
@@ -676,6 +767,130 @@ RCT_EXPORT_METHOD(scheduleParameterAutomation:(NSString*)nodeId
   });
 }
 
+RCT_EXPORT_METHOD(sendMidiEvent:(NSString*)nodeId
+                  type:(nonnull NSNumber*)type
+                  channel:(nonnull NSNumber*)channel
+                  data1:(nonnull NSNumber*)data1
+                  data2:(nonnull NSNumber*)data2
+                  frameOffset:(nonnull NSNumber*)frameOffset
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"midi_event_failed", @"Send MIDI event", resolve,
+                          ^(RCTPromiseResolveBlock finish, RCTPromiseRejectBlock fail) {
+    const std::string nativeNodeId = Trim(ToStdString(nodeId, "nodeId"));
+    if (nativeNodeId.empty()) {
+      RejectPromise(fail, @"invalid_arguments", "nodeId is required");
+      return;
+    }
+    const auto nativeType = ReadUnsignedInteger(type, @"type", 5U);
+    const auto nativeChannel = ReadUnsignedInteger(channel, @"channel", 15U);
+    const auto nativeData1 = ReadUnsignedInteger(data1, @"data1", 127U);
+    const auto nativeData2 = ReadUnsignedInteger(data2, @"data2", 127U);
+    const auto nativeFrameOffset = ReadUnsignedInteger(
+        frameOffset, @"frameOffset", kMaximumSafeJavaScriptInteger);
+    auto event = MakeMidiEvent(0U, static_cast<std::uint8_t>(nativeType),
+                               static_cast<std::uint8_t>(nativeChannel),
+                               static_cast<std::uint8_t>(nativeData1),
+                               static_cast<std::uint8_t>(nativeData2));
+    AudioEngineBridge::scheduleInstrumentEventFromNow(
+        self.engineGeneration, nativeNodeId, event, nativeFrameOffset);
+    finish(nil);
+  });
+}
+
+RCT_EXPORT_METHOD(sendMidiEvents:(NSString*)nodeId
+                  events:(NSArray*)events
+                  replace:(BOOL)replace
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"midi_batch_failed", @"Send MIDI event batch", resolve,
+                          ^(RCTPromiseResolveBlock finish, RCTPromiseRejectBlock fail) {
+    const std::string nativeNodeId = Trim(ToStdString(nodeId, "nodeId"));
+    if (nativeNodeId.empty() || ![events isKindOfClass:[NSArray class]]) {
+      RejectPromise(fail, @"invalid_arguments", "nodeId and events are required");
+      return;
+    }
+    std::vector<daft::audio::InstrumentEvent> converted;
+    converted.reserve(events.count);
+    for (id payload in events) {
+      converted.push_back(ConvertMidiEvent((NSDictionary*)payload));
+    }
+    AudioEngineBridge::scheduleInstrumentEvents(self.engineGeneration, nativeNodeId,
+                                                 converted, replace);
+    finish(nil);
+  });
+}
+
+RCT_EXPORT_METHOD(setInstrumentParameter:(NSString*)nodeId
+                  parameterId:(nonnull NSNumber*)parameterId
+                  value:(double)value
+                  frameOffset:(nonnull NSNumber*)frameOffset
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"instrument_parameter_failed",
+                          @"Set instrument parameter", resolve,
+                          ^(RCTPromiseResolveBlock finish, RCTPromiseRejectBlock fail) {
+    const std::string nativeNodeId = Trim(ToStdString(nodeId, "nodeId"));
+    if (nativeNodeId.empty() || !std::isfinite(value)) {
+      RejectPromise(fail, @"invalid_arguments", "nodeId and a finite value are required");
+      return;
+    }
+    const auto parameter = ReadUnsignedInteger(
+        parameterId, @"parameterId", std::numeric_limits<std::uint16_t>::max());
+    if (parameter == 0U) {
+      RejectPromise(fail, @"invalid_arguments", "parameterId must be greater than zero");
+      return;
+    }
+    const auto nativeFrameOffset = ReadUnsignedInteger(
+        frameOffset, @"frameOffset", kMaximumSafeJavaScriptInteger);
+    daft::audio::InstrumentEvent event{
+        0U, daft::audio::InstrumentEventType::kParameter,
+        static_cast<std::uint16_t>(parameter), 0U, 0U, static_cast<float>(value)};
+    AudioEngineBridge::scheduleInstrumentEventFromNow(
+        self.engineGeneration, nativeNodeId, event, nativeFrameOffset);
+    finish(nil);
+  });
+}
+
+RCT_EXPORT_METHOD(sendInstrumentParameters:(NSString*)nodeId
+                  events:(NSArray*)events
+                  replace:(BOOL)replace
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"instrument_parameter_batch_failed",
+                          @"Send instrument parameter batch", resolve,
+                          ^(RCTPromiseResolveBlock finish, RCTPromiseRejectBlock fail) {
+    const std::string nativeNodeId = Trim(ToStdString(nodeId, "nodeId"));
+    if (nativeNodeId.empty() || ![events isKindOfClass:[NSArray class]]) {
+      RejectPromise(fail, @"invalid_arguments", "nodeId and events are required");
+      return;
+    }
+    std::vector<daft::audio::InstrumentEvent> converted;
+    converted.reserve(events.count);
+    for (id payload in events) {
+      converted.push_back(ConvertInstrumentParameterEvent((NSDictionary*)payload));
+    }
+    AudioEngineBridge::scheduleInstrumentEvents(self.engineGeneration, nativeNodeId,
+                                                 converted, replace);
+    finish(nil);
+  });
+}
+
+RCT_EXPORT_METHOD(allNotesOff:(NSString*)nodeId
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"all_notes_off_failed", @"All notes off", resolve,
+                          ^(RCTPromiseResolveBlock finish, RCTPromiseRejectBlock fail) {
+    const std::string nativeNodeId = Trim(ToStdString(nodeId, "nodeId"));
+    if (nativeNodeId.empty()) {
+      RejectPromise(fail, @"invalid_arguments", "nodeId is required");
+      return;
+    }
+    AudioEngineBridge::allNotesOff(self.engineGeneration, nativeNodeId);
+    finish(nil);
+  });
+}
+
 RCT_EXPORT_METHOD(startTransport:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
   PerformPromiseOperation(reject, @"transport_start_failed", @"Audio transport start", resolve,
@@ -775,6 +990,30 @@ RCT_EXPORT_METHOD(locateTransport:(nonnull NSNumber*)frame
     }
     const auto generation = self.engineGeneration;
     AudioEngineBridge::locateTransport(generation, frame.unsignedLongLongValue);
+    finish(nil);
+  });
+}
+
+RCT_EXPORT_METHOD(setTransportLoop:(nonnull NSNumber*)startFrame
+                  endFrame:(nonnull NSNumber*)endFrame
+                  enabled:(BOOL)enabled
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"transport_loop_failed", @"Set audio transport loop",
+                          resolve,
+                          ^(RCTPromiseResolveBlock finish,
+                            RCTPromiseRejectBlock fail) {
+    const auto nativeStart = ReadUnsignedInteger(
+        startFrame, @"startFrame", kMaximumSafeJavaScriptInteger);
+    const auto nativeEnd = ReadUnsignedInteger(
+        endFrame, @"endFrame", kMaximumSafeJavaScriptInteger);
+    if (enabled && nativeStart >= nativeEnd) {
+      RejectPromise(fail, @"invalid_arguments",
+                    "Enabled transport loop requires startFrame < endFrame");
+      return;
+    }
+    AudioEngineBridge::setTransportLoop(self.engineGeneration, nativeStart,
+                                         nativeEnd, enabled);
     finish(nil);
   });
 }

@@ -37,6 +37,7 @@ class InteractiveBridge extends ReadyBridge {
   public readonly startSpy = jest.fn();
   public readonly stopSpy = jest.fn();
   public readonly locateSpy = jest.fn();
+  public readonly loopSpy = jest.fn();
 
   override async startTransport(): Promise<void> {
     this.startSpy();
@@ -51,6 +52,32 @@ class InteractiveBridge extends ReadyBridge {
   override async locateTransport(frame: number): Promise<void> {
     this.locateSpy(frame);
     await super.locateTransport(frame);
+  }
+
+  async setTransportLoop(
+    startFrame: number,
+    endFrame: number,
+    enabled: boolean,
+  ): Promise<void> {
+    this.loopSpy(startFrame, endFrame, enabled);
+  }
+}
+
+class DegradedDiagnosticsBridge extends InteractiveBridge {
+  override getDiagnosticsState(): AudioDiagnosticsSnapshot {
+    return {
+      status: 'error',
+      xruns: 1,
+      renderLoad: 0,
+      error: new Error('Metrics polling failed'),
+    };
+  }
+
+  override subscribeDiagnostics(
+    listener: (snapshot: AudioDiagnosticsSnapshot) => void,
+  ): () => void {
+    listener(this.getDiagnosticsState());
+    return () => undefined;
   }
 }
 
@@ -168,6 +195,23 @@ describe('useTransportControls', () => {
     expect(bridge.stopSpy).toHaveBeenCalledTimes(1);
     expect(bridge.locateSpy).toHaveBeenCalledWith(expectedFrame);
 
+    expect(activeControls.isLoopAvailable).toBe(true);
+    await act(async () => {
+      await activeControls.setLoopBeats(1, 5, true);
+      await activeControls.setLoopBeats(0, 0, false);
+    });
+    expect(bridge.loopSpy).toHaveBeenNthCalledWith(
+      1,
+      Math.floor(framesPerBeat),
+      Math.floor(framesPerBeat * 5),
+      true,
+    );
+    expect(bridge.loopSpy).toHaveBeenNthCalledWith(2, 0, 0, false);
+
+    await expect(activeControls.setLoopBeats(4, 4, true)).rejects.toThrow(
+      'Loop end must be after loop start.',
+    );
+
     renderer?.unmount();
   });
 
@@ -211,15 +255,61 @@ describe('useTransportControls', () => {
     expect(activeControls.isAvailable).toBe(false);
 
     await act(async () => {
-      await activeControls.locateBeats(1);
+      await activeControls.locateBeats(0);
     });
+    await expect(activeControls.locateBeats(1)).rejects.toThrow(
+      'Transport sample rate is unavailable; cannot locate to a nonzero position.',
+    );
 
     renderer?.unmount();
     warnSpy.mockRestore();
   });
 
-  it('rewinds to start when transport runtime sample rate is unavailable', async () => {
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+  it('keeps bridge transport controls available when diagnostics fail', async () => {
+    const storage = new InMemorySessionStorageAdapter();
+    await storage.initialize();
+    const bridge = new DegradedDiagnosticsBridge();
+    const manager = new SessionManager(storage, bridge);
+    await manager.createSession(demoSession);
+
+    let controls: TransportControlsHandle | null = null;
+
+    const Harness = () => {
+      controls = useTransportControls();
+      return null;
+    };
+
+    let renderer: TestRenderer.ReactTestRenderer | undefined;
+
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <SessionViewModelProvider
+          manager={manager}
+          sessionId={DEMO_SESSION_ID}
+          diagnosticsPollIntervalMs={0}
+          audioBridge={bridge}
+        >
+          <Harness />
+        </SessionViewModelProvider>,
+      );
+      await Promise.resolve();
+    });
+
+    if (!controls) {
+      throw new Error('Transport controls not initialized');
+    }
+    const activeControls = controls as TransportControlsHandle;
+
+    expect(activeControls.isAvailable).toBe(true);
+    await act(async () => {
+      await activeControls.stop();
+    });
+    expect(bridge.stopSpy).toHaveBeenCalledTimes(1);
+
+    renderer?.unmount();
+  });
+
+  it('rejects nonzero beat locations when runtime sample rate is unavailable', async () => {
     const storage = new InMemorySessionStorageAdapter();
     await storage.initialize();
     const bridge = new MissingRuntimeBridge();
@@ -255,17 +345,17 @@ describe('useTransportControls', () => {
     }
     const activeControls = controls as TransportControlsHandle;
 
-    await act(async () => {
-      await activeControls.locateBeats(8);
-    });
-
-    expect(bridge.locateSpy).toHaveBeenCalledWith(0);
-    expect(warnSpy).toHaveBeenCalledWith(
-      'Transport runtime missing sample rate; rewinding to start.',
+    await expect(activeControls.locateBeats(8)).rejects.toThrow(
+      'Transport sample rate is unavailable; cannot locate to a nonzero position.',
     );
+    expect(bridge.locateSpy).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await activeControls.locateBeats(0);
+    });
+    expect(bridge.locateSpy).toHaveBeenCalledWith(0);
 
     renderer?.unmount();
-    warnSpy.mockRestore();
   });
 
   it('provides optimistic runtime updates when the bridge does not emit state changes', async () => {

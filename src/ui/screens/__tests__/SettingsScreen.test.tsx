@@ -96,4 +96,42 @@ describe('SettingsScreen', () => {
     expect(setPreference).toHaveBeenCalledWith('autoPlayScenes', true);
     renderer.unmount();
   });
+
+  it('labels diagnostics values unavailable when metrics collection fails', async () => {
+    useSessionViewModel.mockReturnValue({
+      status: 'ready',
+      sessionId: 'session-1',
+      sessionName: 'Fixture Session',
+      tracks: [{ id: 'track-1' }],
+      diagnostics: {
+        status: 'error',
+        xruns: 0,
+        renderLoad: 0,
+        error: new Error('Metrics polling failed'),
+      },
+      error: undefined,
+      manager: {} as SessionManager,
+      pluginAlerts: [],
+      transport: null,
+      transportRuntime: null,
+      refresh: jest.fn().mockResolvedValue(undefined),
+      retryPlugin: jest.fn().mockResolvedValue(true),
+    });
+
+    const renderer = await renderScreen();
+    expect(JSON.stringify(renderer.toJSON())).toContain('Render load');
+    expect(JSON.stringify(renderer.toJSON())).toContain('Unavailable');
+
+    const showDetails = renderer.root.findByProps({ label: 'Show details' });
+    await act(async () => {
+      showDetails.props.onPress();
+      await Promise.resolve();
+    });
+
+    const expanded = JSON.stringify(renderer.toJSON());
+    expect(expanded).toContain('Render load unavailable');
+    expect(expanded).toContain('XRun count unavailable');
+    expect(expanded).not.toContain('0 xruns detected');
+    renderer.unmount();
+  });
 });

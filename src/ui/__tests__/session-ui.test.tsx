@@ -31,7 +31,7 @@ describe('Session-integrated screens', () => {
     const serialized = JSON.stringify(tree.toJSON());
     expect(serialized).toContain('Timeline overview');
     expect(serialized).toContain('Drums');
-    expect(serialized).toContain('Tracks');
+    expect(serialized).toContain('DAFT CITADEL');
   });
 
   it('renders mixer diagnostics and track meters', async () => {
@@ -42,11 +42,11 @@ describe('Session-integrated screens', () => {
     expect(serialized).toContain('LEVEL ESTIMATE');
   });
 
-  it('renders performance transport and scenes', async () => {
+  it('renders performance transport and Juno scene pads', async () => {
     const tree = await renderWithProviders(React.createElement(PerformanceScreen));
     const serialized = JSON.stringify(tree.toJSON());
-    expect(serialized).toContain('Scenes');
-    expect(serialized).toContain('Pad Bed');
+    expect(serialized).toContain('Juno scene launcher');
+    expect(serialized).toContain('Add scene 16');
     expect(serialized).toMatch(/BPM/);
   });
 });

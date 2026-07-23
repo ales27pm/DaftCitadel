@@ -35,12 +35,31 @@ export type AudioDiagnosticsSnapshot = {
   updatedAt?: number;
 };
 
+export interface InstrumentMidiEvent {
+  type: number;
+  channel: number;
+  data1: number;
+  data2: number;
+  frameOffset?: number;
+}
+
+export interface InstrumentParameterChange {
+  parameterId: number;
+  value: number;
+  frameOffset?: number;
+}
+
 export interface AudioEngineBridge {
   applySessionUpdate(session: Session): Promise<void>;
   resetSession(): Promise<void>;
   startTransport?(): Promise<void>;
   stopTransport?(): Promise<void>;
   locateTransport?(frame: number): Promise<void>;
+  setTransportLoop?(
+    startFrame: number,
+    endFrame: number,
+    enabled: boolean,
+  ): Promise<void>;
   getTransportState?(): AudioTransportSnapshot | null;
   subscribeTransport?(listener: (snapshot: AudioTransportSnapshot) => void): () => void;
   getDiagnosticsState?(): AudioDiagnosticsSnapshot | null;
@@ -48,6 +67,13 @@ export interface AudioEngineBridge {
     listener: (snapshot: AudioDiagnosticsSnapshot) => void,
   ): () => void;
   retryPluginInstance?(instanceId: string): Promise<boolean>;
+  sendInstrumentMidi?(nodeId: string, event: InstrumentMidiEvent): Promise<void>;
+  setInstrumentParameter?(
+    nodeId: string,
+    change: InstrumentParameterChange,
+  ): Promise<void>;
+  allNotesOff?(nodeId: string): Promise<void>;
+  setInstrumentInputEnabled?(enabled: boolean): void;
 }
 
 export interface SessionManagerOptions {

@@ -2,6 +2,7 @@ export * from './AudioEngine';
 export * from './Automation';
 export * from './NativeAudioEngine';
 export * from './SessionAudioBridge';
+export * from './Instruments';
 export * from './plugins/PluginHost';
 export * from './plugins/PluginSandbox';
 export * from './plugins/NativePluginHost';

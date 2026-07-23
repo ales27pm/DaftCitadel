@@ -1,6 +1,8 @@
 import type { TurboModule } from 'react-native';
 import { TurboModuleRegistry, NativeModules } from 'react-native';
 
+import type { InstrumentParameterEvent, MidiEvent } from './Instruments';
+
 type NodeId = string;
 
 export interface AudioEngineSpec extends TurboModule {
@@ -28,9 +30,31 @@ export interface AudioEngineSpec extends TurboModule {
     frame: number,
     value: number,
   ): Promise<void>;
+  sendMidiEvent(
+    nodeId: NodeId,
+    type: number,
+    channel: number,
+    data1: number,
+    data2: number,
+    frameOffset: number,
+  ): Promise<void>;
+  sendMidiEvents(nodeId: NodeId, events: MidiEvent[], replace: boolean): Promise<void>;
+  setInstrumentParameter(
+    nodeId: NodeId,
+    parameterId: number,
+    value: number,
+    frameOffset: number,
+  ): Promise<void>;
+  sendInstrumentParameters(
+    nodeId: NodeId,
+    events: InstrumentParameterEvent[],
+    replace: boolean,
+  ): Promise<void>;
+  allNotesOff(nodeId: NodeId): Promise<void>;
   startTransport(): Promise<void>;
   stopTransport(): Promise<void>;
   locateTransport(frame: number): Promise<void>;
+  setTransportLoop(startFrame: number, endFrame: number, enabled: boolean): Promise<void>;
   getTransportState(): Promise<{
     currentFrame: number;
     isPlaying: boolean;

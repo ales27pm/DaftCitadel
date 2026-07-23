@@ -78,7 +78,7 @@ const TabBarThemeProvider: React.FC<{ children?: React.ReactNode }> = ({ childre
     backgroundColor: theme.colors.surface,
     borderTopColor: theme.colors.border,
     borderTopWidth: 1,
-    height: (adaptive.workspaceMode === 'deck' ? 58 : 54) + insets.bottom,
+    height: 58 + insets.bottom,
     paddingBottom: Math.max(insets.bottom, 6),
     paddingHorizontal: adaptive.contentPadding,
     paddingTop: 6,
@@ -91,15 +91,14 @@ const TabBarThemeProvider: React.FC<{ children?: React.ReactNode }> = ({ childre
           headerShown: false,
           tabBarStyle,
           tabBarActiveTintColor: theme.colors.accentPrimary,
-          tabBarInactiveTintColor: theme.colors.textSecondary,
-          tabBarActiveBackgroundColor: theme.colors.surfaceVariant,
+          tabBarInactiveTintColor: theme.colors.textTertiary,
           tabBarItemStyle: {
-            borderRadius: theme.radii.md,
             minWidth: 0,
           },
           tabBarLabelStyle: {
-            fontSize: 11,
-            fontWeight: '600',
+            fontFamily: 'Inter_700Bold',
+            fontSize: 9,
+            letterSpacing: 1,
           },
           tabBarIconStyle: { marginBottom: -2 },
           tabBarHideOnKeyboard: true,
@@ -112,6 +111,7 @@ const TabBarThemeProvider: React.FC<{ children?: React.ReactNode }> = ({ childre
           options={{
             tabBarAccessibilityLabel: APP_TABS[0].accessibilityLabel,
             tabBarIcon: ArrangementTabIcon,
+            tabBarLabel: APP_TABS[0].label,
           }}
         />
         <Tab.Screen
@@ -120,6 +120,7 @@ const TabBarThemeProvider: React.FC<{ children?: React.ReactNode }> = ({ childre
           options={{
             tabBarAccessibilityLabel: APP_TABS[1].accessibilityLabel,
             tabBarIcon: MixerTabIcon,
+            tabBarLabel: APP_TABS[1].label,
           }}
         />
         <Tab.Screen
@@ -128,6 +129,7 @@ const TabBarThemeProvider: React.FC<{ children?: React.ReactNode }> = ({ childre
           options={{
             tabBarAccessibilityLabel: APP_TABS[2].accessibilityLabel,
             tabBarIcon: PerformanceTabIcon,
+            tabBarLabel: APP_TABS[2].label,
           }}
         />
         <Tab.Screen
@@ -136,6 +138,7 @@ const TabBarThemeProvider: React.FC<{ children?: React.ReactNode }> = ({ childre
           options={{
             tabBarAccessibilityLabel: APP_TABS[3].accessibilityLabel,
             tabBarIcon: SettingsTabIcon,
+            tabBarLabel: APP_TABS[3].label,
           }}
         />
       </Tab.Navigator>

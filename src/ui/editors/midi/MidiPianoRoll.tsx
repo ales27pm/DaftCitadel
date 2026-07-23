@@ -11,6 +11,7 @@ import {
 
 import { ThemeIntent, mapIntentToColor } from '../../design-system/tokens';
 import { useTheme } from '../../design-system/theme';
+import { parseTimeSignature, quarterNoteBeatsPerBar } from '../../utils/timeSignature';
 
 interface GridMetrics {
   startBeat: number;
@@ -29,6 +30,7 @@ export interface MidiNote {
 export interface MidiPianoRollProps {
   notes: MidiNote[];
   totalBars: number;
+  timeSignature: string;
   pixelsPerBeat?: number;
   style?: StyleProp<ViewStyle>;
 }
@@ -41,11 +43,17 @@ const DEFAULT_PIXELS_PER_BEAT = 48;
 export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
   notes,
   totalBars,
+  timeSignature,
   pixelsPerBeat = DEFAULT_PIXELS_PER_BEAT,
   style,
 }) => {
   const theme = useTheme();
   const { width: viewportWidth } = useWindowDimensions();
+  const { denominator, numerator } = useMemo(
+    () => parseTimeSignature(timeSignature),
+    [timeSignature],
+  );
+  const signatureBeatInQuarterNotes = 4 / denominator;
   const [gridState, setGridState] = useState<GridMetrics>({
     startBeat: 0,
     visibleBeats: Math.ceil(Math.max(1, viewportWidth || 0) / pixelsPerBeat),
@@ -70,8 +78,8 @@ export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
   const noteHeight = useMemo(() => Math.max(18, Math.floor(720 / KEY_COUNT)), []);
 
   const contentWidth = useMemo(
-    () => totalBars * pixelsPerBeat * 4,
-    [pixelsPerBeat, totalBars],
+    () => totalBars * pixelsPerBeat * quarterNoteBeatsPerBar(timeSignature),
+    [pixelsPerBeat, timeSignature, totalBars],
   );
 
   useEffect(() => {
@@ -142,12 +150,19 @@ export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
         contentContainerStyle={verticalContentStyle}
       >
         <View style={rollStyle}>
-          {Array.from({ length: gridState.visibleBeats + 2 }).map((_, index) => {
-            const beat = gridState.startBeat + index;
-            const left = beat * pixelsPerBeat;
-            const isBarStart = beat % 4 === 0;
+          {Array.from({
+            length: Math.ceil(gridState.visibleBeats / signatureBeatInQuarterNotes) + 2,
+          }).map((_, index) => {
+            const firstGridIndex = Math.floor(
+              gridState.startBeat / signatureBeatInQuarterNotes,
+            );
+            const gridIndex = firstGridIndex + index;
+            const left = gridIndex * signatureBeatInQuarterNotes * pixelsPerBeat;
+            const isBarStart = gridIndex % numerator === 0;
             const lineStyle = buildGridLineStyle(left, isBarStart);
-            return <View key={`grid-${beat}`} pointerEvents="none" style={lineStyle} />;
+            return (
+              <View key={`grid-${gridIndex}`} pointerEvents="none" style={lineStyle} />
+            );
           })}
           {notes.map((note) => {
             const left = note.start * pixelsPerBeat;

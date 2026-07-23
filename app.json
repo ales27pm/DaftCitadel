@@ -46,7 +46,8 @@
             "targetSdkVersion": 36
           }
         }
-      ]
+      ],
+      "expo-font"
     ]
   }
 }

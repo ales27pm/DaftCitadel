@@ -9,7 +9,20 @@ class NonlinearVCF final {
  public:
   void prepare(float sampleRate) noexcept {
     sampleRate_ = sampleRate;
+    setCutoffHz(cutoffHz_);
+    setResonance(resonance_);
     reset();
+  }
+
+  void setCutoffHz(float cutoffHz) noexcept {
+    cutoffHz_ = std::clamp(cutoffHz, 20.0F, sampleRate_ * 0.45F);
+    const float normalizedCutoff = cutoffHz_ / sampleRate_;
+    coefficient_ = 1.0F - std::exp(-2.0F * kPi * normalizedCutoff);
+  }
+
+  void setResonance(float resonance) noexcept {
+    resonance_ = std::clamp(resonance, 0.0F, 1.2F);
+    feedback_ = resonance_ * 3.5F;
   }
 
   void reset() noexcept {
@@ -18,22 +31,15 @@ class NonlinearVCF final {
     }
   }
 
-  [[nodiscard]] float process(float input, float cutoffHz, float resonance) noexcept {
+  [[nodiscard]] float process(float input) noexcept {
     if (sampleRate_ <= 0.0F) {
       return input;
     }
 
-    cutoffHz = std::clamp(cutoffHz, 20.0F, sampleRate_ * 0.45F);
-    resonance = std::clamp(resonance, 0.0F, 1.2F);
-
-    const float normalizedCutoff = cutoffHz / sampleRate_;
-    const float pole = std::exp(-2.0F * kPi * normalizedCutoff);
-    const float coefficient = 1.0F - pole;
-    const float feedback = resonance * 3.5F;
-    float stageInput = softClip(input - feedback * stages_[3]);
+    float stageInput = softClip(input - feedback_ * stages_[3]);
 
     for (auto& stage : stages_) {
-      stage += coefficient * (stageInput - stage);
+      stage += coefficient_ * (stageInput - stage);
       stageInput = stage;
     }
     return softClip(stages_[3]);
@@ -44,6 +50,10 @@ class NonlinearVCF final {
 
   static constexpr float kPi = 3.14159265358979323846F;
   float sampleRate_ = 44100.0F;
+  float cutoffHz_ = 1000.0F;
+  float resonance_ = 0.1F;
+  float coefficient_ = 0.0F;
+  float feedback_ = 0.35F;
   float stages_[4] = {0.0F, 0.0F, 0.0F, 0.0F};
 };
 

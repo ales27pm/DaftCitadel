@@ -33,7 +33,11 @@ static_assert(static_cast<std::uint16_t>(ParameterId::kAttackSeconds) == 0x0005U
 static_assert(static_cast<std::uint16_t>(ParameterId::kReleaseSeconds) == 0x0006U);
 static_assert(static_cast<std::uint16_t>(ParameterId::kChorusMode) == 0x0007U);
 static_assert(static_cast<std::uint16_t>(ParameterId::kOutputGain) == 0x0008U);
+static_assert(static_cast<std::uint16_t>(ParameterId::kLfoRateHz) == 0x0009U);
+static_assert(static_cast<std::uint16_t>(ParameterId::kLfoDepth) == 0x000aU);
 static_assert(JunoDSPEngine::kDefaultOutputGain == 0.2F);
+static_assert(JunoDSPEngine::kDefaultLfoRateHz == 0.8F);
+static_assert(JunoDSPEngine::kDefaultLfoDepth == 0.0F);
 
 struct StereoSamples {
   std::vector<float> left;
@@ -608,6 +612,90 @@ void TestChorusModeRoutingAndBypassHistory() {
   }
 }
 
+void TestChorusTailDrainAndOutputGain() {
+  for (const double sampleRate : {44100.0, 48000.0}) {
+    JunoDSPEngine unityGain;
+    JunoDSPEngine halfGain;
+    JunoDSPEngine noiseOnly;
+    const EngineConfig config{sampleRate, 256U, 1U};
+    if (!unityGain.prepare(config) || !halfGain.prepare(config) || !noiseOnly.prepare(config) ||
+        !unityGain.setParameter(ParameterId::kReleaseSeconds, 0.0005F) ||
+        !halfGain.setParameter(ParameterId::kReleaseSeconds, 0.0005F) ||
+        !noiseOnly.setParameter(ParameterId::kReleaseSeconds, 0.0005F) ||
+        !unityGain.setParameter(ParameterId::kChorusMode,
+                                static_cast<float>(ChorusMode::kII)) ||
+        !halfGain.setParameter(ParameterId::kChorusMode,
+                               static_cast<float>(ChorusMode::kII)) ||
+        !noiseOnly.setParameter(ParameterId::kChorusMode,
+                                static_cast<float>(ChorusMode::kII)) ||
+        !unityGain.setParameter(ParameterId::kOutputGain, 1.0F) ||
+        !halfGain.setParameter(ParameterId::kOutputGain, 0.5F) ||
+        !noiseOnly.setParameter(ParameterId::kOutputGain, 1.0F) ||
+        !unityGain.noteOn(60, 0.8F) || !halfGain.noteOn(60, 0.8F) ||
+        !noiseOnly.noteOn(60, 1.0e-12F)) {
+      throw std::runtime_error("Unable to configure chorus-tail drain test");
+    }
+
+    OfflineRenderer unityRenderer(unityGain, 256U);
+    OfflineRenderer halfRenderer(halfGain, 256U);
+    OfflineRenderer noiseRenderer(noiseOnly, 256U);
+    (void)unityRenderer.render(Frames(0.05, sampleRate));
+    (void)halfRenderer.render(Frames(0.05, sampleRate));
+    (void)noiseRenderer.render(Frames(0.05, sampleRate));
+    if (!unityGain.noteOff(60) || !halfGain.noteOff(60) || !noiseOnly.noteOff(60)) {
+      throw std::runtime_error("Unable to release chorus-tail test voices");
+    }
+
+    std::array<float, 1> unityLeft{};
+    std::array<float, 1> unityRight{};
+    std::array<float, 1> halfLeft{};
+    std::array<float, 1> halfRight{};
+    std::array<float, 1> noiseLeft{};
+    std::array<float, 1> noiseRight{};
+    const std::size_t releaseLimit = Frames(0.1, sampleRate);
+    std::size_t releaseFrame = 0U;
+    while (unityGain.activeVoiceCount() > 0U && releaseFrame < releaseLimit) {
+      unityGain.render(unityLeft, unityRight);
+      halfGain.render(halfLeft, halfRight);
+      noiseOnly.render(noiseLeft, noiseRight);
+      if (unityGain.activeVoiceCount() != halfGain.activeVoiceCount() ||
+          unityGain.activeVoiceCount() != noiseOnly.activeVoiceCount()) {
+        throw std::runtime_error("Chorus-tail control voice lifetimes diverged");
+      }
+      ++releaseFrame;
+    }
+    if (unityGain.activeVoiceCount() != 0U || halfGain.activeVoiceCount() != 0U ||
+        noiseOnly.activeVoiceCount() != 0U) {
+      throw std::runtime_error("Chorus-tail test voice did not finish releasing");
+    }
+
+    const auto unityTail = unityRenderer.render(Frames(0.01, sampleRate));
+    const auto halfTail = halfRenderer.render(Frames(0.01, sampleRate));
+    const auto noiseTail = noiseRenderer.render(Frames(0.01, sampleRate));
+    bool containsDelayedSignal = false;
+    for (std::size_t frame = 0; frame < unityTail.left.size(); ++frame) {
+      AssertNear(halfTail.left[frame], unityTail.left[frame] * 0.5, 1.0e-7,
+                 "Left chorus-tail output gain");
+      AssertNear(halfTail.right[frame], unityTail.right[frame] * 0.5, 1.0e-7,
+                 "Right chorus-tail output gain");
+      containsDelayedSignal =
+          std::fabs(unityTail.left[frame] - noiseTail.left[frame]) > 1.0e-4 ||
+          std::fabs(unityTail.right[frame] - noiseTail.right[frame]) > 1.0e-4 ||
+          containsDelayedSignal;
+    }
+    if (!containsDelayedSignal) {
+      throw std::runtime_error("Chorus history was truncated with the final active voice");
+    }
+
+    (void)unityRenderer.render(Frames(0.06, sampleRate));
+    (void)halfRenderer.render(Frames(0.06, sampleRate));
+    (void)noiseRenderer.render(Frames(0.06, sampleRate));
+    AssertSilent(unityRenderer.render(128U), "Drained unity-gain chorus tail");
+    AssertSilent(halfRenderer.render(128U), "Drained half-gain chorus tail");
+    AssertSilent(noiseRenderer.render(128U), "Drained noise-only chorus tail");
+  }
+}
+
 void TestOverlappingSameNoteGates() {
   for (const double sampleRate : {44100.0, 48000.0}) {
     JunoDSPEngine engine;
@@ -687,6 +775,25 @@ void TestGateCounterLifecycleAndVoiceStealing() {
   }
 }
 
+void TestOldestActiveVoiceStealing() {
+  for (const double sampleRate : {44100.0, 48000.0}) {
+    JunoDSPEngine engine;
+    if (!engine.prepare(EngineConfig{sampleRate, 128U, 2U}) ||
+        !engine.setParameter(ParameterId::kReleaseSeconds, 0.0005F) ||
+        !engine.noteOn(60, 0.8F) || !engine.noteOn(62, 0.8F) ||
+        !engine.noteOn(60, 0.7F) || !engine.noteOn(64, 0.8F) ||
+        !engine.noteOff(62)) {
+      throw std::runtime_error("Unable to configure oldest-voice stealing test");
+    }
+
+    OfflineRenderer renderer(engine, 128U);
+    (void)renderer.render(Frames(0.02, sampleRate));
+    if (engine.activeVoiceCount() != 2U) {
+      throw std::runtime_error("Voice stealing did not preserve the newer retriggered voice");
+    }
+  }
+}
+
 void TestRetriggeredNoteRelease() {
   for (const double sampleRate : {44100.0, 48000.0}) {
     JunoDSPEngine engine;
@@ -732,6 +839,106 @@ void TestRetriggeredNoteRelease() {
   }
 }
 
+[[nodiscard]] StereoSamples RenderLfoScenario(float rateHz, float depth,
+                                              float pitchBend = 0.0F) {
+  JunoDSPEngine engine;
+  if (!engine.prepare(EngineConfig{48000.0, 256U, 1U}) ||
+      !engine.setParameter(ParameterId::kChorusMode,
+                           static_cast<float>(ChorusMode::kOff)) ||
+      !engine.setParameter(ParameterId::kOutputGain, 1.0F) ||
+      !engine.setParameter(ParameterId::kAttackSeconds, 0.0005F) ||
+      !engine.setParameter(ParameterId::kLfoRateHz, rateHz) ||
+      !engine.setParameter(ParameterId::kLfoDepth, depth) ||
+      !engine.setPitchBend(0U, pitchBend) || !engine.noteOn(0U, 60, 0.8F)) {
+    throw std::runtime_error("Unable to configure LFO render scenario");
+  }
+  return OfflineRenderer(engine, 256U).render(12000U);
+}
+
+void AssertSamplesEqual(const StereoSamples& actual, const StereoSamples& expected,
+                        const std::string& context) {
+  if (actual.left.size() != expected.left.size() ||
+      actual.right.size() != expected.right.size()) {
+    throw std::runtime_error(context + " frame count differs");
+  }
+  for (std::size_t frame = 0U; frame < actual.left.size(); ++frame) {
+    AssertNear(actual.left[frame], expected.left[frame], 0.0, context + " left");
+    AssertNear(actual.right[frame], expected.right[frame], 0.0, context + " right");
+  }
+}
+
+void TestGlobalLfoPitchModulation() {
+  const auto zeroDepthSlow =
+      RenderLfoScenario(JunoDSPEngine::kMinimumLfoRateHz, 0.0F);
+  const auto zeroDepthFast =
+      RenderLfoScenario(JunoDSPEngine::kMaximumLfoRateHz, 0.0F);
+  AssertSamplesEqual(zeroDepthFast, zeroDepthSlow,
+                     "Zero-depth LFO changed the dry oscillator");
+
+  const auto modulated = RenderLfoScenario(8.0F, 1.0F);
+  bool changed = false;
+  for (std::size_t frame = 0U; frame < modulated.left.size(); ++frame) {
+    if (std::fabs(modulated.left[frame] - zeroDepthSlow.left[frame]) > 1.0e-5F) {
+      changed = true;
+      break;
+    }
+  }
+  if (!changed) {
+    throw std::runtime_error("Non-zero LFO depth did not modulate oscillator pitch");
+  }
+
+  const auto combinedBend = RenderLfoScenario(8.0F, 1.0F, 1.0F);
+  if (!std::all_of(combinedBend.left.begin(), combinedBend.left.end(),
+                   [](float sample) { return std::isfinite(sample); })) {
+    throw std::runtime_error("Combined pitch bend and LFO produced non-finite output");
+  }
+}
+
+void TestLfoBoundsAndResetPersistence() {
+  const auto clampedMinimumRate = RenderLfoScenario(-100.0F, 1.0F);
+  const auto explicitMinimumRate =
+      RenderLfoScenario(JunoDSPEngine::kMinimumLfoRateHz, 1.0F);
+  AssertSamplesEqual(clampedMinimumRate, explicitMinimumRate,
+                     "LFO minimum-rate clamp");
+
+  const auto clampedMaximumRate = RenderLfoScenario(100.0F, 0.5F);
+  const auto explicitMaximumRate =
+      RenderLfoScenario(JunoDSPEngine::kMaximumLfoRateHz, 0.5F);
+  AssertSamplesEqual(clampedMaximumRate, explicitMaximumRate,
+                     "LFO maximum-rate clamp");
+
+  const auto clampedMaximumDepth = RenderLfoScenario(5.0F, 100.0F);
+  const auto explicitMaximumDepth =
+      RenderLfoScenario(5.0F, JunoDSPEngine::kMaximumLfoDepth);
+  AssertSamplesEqual(clampedMaximumDepth, explicitMaximumDepth,
+                     "LFO maximum-depth clamp");
+
+  const auto clampedMinimumDepth = RenderLfoScenario(5.0F, -100.0F);
+  const auto explicitMinimumDepth =
+      RenderLfoScenario(5.0F, JunoDSPEngine::kMinimumLfoDepth);
+  AssertSamplesEqual(clampedMinimumDepth, explicitMinimumDepth,
+                     "LFO minimum-depth clamp");
+
+  JunoDSPEngine engine;
+  if (!engine.prepare(EngineConfig{48000.0, 256U, 1U}) ||
+      !engine.setParameter(ParameterId::kChorusMode,
+                           static_cast<float>(ChorusMode::kOff)) ||
+      !engine.setParameter(ParameterId::kLfoRateHz, 6.0F) ||
+      !engine.setParameter(ParameterId::kLfoDepth, 0.75F) ||
+      !engine.noteOn(60, 0.8F)) {
+    throw std::runtime_error("Unable to configure LFO reset persistence test");
+  }
+  OfflineRenderer renderer(engine, 256U);
+  const auto beforeReset = renderer.render(4096U);
+  engine.reset();
+  if (!engine.noteOn(60, 0.8F)) {
+    throw std::runtime_error("LFO reset persistence rejected its second note");
+  }
+  const auto afterReset = renderer.render(4096U);
+  AssertSamplesEqual(afterReset, beforeReset,
+                     "LFO parameters or deterministic phase changed across reset");
+}
+
 }  // namespace
 
 void RunJunoCoreTests() {
@@ -742,9 +949,13 @@ void RunJunoCoreTests() {
   TestDefaultPolyphonicHeadroom();
   TestSingleGlobalChorusNoiseLayer();
   TestChorusModeRoutingAndBypassHistory();
+  TestChorusTailDrainAndOutputGain();
   TestOverlappingSameNoteGates();
   TestGateCounterLifecycleAndVoiceStealing();
+  TestOldestActiveVoiceStealing();
   TestRetriggeredNoteRelease();
+  TestGlobalLfoPitchModulation();
+  TestLfoBoundsAndResetPersistence();
 }
 
 }  // namespace daft::audio::tests

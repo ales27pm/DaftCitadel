@@ -7,6 +7,8 @@
 #include <stdexcept>
 #include <string>
 
+#include "audio_engine/instruments/juno/Juno106Node.h"
+
 namespace daft::audio::tests {
 namespace {
 
@@ -36,6 +38,45 @@ class LocationTrackingNode final : public DSPNode {
   void setParameter(const std::string&, double) override {}
 
   std::uint64_t locatedFrame = 0;
+};
+
+class LoopProbeInstrument final : public InstrumentNode {
+ public:
+  void setParameter(const std::string&, double) override {}
+  void allNotesOff() noexcept override { value_ = 0.0F; }
+
+  [[nodiscard]] std::size_t noteOnCount(std::uint8_t note) const {
+    return noteOnCounts_[note];
+  }
+
+ protected:
+  void prepareInstrument(double) override { value_ = 0.0F; }
+  void resetInstrument() noexcept override { value_ = 0.0F; }
+
+  void renderInstrument(AudioBufferView buffer, std::size_t frameOffset,
+                        std::size_t frameCount) noexcept override {
+    for (std::size_t channel = 0U; channel < buffer.channelCount(); ++channel) {
+      std::fill(buffer.channel(channel).begin() +
+                    static_cast<std::ptrdiff_t>(frameOffset),
+                buffer.channel(channel).begin() +
+                    static_cast<std::ptrdiff_t>(frameOffset + frameCount),
+                value_);
+    }
+  }
+
+  void handleInstrumentEvent(const InstrumentEvent& event) noexcept override {
+    if (event.type == InstrumentEventType::kNoteOn) {
+      ++noteOnCounts_[event.data];
+      value_ = event.value;
+    } else if (event.type == InstrumentEventType::kNoteOff ||
+               event.type == InstrumentEventType::kAllNotesOff) {
+      value_ = 0.0F;
+    }
+  }
+
+ private:
+  std::array<std::size_t, 128U> noteOnCounts_{};
+  float value_ = 0.0F;
 };
 
 AudioBufferView MakeMonoView(std::array<float, 64>& samples) {
@@ -118,6 +159,75 @@ void TestGraphClockCanLocate() {
   }
 }
 
+void TestTransportLoopWrapsExactlyAndReplaysTimelineInstrumentEvents() {
+  SceneGraph graph(48000.0, 8U);
+  graph.locate(2U);
+  auto instrument = std::make_unique<LoopProbeInstrument>();
+  auto* instrumentPtr = instrument.get();
+  if (!graph.addNode("loop-probe", std::move(instrument)) ||
+      !graph.connect("loop-probe", std::string(SceneGraph::kOutputBusId))) {
+    throw std::runtime_error("Failed to build transport-loop probe graph");
+  }
+
+  graph.setTransportLoop(2U, 6U, true);
+  const std::array<InstrumentEvent, 3U> events = {{
+      {3U, InstrumentEventType::kNoteOn, 0U, 0U, 60U, 0.5F, true},
+      {3U, InstrumentEventType::kNoteOn, 0U, 0U, 61U, 0.25F, false},
+      {5U, InstrumentEventType::kNoteOff, 0U, 0U, 60U, 0.0F, true},
+  }};
+  graph.scheduleInstrumentEvents("loop-probe", events);
+
+  std::array<float, 8U> samples{};
+  std::array<float*, 1U> channels{samples.data()};
+  graph.render(AudioBufferView(channels.data(), channels.size(), samples.size()));
+
+  if (graph.currentFrame() != 2U) {
+    throw std::runtime_error("Transport loop did not wrap on the exact render boundary");
+  }
+  if (instrumentPtr->noteOnCount(60U) != 2U) {
+    throw std::runtime_error("Retained instrument timeline note did not replay each loop pass");
+  }
+  if (instrumentPtr->noteOnCount(61U) != 1U) {
+    throw std::runtime_error("Transient live instrument note replayed after loop wrap");
+  }
+  const std::array<float, 8U> expected = {
+      0.0F, 0.25F, 0.25F, 0.0F, 0.0F, 0.5F, 0.5F, 0.0F};
+  for (std::size_t frame = 0U; frame < samples.size(); ++frame) {
+    if (std::fabs(samples[frame] - expected[frame]) > 1.0e-6F) {
+      throw std::runtime_error("Loop render split dispatched an event at the wrong frame");
+    }
+  }
+
+  graph.setTransportLoop(0U, 0U, false);
+  std::array<float, 4U> afterLoop{};
+  std::array<float*, 1U> afterLoopChannels{afterLoop.data()};
+  graph.render(AudioBufferView(afterLoopChannels.data(), afterLoopChannels.size(),
+                               afterLoop.size()));
+  if (graph.currentFrame() != 6U || instrumentPtr->noteOnCount(60U) != 3U) {
+    throw std::runtime_error("Disabling transport loop did not restore the song timeline");
+  }
+
+  bool rejectedEmptyRange = false;
+  try {
+    graph.setTransportLoop(8U, 8U, true);
+  } catch (const std::invalid_argument&) {
+    rejectedEmptyRange = true;
+  }
+  if (!rejectedEmptyRange) {
+    throw std::runtime_error("Transport loop accepted an empty enabled range");
+  }
+
+  bool rejectedReversedRange = false;
+  try {
+    graph.setTransportLoop(9U, 8U, true);
+  } catch (const std::invalid_argument&) {
+    rejectedReversedRange = true;
+  }
+  if (!rejectedReversedRange) {
+    throw std::runtime_error("Transport loop accepted a reversed enabled range");
+  }
+}
+
 void TestNewNodesLocateToCurrentGraphFrame() {
   SceneGraph graph(48000.0, 64);
   std::array<float, 64> samples{};
@@ -194,6 +304,113 @@ void TestTrackOutputAppliesGainAndPan() {
   }
 }
 
+void TestInstrumentPanicRetainsTimelineAndPurgesTransientEvents() {
+  SceneGraph graph(48000.0, 64U);
+  auto instrument = std::make_unique<juno::Juno106Node>(64U, 1U);
+  auto* instrumentPtr = instrument.get();
+  if (!instrument->setParameter(juno::ParameterId::kChorusMode,
+                                static_cast<float>(juno::ChorusMode::kI)) ||
+      !instrument->setParameter(juno::ParameterId::kOutputGain, 1.0F) ||
+      !instrument->setParameter(juno::ParameterId::kAttackSeconds, 0.0005F) ||
+      !instrument->setParameter(juno::ParameterId::kReleaseSeconds, 1.0F) ||
+      !graph.addNode("juno", std::move(instrument)) ||
+      !graph.connect("juno", std::string(SceneGraph::kOutputBusId))) {
+    throw std::runtime_error("Failed to build instrument panic graph");
+  }
+
+  const std::array<InstrumentEvent, 2U> events = {{
+      {0U, InstrumentEventType::kNoteOn, 0U, 0U, 60U, 0.8F},
+      {128U, InstrumentEventType::kNoteOn, 0U, 0U, 67U, 0.8F},
+  }};
+  graph.scheduleInstrumentEvents("juno", events);
+
+  std::array<float, 64U> left{};
+  std::array<float, 64U> right{};
+  std::array<float*, 2U> channels{left.data(), right.data()};
+  const auto output = AudioBufferView(channels.data(), channels.size(), left.size());
+  graph.render(output);
+  if (!std::any_of(left.begin(), left.end(),
+                   [](float sample) { return std::fabs(sample) > 1.0e-7F; }) ||
+      graph.currentFrame() != 64U || instrumentPtr->pendingEventCount() != 1U) {
+    throw std::runtime_error("Instrument panic fixture did not begin with a queued future note");
+  }
+
+  graph.panicInstruments();
+  if (graph.currentFrame() != 64U || instrumentPtr->currentFrame() != 64U ||
+      instrumentPtr->pendingEventCount() != 1U) {
+    throw std::runtime_error("Instrument panic moved the timeline or discarded future events");
+  }
+
+  graph.render(output);
+  if (std::any_of(left.begin(), left.end(), [](float sample) { return sample != 0.0F; }) ||
+      std::any_of(right.begin(), right.end(), [](float sample) { return sample != 0.0F; })) {
+    throw std::runtime_error("Instrument panic left stale envelope or chorus output");
+  }
+  graph.render(output);
+  if (!std::any_of(left.begin(), left.end(),
+                   [](float sample) { return std::fabs(sample) > 1.0e-7F; })) {
+    throw std::runtime_error("Instrument panic discarded the queued restart note");
+  }
+
+  const std::array<InstrumentEvent, 1U> currentFrameEvent = {{
+      {graph.currentFrame(), InstrumentEventType::kNoteOn, 0U, 0U, 72U, 0.8F},
+  }};
+  graph.scheduleInstrumentEvents("juno", currentFrameEvent);
+  graph.panicInstruments();
+  if (instrumentPtr->pendingEventCount() != 1U) {
+    throw std::runtime_error("Instrument panic discarded a current-frame timeline note");
+  }
+  graph.render(output);
+  if (!std::any_of(left.begin(), left.end(),
+                   [](float sample) { return std::fabs(sample) > 1.0e-7F; })) {
+    throw std::runtime_error("Current-frame timeline note did not resume after panic");
+  }
+
+  const std::array<InstrumentEvent, 2U> transientEvents = {{
+      {graph.currentFrame(), InstrumentEventType::kNoteOn, 0U, 0U, 76U, 0.8F, false},
+      {graph.currentFrame() + 64U, InstrumentEventType::kNoteOn, 0U, 0U, 79U, 0.8F,
+       false},
+  }};
+  graph.scheduleInstrumentEvents("juno", transientEvents);
+  graph.panicInstruments();
+  if (instrumentPtr->pendingEventCount() != 0U) {
+    throw std::runtime_error("Instrument panic retained transient live input");
+  }
+  for (std::size_t block = 0U; block < 2U; ++block) {
+    graph.render(output);
+    if (std::any_of(left.begin(), left.end(), [](float sample) { return sample != 0.0F; }) ||
+        std::any_of(right.begin(), right.end(), [](float sample) { return sample != 0.0F; })) {
+      throw std::runtime_error("Transient live note replayed after instrument panic");
+    }
+  }
+}
+
+void TestInstrumentParametersApplyImmediately() {
+  SceneGraph graph(48000.0, 64U);
+  auto instrument = std::make_unique<juno::Juno106Node>(64U, 1U);
+  auto* instrumentPtr = instrument.get();
+  if (!graph.addNode("juno", std::move(instrument))) {
+    throw std::runtime_error("Failed to add immediate-parameter instrument");
+  }
+
+  graph.setInstrumentParameter(
+      "juno", static_cast<std::uint16_t>(juno::ParameterId::kCutoffHz),
+      2400.0F);
+  if (instrumentPtr->pendingEventCount() != 0U) {
+    throw std::runtime_error("Immediate parameter update consumed event queue capacity");
+  }
+
+  bool rejectedInvalidParameter = false;
+  try {
+    graph.setInstrumentParameter("juno", 0xffffU, 1.0F);
+  } catch (const std::runtime_error&) {
+    rejectedInvalidParameter = true;
+  }
+  if (!rejectedInvalidParameter) {
+    throw std::runtime_error("Immediate parameter update accepted an invalid parameter");
+  }
+}
+
 }  // namespace
 
 void RunSceneGraphTests() {
@@ -201,9 +418,12 @@ void RunSceneGraphTests() {
   TestAutomationDoesNotTargetReusedId();
   TestMixerProcessesGraphInputs();
   TestGraphClockCanLocate();
+  TestTransportLoopWrapsExactlyAndReplaysTimelineInstrumentEvents();
   TestNewNodesLocateToCurrentGraphFrame();
   TestGraphRejectsCycles();
   TestTrackOutputAppliesGainAndPan();
+  TestInstrumentPanicRetainsTimelineAndPurgesTransientEvents();
+  TestInstrumentParametersApplyImmediately();
 }
 
 }  // namespace daft::audio::tests

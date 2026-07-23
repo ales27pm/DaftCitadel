@@ -29,6 +29,11 @@ type AccessibilityListener = (enabled: boolean) => void;
 const reduceMotionListeners = new Set<AccessibilityListener>();
 const screenReaderListeners = new Set<AccessibilityListener>();
 
+type AppStateStatus = 'active' | 'background' | 'inactive' | 'unknown' | 'extension';
+type AppStateListener = (state: AppStateStatus) => void;
+
+const appStateListeners = new Set<AppStateListener>();
+
 let reduceMotionEnabled = false;
 let screenReaderEnabled = false;
 
@@ -73,6 +78,28 @@ export const AccessibilityInfo = {
   },
 };
 
+export const AppState = {
+  currentState: 'active' as AppStateStatus,
+  addEventListener: (event: 'change', listener: AppStateListener) => {
+    if (event === 'change') {
+      appStateListeners.add(listener);
+    }
+    return {
+      remove: () => {
+        appStateListeners.delete(listener);
+      },
+    };
+  },
+  __emit(state: AppStateStatus) {
+    AppState.currentState = state;
+    appStateListeners.forEach((listener) => listener(state));
+  },
+  __reset() {
+    AppState.currentState = 'active';
+    appStateListeners.clear();
+  },
+};
+
 class MockNativeEventEmitter {
   private readonly listeners = new Map<string, Set<(...args: unknown[]) => void>>();
 
@@ -113,6 +140,14 @@ type AudioEngineNode = {
 
 type AutomationPoint = { frame: number; value: number };
 
+type MockMidiEvent = {
+  frame: number;
+  type: number;
+  channel: number;
+  data1: number;
+  data2: number;
+};
+
 type AudioEngineMockState = {
   initialized: boolean;
   sampleRate: number;
@@ -125,6 +160,12 @@ type AudioEngineMockState = {
     clipBufferBytes: number;
   };
   automations: Map<string, Map<string, AutomationPoint[]>>;
+  midiEvents: Map<string, MockMidiEvent[]>;
+  instrumentParameters: Map<string, Map<number, number>>;
+  scheduledInstrumentParameters: Map<
+    string,
+    Array<{ frame: number; parameterId: number; value: number }>
+  >;
   clipBuffers: Map<
     string,
     {
@@ -151,6 +192,9 @@ const audioEngineState: AudioEngineMockState = {
   connections: new Set(),
   diagnostics: { xruns: 0, lastRenderDurationMicros: 0, clipBufferBytes: 0 },
   automations: new Map(),
+  midiEvents: new Map(),
+  instrumentParameters: new Map(),
+  scheduledInstrumentParameters: new Map(),
   clipBuffers: new Map(),
   transport: {
     frame: 0,
@@ -203,6 +247,9 @@ const audioEngineModule = {
     audioEngineState.nodes.clear();
     audioEngineState.connections.clear();
     audioEngineState.automations.clear();
+    audioEngineState.midiEvents.clear();
+    audioEngineState.instrumentParameters.clear();
+    audioEngineState.scheduledInstrumentParameters.clear();
     audioEngineState.diagnostics.xruns = 0;
     audioEngineState.diagnostics.lastRenderDurationMicros = 0;
     audioEngineState.diagnostics.clipBufferBytes = 0;
@@ -306,6 +353,9 @@ const audioEngineModule = {
       }
     });
     audioEngineState.automations.delete(trimmedId);
+    audioEngineState.midiEvents.delete(trimmedId);
+    audioEngineState.instrumentParameters.delete(trimmedId);
+    audioEngineState.scheduledInstrumentParameters.delete(trimmedId);
   },
   connectNodes: async (source: string, destination: string) => {
     const trimmedSource = source.trim();
@@ -391,6 +441,71 @@ const audioEngineModule = {
     nextPoints.push({ frame, value });
     nextPoints.sort((lhs, rhs) => lhs.frame - rhs.frame);
     parameterMap.set(trimmedParam, nextPoints);
+  },
+  sendMidiEvent: async (
+    nodeId: string,
+    type: number,
+    channel: number,
+    data1: number,
+    data2: number,
+    frameOffset: number,
+  ) => {
+    const trimmedId = nodeId.trim();
+    if (!audioEngineState.nodes.has(trimmedId)) {
+      throw new Error(`Node '${trimmedId}' is not registered`);
+    }
+    const frame = computeTransportFrame(Date.now()) + frameOffset;
+    const events = audioEngineState.midiEvents.get(trimmedId) ?? [];
+    events.push({ frame, type, channel, data1, data2 });
+    events.sort((left, right) => left.frame - right.frame);
+    audioEngineState.midiEvents.set(trimmedId, events);
+  },
+  sendMidiEvents: async (nodeId: string, events: MockMidiEvent[], replace: boolean) => {
+    const trimmedId = nodeId.trim();
+    if (!audioEngineState.nodes.has(trimmedId)) {
+      throw new Error(`Node '${trimmedId}' is not registered`);
+    }
+    const previous = replace ? [] : (audioEngineState.midiEvents.get(trimmedId) ?? []);
+    const next = [...previous, ...events.map((event) => ({ ...event }))];
+    next.sort((left, right) => left.frame - right.frame);
+    audioEngineState.midiEvents.set(trimmedId, next);
+  },
+  setInstrumentParameter: async (
+    nodeId: string,
+    parameterId: number,
+    value: number,
+    _frameOffset: number,
+  ) => {
+    const trimmedId = nodeId.trim();
+    if (!audioEngineState.nodes.has(trimmedId)) {
+      throw new Error(`Node '${trimmedId}' is not registered`);
+    }
+    const parameters = audioEngineState.instrumentParameters.get(trimmedId) ?? new Map();
+    parameters.set(parameterId, value);
+    audioEngineState.instrumentParameters.set(trimmedId, parameters);
+  },
+  sendInstrumentParameters: async (
+    nodeId: string,
+    events: Array<{ frame: number; parameterId: number; value: number }>,
+    replace: boolean,
+  ) => {
+    const trimmedId = nodeId.trim();
+    if (!audioEngineState.nodes.has(trimmedId)) {
+      throw new Error(`Node '${trimmedId}' is not registered`);
+    }
+    const previous = replace
+      ? []
+      : (audioEngineState.scheduledInstrumentParameters.get(trimmedId) ?? []);
+    const next = [...previous, ...events.map((event) => ({ ...event }))];
+    next.sort((left, right) => left.frame - right.frame);
+    audioEngineState.scheduledInstrumentParameters.set(trimmedId, next);
+  },
+  allNotesOff: async (nodeId: string) => {
+    const trimmedId = nodeId.trim();
+    if (!audioEngineState.nodes.has(trimmedId)) {
+      throw new Error(`Node '${trimmedId}' is not registered`);
+    }
+    audioEngineState.midiEvents.set(trimmedId, []);
   },
   getRenderDiagnostics: async () => ({
     xruns: audioEngineState.diagnostics.xruns,

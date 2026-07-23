@@ -5,12 +5,14 @@ import {
 } from '../SessionAudioBridge';
 import { AudioEngine } from '../AudioEngine';
 import { AutomationLane, ClockSyncService } from '../Automation';
+import { JunoParameterId, MidiEventType } from '../Instruments';
 import {
   AutomationCurve,
   Clip,
   RoutingGraph,
   Session,
   Track,
+  createDefaultJunoTrack,
   createDefaultTrackRoutingGraph,
   PluginRoutingNode,
 } from '../../session/models';
@@ -79,8 +81,14 @@ const createMockEngine = (
   startTransport: jest.Mock;
   stopTransport: jest.Mock;
   locateTransport: jest.Mock;
+  setTransportLoop: jest.Mock;
   getTransportState: jest.Mock;
   getRenderDiagnostics: jest.Mock;
+  sendMidiEvent: jest.Mock;
+  sendMidiEvents: jest.Mock;
+  setInstrumentParameter: jest.Mock;
+  sendInstrumentParameters: jest.Mock;
+  allNotesOff: jest.Mock;
 } => {
   const configureNodes = jest.fn(async () => undefined);
   const connect = jest.fn(async () => undefined);
@@ -92,12 +100,18 @@ const createMockEngine = (
   const startTransport = jest.fn(async () => undefined);
   const stopTransport = jest.fn(async () => undefined);
   const locateTransport = jest.fn(async () => undefined);
+  const setTransportLoop = jest.fn(async () => undefined);
   const getTransportState = jest.fn(async () => ({ frame: 0, isPlaying: false }));
   const getRenderDiagnostics = jest.fn(async () => ({
     xruns: 0,
     lastRenderDurationMicros: 0,
     clipBufferBytes: 0,
   }));
+  const sendMidiEvent = jest.fn(async () => undefined);
+  const sendMidiEvents = jest.fn(async () => undefined);
+  const setInstrumentParameter = jest.fn(async () => undefined);
+  const sendInstrumentParameters = jest.fn(async () => undefined);
+  const allNotesOff = jest.fn(async () => undefined);
   const engine: Partial<AudioEngine> = {
     getClock: () => clock,
     configureNodes,
@@ -110,8 +124,14 @@ const createMockEngine = (
     startTransport,
     stopTransport,
     locateTransport,
+    setTransportLoop,
     getTransportState,
     getRenderDiagnostics,
+    sendMidiEvent,
+    sendMidiEvents,
+    setInstrumentParameter,
+    sendInstrumentParameters,
+    allNotesOff,
   };
   return {
     engine: engine as AudioEngine,
@@ -125,8 +145,14 @@ const createMockEngine = (
     startTransport,
     stopTransport,
     locateTransport,
+    setTransportLoop,
     getTransportState,
     getRenderDiagnostics,
+    sendMidiEvent,
+    sendMidiEvents,
+    setInstrumentParameter,
+    sendInstrumentParameters,
+    allNotesOff,
   };
 };
 
@@ -461,6 +487,542 @@ describe('SessionAudioBridge', () => {
     expect(disconnect).toHaveBeenCalledWith(trackInput.id, trackOutput.id);
     expect(configureNodes).toHaveBeenCalled();
     expect(connect).toHaveBeenCalledWith(pluginNodeId, trackOutput.id);
+  });
+
+  it('materializes a persisted Juno and schedules MIDI at exact transport frames', async () => {
+    const { loader, loadMock } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const {
+      engine,
+      configureNodes,
+      connect,
+      locateTransport,
+      getTransportState,
+      startTransport,
+      stopTransport,
+      sendMidiEvents,
+      sendInstrumentParameters,
+    } = createMockEngine(clock);
+    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    const track = createDefaultJunoTrack('track-juno', {
+      parameters: { cutoffHz: 1800 },
+    });
+    const instrumentNodeId = 'track-juno:instrument:juno106';
+    track.clips = [
+      {
+        id: 'midi-clip',
+        name: 'MIDI Clip',
+        start: 250,
+        duration: 1000,
+        gain: 1,
+        fadeIn: 0,
+        fadeOut: 0,
+        automationCurveIds: ['cutoff'],
+        midi: {
+          notes: [
+            {
+              id: 'note-1',
+              pitch: 60,
+              startBeat: 0.25,
+              durationBeats: 0.5,
+              velocity: 100,
+            },
+          ],
+        },
+      },
+    ];
+    track.automationCurves = [
+      {
+        id: 'cutoff',
+        parameter: 'instrument.cutoffHz',
+        interpolation: 'linear',
+        points: [{ time: 125, value: 500 }],
+      },
+    ];
+
+    await bridge.applySessionUpdate(createSession({ tracks: [track] }));
+
+    expect(loadMock).not.toHaveBeenCalled();
+    expect(configureNodes.mock.calls.flatMap(([nodes]) => nodes)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: instrumentNodeId,
+          type: 'juno106',
+          options: expect.objectContaining({ cutoffHz: 1800, chorusMode: 1 }),
+        }),
+      ]),
+    );
+    expect(connect).toHaveBeenCalledWith(instrumentNodeId, 'track-juno:output:main');
+    expect(sendMidiEvents).toHaveBeenCalledWith(
+      instrumentNodeId,
+      [
+        {
+          frame: 18000,
+          type: MidiEventType.NoteOn,
+          channel: 0,
+          data1: 60,
+          data2: 100,
+        },
+        {
+          frame: 30000,
+          type: MidiEventType.NoteOff,
+          channel: 0,
+          data1: 60,
+          data2: 0,
+        },
+      ],
+      { replace: true },
+    );
+    expect(sendInstrumentParameters).toHaveBeenCalledWith(instrumentNodeId, [
+      {
+        frame: 6000,
+        parameterId: JunoParameterId.CutoffHz,
+        value: 500,
+      },
+    ]);
+
+    getTransportState.mockResolvedValue({ frame: 10000, isPlaying: true });
+    await bridge.locateTransport(20000);
+
+    expect(locateTransport).toHaveBeenCalledWith(20000);
+    expect(stopTransport).toHaveBeenCalledTimes(1);
+    expect(startTransport).toHaveBeenCalledTimes(1);
+    expect(stopTransport.mock.invocationCallOrder[0]).toBeLessThan(
+      locateTransport.mock.invocationCallOrder[0],
+    );
+    expect(startTransport.mock.invocationCallOrder[0]).toBeGreaterThan(
+      sendInstrumentParameters.mock.invocationCallOrder.at(-1)!,
+    );
+    expect(sendMidiEvents).toHaveBeenCalledTimes(2);
+    expect(sendInstrumentParameters).toHaveBeenCalledTimes(2);
+
+    getTransportState.mockResolvedValue({ frame: 20000, isPlaying: false });
+    await bridge.startTransport();
+
+    expect(locateTransport).toHaveBeenLastCalledWith(20000);
+    expect(sendMidiEvents).toHaveBeenCalledTimes(3);
+    expect(sendInstrumentParameters).toHaveBeenCalledTimes(3);
+  });
+
+  it('schedules aligned scene parts independently across multiple Juno tracks', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine, sendMidiEvents } = createMockEngine(clock);
+    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    const bass = createDefaultJunoTrack('track-bass');
+    const chords = createDefaultJunoTrack('track-chords');
+    const createAlignedClip = (id: string, pitch: number) => ({
+      id,
+      name: id,
+      start: 0,
+      duration: 2000,
+      gain: 1,
+      fadeIn: 0,
+      fadeOut: 0,
+      automationCurveIds: [],
+      midi: {
+        notes: [
+          {
+            id: `${id}:note-1`,
+            pitch,
+            startBeat: 0,
+            durationBeats: 1,
+            velocity: 96,
+          },
+        ],
+      },
+    });
+    bass.clips = [createAlignedClip('bass-part', 36)];
+    chords.clips = [createAlignedClip('chord-part', 60)];
+
+    await bridge.applySessionUpdate(createSession({ tracks: [bass, chords] }));
+
+    const expectedEvents = (pitch: number) => [
+      {
+        frame: 0,
+        type: MidiEventType.NoteOn,
+        channel: 0,
+        data1: pitch,
+        data2: 96,
+      },
+      {
+        frame: 24000,
+        type: MidiEventType.NoteOff,
+        channel: 0,
+        data1: pitch,
+        data2: 0,
+      },
+    ];
+    expect(sendMidiEvents).toHaveBeenCalledWith(
+      'track-bass:instrument:juno106',
+      expectedEvents(36),
+      { replace: true },
+    );
+    expect(sendMidiEvents).toHaveBeenCalledWith(
+      'track-chords:instrument:juno106',
+      expectedEvents(60),
+      { replace: true },
+    );
+  });
+
+  it('forwards native transport-loop ranges without JS polling', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine, setTransportLoop, getTransportState } = createMockEngine(clock);
+    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    getTransportState.mockResolvedValue({ frame: 4096, isPlaying: true });
+
+    await bridge.setTransportLoop(2048, 8192, true);
+    expect(setTransportLoop).toHaveBeenCalledWith(2048, 8192, true);
+    expect(getTransportState).toHaveBeenCalledTimes(1);
+
+    await bridge.setTransportLoop(0, 0, false);
+    expect(setTransportLoop).toHaveBeenLastCalledWith(0, 0, false);
+
+    await expect(bridge.setTransportLoop(8192, 8192, true)).rejects.toThrow(
+      'startFrame to be less than endFrame',
+    );
+    expect(setTransportLoop).toHaveBeenCalledTimes(2);
+  });
+
+  it('pauses and chases Juno schedules when a session update arrives during playback', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const {
+      engine,
+      getTransportState,
+      locateTransport,
+      sendMidiEvents,
+      sendInstrumentParameters,
+      startTransport,
+      stopTransport,
+    } = createMockEngine(clock);
+    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    const track = createDefaultJunoTrack('track-juno');
+    const instrumentNodeId = 'track-juno:instrument:juno106';
+    track.clips = [
+      {
+        id: 'held-note',
+        name: 'Held note',
+        start: 0,
+        duration: 1000,
+        gain: 1,
+        fadeIn: 0,
+        fadeOut: 0,
+        automationCurveIds: [],
+        midi: {
+          notes: [
+            {
+              id: 'note-1',
+              pitch: 60,
+              startBeat: 0,
+              durationBeats: 2,
+              velocity: 100,
+            },
+          ],
+        },
+      },
+    ];
+
+    await bridge.applySessionUpdate(createSession({ revision: 1, tracks: [track] }));
+    await new Promise((resolve) => setImmediate(resolve));
+    locateTransport.mockClear();
+    sendMidiEvents.mockClear();
+    sendInstrumentParameters.mockClear();
+    startTransport.mockClear();
+    stopTransport.mockClear();
+    getTransportState.mockReset();
+    getTransportState
+      .mockResolvedValueOnce({ frame: 24000, isPlaying: true })
+      .mockResolvedValueOnce({ frame: 24576, isPlaying: false })
+      .mockResolvedValue({ frame: 24576, isPlaying: true });
+    track.clips[0].midi!.notes[0].velocity = 101;
+
+    await bridge.applySessionUpdate(createSession({ revision: 2, tracks: [track] }));
+
+    expect(stopTransport).toHaveBeenCalledTimes(1);
+    expect(locateTransport).toHaveBeenCalledWith(24576);
+    expect(sendMidiEvents).toHaveBeenCalledWith(
+      instrumentNodeId,
+      [
+        {
+          frame: 0,
+          type: MidiEventType.NoteOn,
+          channel: 0,
+          data1: 60,
+          data2: 101,
+        },
+        {
+          frame: 48000,
+          type: MidiEventType.NoteOff,
+          channel: 0,
+          data1: 60,
+          data2: 0,
+        },
+      ],
+      { replace: true },
+    );
+    expect(stopTransport.mock.invocationCallOrder[0]).toBeLessThan(
+      locateTransport.mock.invocationCallOrder[0],
+    );
+    expect(locateTransport.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMidiEvents.mock.invocationCallOrder[0],
+    );
+    expect(startTransport.mock.invocationCallOrder[0]).toBeGreaterThan(
+      sendInstrumentParameters.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('starts transport for live Juno notes and forwards realtime controls', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine, startTransport, sendMidiEvent, setInstrumentParameter, allNotesOff } =
+      createMockEngine(clock);
+    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    const nodeId = 'track-juno:instrument:juno106';
+
+    await bridge.sendInstrumentMidi(nodeId, {
+      type: MidiEventType.NoteOn,
+      channel: 0,
+      data1: 60,
+      data2: 100,
+    });
+    await bridge.setInstrumentParameter(nodeId, {
+      parameterId: JunoParameterId.CutoffHz,
+      value: 2400,
+    });
+    await bridge.allNotesOff(nodeId);
+
+    expect(startTransport).toHaveBeenCalledTimes(1);
+    expect(startTransport.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMidiEvent.mock.invocationCallOrder[0],
+    );
+    expect(sendMidiEvent).toHaveBeenCalledWith(nodeId, {
+      type: MidiEventType.NoteOn,
+      channel: 0,
+      data1: 60,
+      data2: 100,
+    });
+    expect(setInstrumentParameter).toHaveBeenCalledWith(nodeId, {
+      parameterId: JunoParameterId.CutoffHz,
+      value: 2400,
+    });
+    expect(allNotesOff).toHaveBeenCalledWith(nodeId);
+
+    bridge.setInstrumentInputEnabled(false);
+    await expect(
+      bridge.sendInstrumentMidi(nodeId, {
+        type: MidiEventType.NoteOn,
+        channel: 0,
+        data1: 62,
+        data2: 100,
+      }),
+    ).rejects.toThrow('while the app is inactive');
+    expect(startTransport).toHaveBeenCalledTimes(1);
+  });
+
+  it('serializes quick live note taps so note-off cannot overtake note-on', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine, getTransportState, sendMidiEvent, startTransport } =
+      createMockEngine(clock);
+    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    let resolveInitialTransport!: (state: { frame: number; isPlaying: boolean }) => void;
+    const initialTransport = new Promise<{ frame: number; isPlaying: boolean }>(
+      (resolve) => {
+        resolveInitialTransport = resolve;
+      },
+    );
+    getTransportState.mockReset();
+    getTransportState
+      .mockImplementationOnce(() => initialTransport)
+      .mockResolvedValue({ frame: 0, isPlaying: false });
+
+    const noteOn = bridge.sendInstrumentMidi('juno', {
+      type: MidiEventType.NoteOn,
+      channel: 0,
+      data1: 60,
+      data2: 100,
+    });
+    await Promise.resolve();
+    const noteOff = bridge.sendInstrumentMidi('juno', {
+      type: MidiEventType.NoteOff,
+      channel: 0,
+      data1: 60,
+      data2: 0,
+    });
+    resolveInitialTransport({ frame: 0, isPlaying: false });
+
+    await Promise.all([noteOn, noteOff]);
+
+    expect(startTransport).toHaveBeenCalledTimes(1);
+    expect(sendMidiEvent.mock.calls.map(([, event]) => event.type)).toEqual([
+      MidiEventType.NoteOn,
+      MidiEventType.NoteOff,
+    ]);
+  });
+
+  it('rechecks the native output route for a live note on a playing transport', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine, getTransportState, sendMidiEvent, startTransport } =
+      createMockEngine(clock);
+    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    getTransportState.mockResolvedValue({ frame: 4096, isPlaying: true });
+
+    await bridge.sendInstrumentMidi('juno', {
+      type: MidiEventType.NoteOn,
+      channel: 0,
+      data1: 67,
+      data2: 96,
+    });
+
+    expect(startTransport).toHaveBeenCalledTimes(1);
+    expect(startTransport.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMidiEvent.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('invalidates an in-flight live note before background transport stop', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine, getTransportState, sendMidiEvent, startTransport, stopTransport } =
+      createMockEngine(clock);
+    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    let resolveInitialTransport!: (state: { frame: number; isPlaying: boolean }) => void;
+    const initialTransport = new Promise<{ frame: number; isPlaying: boolean }>(
+      (resolve) => {
+        resolveInitialTransport = resolve;
+      },
+    );
+    getTransportState.mockReset();
+    getTransportState
+      .mockImplementationOnce(() => initialTransport)
+      .mockResolvedValue({ frame: 0, isPlaying: false });
+
+    const noteOn = bridge.sendInstrumentMidi('juno', {
+      type: MidiEventType.NoteOn,
+      channel: 0,
+      data1: 60,
+      data2: 100,
+    });
+    await Promise.resolve();
+    bridge.setInstrumentInputEnabled(false);
+    const stopped = bridge.stopTransport();
+    resolveInitialTransport({ frame: 0, isPlaying: false });
+
+    await expect(noteOn).rejects.toThrow('while the app is inactive');
+    await stopped;
+
+    expect(sendMidiEvent).not.toHaveBeenCalled();
+    expect(startTransport).not.toHaveBeenCalled();
+    expect(stopTransport).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies persisted Juno parameters in place while a voice is active', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const {
+      engine,
+      getTransportState,
+      locateTransport,
+      removeNodes,
+      setInstrumentParameter,
+      startTransport,
+      stopTransport,
+    } = createMockEngine(clock);
+    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    const track = createDefaultJunoTrack('track-juno');
+    track.clips = [];
+
+    await bridge.applySessionUpdate(createSession({ revision: 1, tracks: [track] }));
+    removeNodes.mockClear();
+    setInstrumentParameter.mockClear();
+    startTransport.mockClear();
+    stopTransport.mockClear();
+    locateTransport.mockClear();
+    getTransportState.mockResolvedValue({ frame: 1200, isPlaying: true });
+    const instrument = track.routing.graph?.nodes.find(
+      (node) => node.type === 'instrument',
+    );
+    if (!instrument || instrument.type !== 'instrument') {
+      throw new Error('Juno fixture is missing its instrument node');
+    }
+    instrument.parameters.cutoffHz = 3200;
+
+    await bridge.applySessionUpdate(createSession({ revision: 2, tracks: [track] }));
+
+    expect(setInstrumentParameter).toHaveBeenCalledWith(instrument.id, {
+      parameterId: JunoParameterId.CutoffHz,
+      value: 3200,
+    });
+    expect(removeNodes).not.toHaveBeenCalled();
+    expect(stopTransport).not.toHaveBeenCalled();
+    expect(locateTransport).not.toHaveBeenCalled();
+    expect(startTransport).not.toHaveBeenCalled();
+  });
+
+  it('applies persisted parameters to every Juno node in a track graph', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine, setInstrumentParameter } = createMockEngine(clock);
+    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    const track = createDefaultJunoTrack('track-layered');
+    track.clips = [];
+    const graph = track.routing.graph;
+    const primary = graph?.nodes.find((node) => node.type === 'instrument');
+    if (!graph || !primary || primary.type !== 'instrument') {
+      throw new Error('Layered Juno fixture is missing its primary instrument');
+    }
+    const secondary = {
+      ...primary,
+      id: 'track-layered:instrument:juno106-secondary',
+      parameters: { ...primary.parameters },
+    };
+    graph.nodes.push(secondary);
+
+    await bridge.applySessionUpdate(createSession({ revision: 1, tracks: [track] }));
+    setInstrumentParameter.mockClear();
+    primary.parameters.resonance = 0.4;
+    secondary.parameters.resonance = 0.7;
+
+    await bridge.applySessionUpdate(createSession({ revision: 2, tracks: [track] }));
+
+    expect(setInstrumentParameter.mock.calls).toEqual(
+      expect.arrayContaining([
+        [primary.id, { parameterId: JunoParameterId.Resonance, value: 0.4 }],
+        [secondary.id, { parameterId: JunoParameterId.Resonance, value: 0.7 }],
+      ]),
+    );
+  });
+
+  it('uses the applied session tempo in transport snapshots', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine, getTransportState } = createMockEngine(clock);
+    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    getTransportState.mockResolvedValue({ frame: sampleRate, isPlaying: false });
+
+    await bridge.applySessionUpdate(
+      createSession({
+        revision: 1,
+        tracks: [],
+        metadata: {
+          ...createSession().metadata,
+          bpm: 90,
+        },
+      }),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(bridge.getTransportState()).toEqual(
+      expect.objectContaining({
+        frame: sampleRate,
+        seconds: 1,
+        beats: 1.5,
+        bpm: 90,
+      }),
+    );
   });
 
   it('throws when a track is missing a routing graph', async () => {
