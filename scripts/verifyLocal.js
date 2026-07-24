@@ -31,9 +31,9 @@ const checks = [
 
 if (process.platform !== 'win32') {
   checks.splice(7, 0, [
-    'Shell syntax',
-    'bash',
-    ['-n', 'scripts/daftcitadel.sh', 'scripts/rvictl-capture.sh'],
+    'Installer integrity',
+    process.execPath,
+    ['scripts/verifyInstaller.js'],
   ]);
 }
 
