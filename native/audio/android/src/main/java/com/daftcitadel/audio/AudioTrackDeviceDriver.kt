@@ -62,7 +62,11 @@ internal class AudioTrackDeviceDriver(
     val renderBuffer = FloatArray(framesPerBuffer * channelCount)
     running.set(true)
     audioTrack = track
-    val thread = Thread({ renderLoop(track, renderBuffer, framesPerBuffer) }, THREAD_NAME)
+    val thread = Thread({ renderLoop(track, renderBuffer, framesPerBuffer) }, THREAD_NAME).apply {
+      uncaughtExceptionHandler = Thread.UncaughtExceptionHandler { _, _ ->
+        running.set(false)
+      }
+    }
     renderThread = thread
     try {
       track.play()
@@ -111,32 +115,22 @@ internal class AudioTrackDeviceDriver(
     framesPerBuffer: Int
   ) {
     Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
-    try {
-      while (running.get()) {
-        renderInterleaved(renderBuffer, OUTPUT_CHANNEL_COUNT, framesPerBuffer)
-        var offset = 0
-        while (running.get() && offset < renderBuffer.size) {
-          val written = track.write(
-            renderBuffer,
-            offset,
-            renderBuffer.size - offset,
-            AudioTrack.WRITE_BLOCKING
-          )
-          if (written <= 0) {
-            if (running.get()) {
-              Log.e(TAG, "AudioTrack write failed with status $written")
-            }
-            running.set(false)
-            break
-          }
-          offset += written
+    while (running.get()) {
+      renderInterleaved(renderBuffer, OUTPUT_CHANNEL_COUNT, framesPerBuffer)
+      var offset = 0
+      while (running.get() && offset < renderBuffer.size) {
+        val written = track.write(
+          renderBuffer,
+          offset,
+          renderBuffer.size - offset,
+          AudioTrack.WRITE_BLOCKING
+        )
+        if (written <= 0) {
+          running.set(false)
+          break
         }
+        offset += written
       }
-    } catch (error: Throwable) {
-      if (running.get()) {
-        Log.e(TAG, "Audio render thread failed", error)
-      }
-      running.set(false)
     }
   }
 
