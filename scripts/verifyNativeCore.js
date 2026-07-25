@@ -26,6 +26,7 @@ const sourceFiles = [
   'audio-engine/src/DSPNode.cpp',
   'audio-engine/src/Scheduler.cpp',
   'audio-engine/src/SceneGraph.cpp',
+  'audio-engine/src/RealtimeControlPlane.cpp',
   'audio-engine/src/Automation.cpp',
   'audio-engine/src/Clock.cpp',
   'audio-engine/src/PluginHost.cpp',
@@ -42,6 +43,7 @@ const sourceFiles = [
   'audio-engine/tests/SceneGraphTests.cpp',
   'audio-engine/tests/JunoCoreTests.cpp',
   'audio-engine/tests/InstrumentNodeTests.cpp',
+  'audio-engine/tests/RealtimeControlQueueTests.cpp',
 ].map((file) => path.join(rootDir, file));
 const outputPath = path.join(
   os.tmpdir(),
@@ -52,6 +54,7 @@ const compileArgs = [
   '-Wall',
   '-Wextra',
   '-Wpedantic',
+  '-pthread',
   `-I${path.join(rootDir, 'audio-engine/include')}`,
 ];
 
