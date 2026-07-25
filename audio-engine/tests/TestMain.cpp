@@ -6,6 +6,8 @@ void RunSchedulerTests();
 void RunClipPlayerNodeTests();
 void RunPluginNodeTests();
 void RunJunoCoreTests();
+void RunInstrumentNodeTests();
+void RunRealtimeControlQueueTests();
 }  // namespace daft::audio::tests
 
 int main() {
@@ -14,6 +16,8 @@ int main() {
     daft::audio::tests::RunClipPlayerNodeTests();
     daft::audio::tests::RunPluginNodeTests();
     daft::audio::tests::RunJunoCoreTests();
+    daft::audio::tests::RunInstrumentNodeTests();
+    daft::audio::tests::RunRealtimeControlQueueTests();
   } catch (const std::exception& ex) {
     std::cerr << "Test failure: " << ex.what() << std::endl;
     return 1;
