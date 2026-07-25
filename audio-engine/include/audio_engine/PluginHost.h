@@ -32,11 +32,16 @@ struct PluginRenderResult {
 
 class PluginHostBridge {
  public:
-  using RenderCallback = PluginRenderResult (*)(PluginRenderRequest& request, void* userData);
+  // Plugin renderers execute inside the audio callback. They must contain their
+  // own failures and may not throw across this boundary.
+  using RenderCallback = PluginRenderResult (*)(PluginRenderRequest& request,
+                                                 void* userData) noexcept;
 
-  static void SetRenderCallback(RenderCallback callback, void* userData = nullptr) noexcept;
+  static void SetRenderCallback(RenderCallback callback,
+                                void* userData = nullptr) noexcept;
   static void ClearRenderCallback() noexcept;
-  static std::optional<PluginRenderResult> Render(PluginRenderRequest& request) noexcept;
+  static std::optional<PluginRenderResult> Render(
+      PluginRenderRequest& request) noexcept;
 };
 
 }  // namespace daft::audio
