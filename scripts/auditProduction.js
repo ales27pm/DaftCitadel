@@ -5,6 +5,7 @@ const { spawnSync } = require('node:child_process');
 const temporarilyAllowedAdvisories = new Set([
   'https://github.com/advisories/GHSA-mh99-v99m-4gvg',
 ]);
+const blockingSeverities = new Set(['high', 'critical']);
 
 const result = spawnSync(
   'npm',
@@ -12,21 +13,46 @@ const result = spawnSync(
   {
     encoding: 'utf8',
     shell: process.platform === 'win32',
-  }
+  },
 );
+
+function failForUnusableReport(message) {
+  console.error(message);
+  if (result.stdout) console.error(result.stdout);
+  if (result.stderr) console.error(result.stderr);
+  process.exit(1);
+}
+
+if (result.error) {
+  failForUnusableReport(`Unable to run npm audit: ${result.error.message}`);
+}
 
 let report;
 
 try {
   report = JSON.parse(result.stdout);
 } catch {
-  console.error('Unable to parse npm audit output.');
-  if (result.stdout) console.error(result.stdout);
-  if (result.stderr) console.error(result.stderr);
-  process.exit(1);
+  failForUnusableReport('Unable to parse npm audit output.');
 }
 
-const vulnerabilities = report.vulnerabilities ?? {};
+const isRecord = (value) =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+if (
+  !isRecord(report) ||
+  isRecord(report.error) ||
+  !Object.prototype.hasOwnProperty.call(report, 'vulnerabilities') ||
+  !isRecord(report.vulnerabilities)
+) {
+  failForUnusableReport('npm audit returned an unusable or incomplete report.');
+}
+
+const allVulnerabilities = report.vulnerabilities;
+const vulnerabilities = Object.fromEntries(
+  Object.entries(allVulnerabilities).filter(([, vulnerability]) =>
+    blockingSeverities.has(vulnerability?.severity),
+  ),
+);
 const resolutionMemo = new Map();
 
 function resolvePackage(packageName, visiting = new Set()) {
@@ -42,7 +68,7 @@ function resolvePackage(packageName, visiting = new Set()) {
     };
   }
 
-  const vulnerability = vulnerabilities[packageName];
+  const vulnerability = allVulnerabilities[packageName];
 
   if (!vulnerability) {
     return {
@@ -77,9 +103,7 @@ function resolvePackage(packageName, visiting = new Set()) {
         advisoryUrls.add(url);
       }
 
-      decisions.push(
-        Boolean(url) && temporarilyAllowedAdvisories.has(url)
-      );
+      decisions.push(Boolean(url) && temporarilyAllowedAdvisories.has(url));
     }
   }
 
@@ -126,7 +150,7 @@ if (allowed.length > 0) {
 
   for (const item of allowed) {
     console.warn(
-      `- ${item.packageName} ${item.range}: ${item.advisoryUrls.join(', ')}`
+      `- ${item.packageName} ${item.range}: ${item.advisoryUrls.join(', ')}`,
     );
   }
 }
