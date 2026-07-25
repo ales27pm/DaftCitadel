@@ -66,6 +66,8 @@ class RealtimeControlPlane final {
       SceneGraph& graph, const RealtimeControlCommand& header) noexcept;
 
   RealtimeSpscQueue<RealtimeControlCommand, kCommandCapacity> commandQueue_{};
+  std::array<RealtimeControlCommand, InstrumentNode::kEventCapacity + 1U>
+      instrumentBatchPublishScratch_{};
   std::array<InstrumentEvent, InstrumentNode::kEventCapacity>
       instrumentBatchScratch_{};
   std::atomic<SceneGraph*> publishedGraph_{nullptr};
