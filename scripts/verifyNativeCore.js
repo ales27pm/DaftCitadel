@@ -44,6 +44,7 @@ const sourceFiles = [
   'audio-engine/tests/JunoCoreTests.cpp',
   'audio-engine/tests/InstrumentNodeTests.cpp',
   'audio-engine/tests/RealtimeControlQueueTests.cpp',
+  'audio-engine/tests/RealtimeControlPlaneTests.cpp',
 ].map((file) => path.join(rootDir, file));
 const outputPath = path.join(
   os.tmpdir(),
