@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -61,7 +62,12 @@ class RealtimeControlPlane final {
   [[nodiscard]] RealtimeControlDiagnostics diagnostics() const noexcept;
 
  private:
+  [[nodiscard]] bool consumeInstrumentBatch(
+      SceneGraph& graph, const RealtimeControlCommand& header) noexcept;
+
   RealtimeSpscQueue<RealtimeControlCommand, kCommandCapacity> commandQueue_{};
+  std::array<InstrumentEvent, InstrumentNode::kEventCapacity>
+      instrumentBatchScratch_{};
   std::atomic<SceneGraph*> publishedGraph_{nullptr};
   std::atomic<std::uint64_t> publicationToken_{0U};
   std::atomic<bool> playing_{false};
