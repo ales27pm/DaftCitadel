@@ -32,7 +32,8 @@ class RealtimeControlPlane final {
  public:
   static constexpr std::size_t kCommandCapacity = 4096U;
 
-  void publishGraph(SceneGraph* graph) noexcept;
+  void publishGraph(SceneGraph* graph,
+                    std::uint64_t publicationToken) noexcept;
   void setPlaying(bool playing) noexcept;
   [[nodiscard]] bool isPlaying() const noexcept;
 
@@ -40,7 +41,8 @@ class RealtimeControlPlane final {
   [[nodiscard]] bool enqueueBatch(
       std::span<const RealtimeControlCommand> commands) noexcept;
 
-  void render(AudioBufferView outputBuffer) noexcept;
+  void render(AudioBufferView outputBuffer,
+              std::uint64_t expectedPublicationToken) noexcept;
 
   // Control-thread lifecycle helpers. Call setPlaying(false) first; readers that
   // entered before the transition drain naturally, while later callbacks see
@@ -54,6 +56,7 @@ class RealtimeControlPlane final {
  private:
   RealtimeSpscQueue<RealtimeControlCommand, kCommandCapacity> commandQueue_{};
   std::atomic<SceneGraph*> publishedGraph_{nullptr};
+  std::atomic<std::uint64_t> publicationToken_{0U};
   std::atomic<bool> playing_{false};
   std::atomic<std::uint32_t> renderReaders_{0U};
   std::atomic<std::uint64_t> xruns_{0U};
