@@ -1,5 +1,6 @@
 #include "audio_engine/RealtimeControlPlane.h"
 
+#include <algorithm>
 #include <chrono>
 #include <limits>
 #include <thread>
@@ -61,6 +62,66 @@ bool RealtimeControlPlane::enqueue(
 
 bool RealtimeControlPlane::enqueueBatch(
     std::span<const RealtimeControlCommand> commands) noexcept {
+  if (commands.empty()) {
+    return true;
+  }
+
+  std::size_t firstEvent = 0U;
+  bool replace = false;
+  RealtimeNodeId nodeId = kInvalidRealtimeNodeId;
+  if (commands.front().type ==
+      RealtimeCommandType::kClearInstrumentEvents) {
+    replace = true;
+    nodeId = commands.front().nodeId;
+    firstEvent = 1U;
+  }
+
+  if (firstEvent < commands.size() &&
+      commands[firstEvent].type ==
+          RealtimeCommandType::kScheduleInstrumentEvent) {
+    if (nodeId == kInvalidRealtimeNodeId) {
+      nodeId = commands[firstEvent].nodeId;
+    }
+    const auto eventCount = commands.size() - firstEvent;
+    const bool isInstrumentBatch =
+        nodeId != kInvalidRealtimeNodeId &&
+        std::all_of(commands.begin() +
+                        static_cast<std::ptrdiff_t>(firstEvent),
+                    commands.end(), [nodeId](const auto& command) {
+                      return command.type ==
+                                 RealtimeCommandType::kScheduleInstrumentEvent &&
+                             command.nodeId == nodeId;
+                    });
+    if (isInstrumentBatch) {
+      if (eventCount > InstrumentNode::kEventCapacity) {
+        commandQueueOverflows_.fetch_add(
+            static_cast<std::uint64_t>(commands.size()),
+            std::memory_order_relaxed);
+        return false;
+      }
+
+      auto& header = instrumentBatchPublishScratch_[0U];
+      header = {};
+      header.type = RealtimeCommandType::kScheduleInstrumentBatch;
+      header.nodeId = nodeId;
+      header.batchSize = static_cast<std::uint16_t>(eventCount);
+      header.replace = replace;
+      for (std::size_t index = 0U; index < eventCount; ++index) {
+        instrumentBatchPublishScratch_[index + 1U] =
+            commands[firstEvent + index];
+      }
+      const auto published = std::span<const RealtimeControlCommand>(
+          instrumentBatchPublishScratch_.data(), eventCount + 1U);
+      if (commandQueue_.tryPushBatch(published)) {
+        return true;
+      }
+      commandQueueOverflows_.fetch_add(
+          static_cast<std::uint64_t>(published.size()),
+          std::memory_order_relaxed);
+      return false;
+    }
+  }
+
   if (commandQueue_.tryPushBatch(commands)) {
     return true;
   }
