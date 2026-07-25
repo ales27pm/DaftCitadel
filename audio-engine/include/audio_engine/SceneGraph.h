@@ -49,9 +49,12 @@ class SceneGraph {
   [[nodiscard]] bool validateInstrumentEvent(
       RealtimeNodeId nodeId, const InstrumentEvent& event) const noexcept;
 
-  /** Apply one already-resolved command on the render/control consumer lane. */
+  /** Apply already-resolved control records on the realtime consumer lane. */
   [[nodiscard]] bool applyRealtimeCommand(
       const RealtimeControlCommand& command) noexcept;
+  [[nodiscard]] bool applyRealtimeInstrumentBatch(
+      RealtimeNodeId nodeId, std::span<const InstrumentEvent> events,
+      bool replace) noexcept;
 
   /** Schedule compact node-parameter automation without callbacks or strings. */
   void scheduleParameterAutomation(const std::string& nodeId,
