@@ -13,6 +13,13 @@ namespace daft::audio {
 
 class SceneGraph;
 
+static_assert(std::atomic<SceneGraph*>::is_always_lock_free,
+              "Realtime graph publication requires lock-free pointer atomics");
+static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
+              "Realtime diagnostics require lock-free 64-bit atomics");
+static_assert(std::atomic<std::size_t>::is_always_lock_free,
+              "Realtime diagnostics require lock-free size atomics");
+
 struct RealtimeControlDiagnostics {
   std::uint64_t xruns = 0U;
   std::uint64_t lastRenderMicros = 0U;
