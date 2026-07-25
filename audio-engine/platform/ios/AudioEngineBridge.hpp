@@ -98,10 +98,11 @@ class AudioEngineBridge {
                                        bool replace);
   static void allNotesOff(EngineGeneration generation,
                           const std::string& nodeId);
-  static bool registerClipBuffer(
-      EngineGeneration generation, const std::string& key, double sampleRate,
-      std::size_t channelCount, std::size_t frameCount,
-      std::vector<std::vector<float>> channelData);
+  static bool registerClipBuffer(EngineGeneration generation,
+                                 const std::string& key, double sampleRate,
+                                 std::size_t channelCount,
+                                 std::size_t frameCount,
+                                 std::vector<std::vector<float>> channelData);
   static bool unregisterClipBuffer(EngineGeneration generation,
                                    const std::string& key);
   static std::shared_ptr<const ClipBuffer> clipBufferForKey(
