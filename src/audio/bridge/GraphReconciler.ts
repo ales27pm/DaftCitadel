@@ -23,6 +23,8 @@ export class GraphReconciler {
 
   private readonly pendingReplacedNodeIds = new Set<NodeId>();
 
+  private structuralMutationTail: Promise<void> = Promise.resolve();
+
   constructor(
     private readonly audioEngine: AudioEngine,
     private readonly logger: Logger,
@@ -60,39 +62,92 @@ export class GraphReconciler {
     nodes: Map<NodeId, NodeConfiguration>,
     connections: Set<ConnectionKey>,
   ): Promise<GraphReconciliationResult> {
-    await this.reconcileNodes(nodes);
-    await this.reconcileConnections(connections, nodes);
-    const result: GraphReconciliationResult = {
-      removedNodeIds: new Set(this.pendingRemovedNodeIds),
-      replacedNodeIds: new Set(this.pendingReplacedNodeIds),
-    };
-    this.pendingRemovedNodeIds.clear();
-    this.pendingReplacedNodeIds.clear();
-    return result;
+    if (!this.hasChanges(nodes, connections)) {
+      this.pendingRemovedNodeIds.clear();
+      this.pendingReplacedNodeIds.clear();
+      return {
+        removedNodeIds: new Set<string>(),
+        replacedNodeIds: new Set<string>(),
+      };
+    }
+
+    return this.runStructuralMutation(async () => {
+      await this.reconcileNodes(nodes);
+      await this.reconcileConnections(connections, nodes);
+      const result: GraphReconciliationResult = {
+        removedNodeIds: new Set(this.pendingRemovedNodeIds),
+        replacedNodeIds: new Set(this.pendingReplacedNodeIds),
+      };
+      this.pendingRemovedNodeIds.clear();
+      this.pendingReplacedNodeIds.clear();
+      return result;
+    });
   }
 
   async forceConfigureNode(node: NodeConfiguration): Promise<void> {
-    const connectionsToRestore = [...this.connectionState].filter((key) => {
-      const [source, destination] = this.parseConnectionKey(key);
-      return source === node.id || destination === node.id;
-    });
-    if (this.nodeState.has(node.id)) {
-      await this.removeTrackedNodes([node.id]);
-    }
-    await this.audioEngine.configureNodes([node]);
-    this.nodeState.set(node.id, node);
-    for (const key of connectionsToRestore) {
-      const [source, destination] = this.parseConnectionKey(key);
-      const otherNodeExists =
-        (source === node.id || this.nodeState.has(source)) &&
-        (destination === OUTPUT_BUS ||
-          destination === node.id ||
-          this.nodeState.has(destination));
-      if (!otherNodeExists) {
-        continue;
+    await this.runStructuralMutation(async () => {
+      const connectionsToRestore = [...this.connectionState].filter((key) => {
+        const [source, destination] = this.parseConnectionKey(key);
+        return source === node.id || destination === node.id;
+      });
+      if (this.nodeState.has(node.id)) {
+        await this.removeTrackedNodes([node.id]);
       }
-      await this.audioEngine.connect(source, destination);
-      this.connectionState.add(key);
+      await this.audioEngine.configureNodes([node]);
+      this.nodeState.set(node.id, node);
+      for (const key of connectionsToRestore) {
+        const [source, destination] = this.parseConnectionKey(key);
+        const otherNodeExists =
+          (source === node.id || this.nodeState.has(source)) &&
+          (destination === OUTPUT_BUS ||
+            destination === node.id ||
+            this.nodeState.has(destination));
+        if (!otherNodeExists) {
+          continue;
+        }
+        await this.audioEngine.connect(source, destination);
+        this.connectionState.add(key);
+      }
+    });
+  }
+
+  private async runStructuralMutation<T>(operation: () => Promise<T>): Promise<T> {
+    let releaseTail!: () => void;
+    const previous = this.structuralMutationTail;
+    this.structuralMutationTail = new Promise<void>((resolve) => {
+      releaseTail = resolve;
+    });
+    await previous;
+
+    let resumeFrame: number | null = null;
+    let mutationSucceeded = false;
+    try {
+      const transport = await this.audioEngine.getTransportState();
+      if (transport.isPlaying) {
+        await this.audioEngine.stopTransport();
+        const stopped = await this.audioEngine.getTransportState();
+        resumeFrame = Math.max(0, Math.floor(stopped.frame));
+      }
+
+      const result = await operation();
+      mutationSucceeded = true;
+      return result;
+    } finally {
+      try {
+        if (resumeFrame !== null) {
+          await this.audioEngine.locateTransport(resumeFrame);
+          if (mutationSucceeded) {
+            await this.audioEngine.startTransport();
+          } else {
+            this.logger.warn(
+              'Graph mutation failed; transport remains stopped at the captured frame',
+              { frame: resumeFrame },
+            );
+          }
+        }
+      } finally {
+        releaseTail();
+      }
     }
   }
 
