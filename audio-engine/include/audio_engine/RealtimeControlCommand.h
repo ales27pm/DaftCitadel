@@ -3,15 +3,10 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "audio_engine/RealtimeTypes.h"
 #include "audio_engine/instruments/InstrumentNode.h"
 
 namespace daft::audio {
-
-using RealtimeNodeId = std::uint32_t;
-using NodeParameterId = std::uint16_t;
-
-inline constexpr RealtimeNodeId kInvalidRealtimeNodeId = 0U;
-inline constexpr NodeParameterId kInvalidNodeParameterId = 0U;
 
 enum class RealtimeCommandType : std::uint8_t {
   kScheduleInstrumentEvent,
