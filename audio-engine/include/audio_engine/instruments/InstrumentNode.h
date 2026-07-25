@@ -36,8 +36,9 @@ struct InstrumentEvent {
 };
 
 // Source-node foundation for portable instruments. The fixed-capacity event
-// queue is stable-sorted by absolute frame and never allocates. Callers must
-// serialize scheduling and process(), matching the DSPNode control contract.
+// queue is stable-sorted by absolute frame and never allocates. Direct callers
+// must serialize scheduling and process(); platform bridges use the dedicated
+// SPSC command boundary before mutating this consumer-owned queue.
 class InstrumentNode : public DSPNode {
  public:
   // 1024 events keeps dense MIDI clips practical while retaining a fixed,
@@ -47,41 +48,60 @@ class InstrumentNode : public DSPNode {
   static constexpr std::uint8_t kMaximumMidiData = 127;
 
   void prepare(double sampleRate) override;
-  void reset() override;
-  void locate(std::uint64_t frame) override;
-  void process(AudioBufferView buffer) final;
+  void reset() noexcept override;
+  void locate(std::uint64_t frame) noexcept override;
+  void process(AudioBufferView buffer) noexcept final;
 
   [[nodiscard]] bool scheduleEvent(const InstrumentEvent& event) noexcept;
   [[nodiscard]] bool scheduleEvents(std::span<const InstrumentEvent> events,
-                                    bool replace = false) noexcept;
+                                     bool replace = false) noexcept;
   [[nodiscard]] bool replaceScheduledEvents(
       std::span<const InstrumentEvent> events) noexcept {
     return scheduleEvents(events, true);
   }
-  [[nodiscard]] bool scheduleNoteOn(std::uint64_t frame, std::uint8_t channel,
-                                    std::uint8_t note, float velocity) noexcept;
-  [[nodiscard]] bool scheduleNoteOff(std::uint64_t frame, std::uint8_t channel,
-                                     std::uint8_t note, float releaseVelocity = 0.0F) noexcept;
-  [[nodiscard]] bool scheduleControlChange(std::uint64_t frame, std::uint8_t channel,
-                                           std::uint8_t controller, float value) noexcept;
-  [[nodiscard]] bool schedulePitchBend(std::uint64_t frame, std::uint8_t channel,
+  [[nodiscard]] bool scheduleNoteOn(std::uint64_t frame,
+                                    std::uint8_t channel,
+                                    std::uint8_t note,
+                                    float velocity) noexcept;
+  [[nodiscard]] bool scheduleNoteOff(
+      std::uint64_t frame, std::uint8_t channel, std::uint8_t note,
+      float releaseVelocity = 0.0F) noexcept;
+  [[nodiscard]] bool scheduleControlChange(std::uint64_t frame,
+                                           std::uint8_t channel,
+                                           std::uint8_t controller,
+                                           float value) noexcept;
+  [[nodiscard]] bool schedulePitchBend(std::uint64_t frame,
+                                       std::uint8_t channel,
                                        float normalizedBend) noexcept;
   [[nodiscard]] bool scheduleChannelAftertouch(std::uint64_t frame,
                                                std::uint8_t channel,
                                                float pressure) noexcept;
-  [[nodiscard]] bool schedulePolyAftertouch(std::uint64_t frame, std::uint8_t channel,
-                                            std::uint8_t note, float pressure) noexcept;
-  [[nodiscard]] bool scheduleParameter(std::uint64_t frame, std::uint16_t parameter,
+  [[nodiscard]] bool schedulePolyAftertouch(std::uint64_t frame,
+                                            std::uint8_t channel,
+                                            std::uint8_t note,
+                                            float pressure) noexcept;
+  [[nodiscard]] bool scheduleParameter(std::uint64_t frame,
+                                       std::uint16_t parameter,
                                        float value) noexcept;
   [[nodiscard]] bool scheduleAllNotesOff(std::uint64_t frame,
                                          std::uint8_t channel) noexcept;
 
   void clearScheduledEvents() noexcept;
-  [[nodiscard]] std::size_t pendingEventCount() const noexcept { return eventCount_; }
-  [[nodiscard]] std::uint64_t currentFrame() const noexcept { return currentFrame_; }
+  [[nodiscard]] std::size_t pendingEventCount() const noexcept {
+    return eventCount_;
+  }
+  [[nodiscard]] std::uint64_t currentFrame() const noexcept {
+    return currentFrame_;
+  }
+  [[nodiscard]] bool validateEvent(const InstrumentEvent& event) const noexcept {
+    return isValidEvent(event);
+  }
+  [[nodiscard]] virtual std::size_t activeVoiceCount() const noexcept {
+    return 0U;
+  }
 
   // Transport loops rewind retained timeline events without replaying transient
-  // live input. The graph calls these only while it owns the render/control lock.
+  // live input. The graph calls these only while it owns the render/control lane.
   void rewindTimelineForLoop(std::uint64_t startFrame,
                              std::uint64_t endFrame) noexcept;
   void restoreTimelineAfterLoop(std::uint64_t frame) noexcept;
@@ -101,7 +121,8 @@ class InstrumentNode : public DSPNode {
  protected:
   virtual void prepareInstrument(double sampleRate) = 0;
   virtual void resetInstrument() noexcept = 0;
-  virtual void renderInstrument(AudioBufferView buffer, std::size_t frameOffset,
+  virtual void renderInstrument(AudioBufferView buffer,
+                                std::size_t frameOffset,
                                 std::size_t frameCount) noexcept = 0;
   virtual void handleInstrumentEvent(const InstrumentEvent& event) noexcept = 0;
   [[nodiscard]] virtual bool validateInstrumentEvent(
