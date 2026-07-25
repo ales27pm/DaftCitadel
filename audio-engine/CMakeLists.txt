@@ -50,6 +50,7 @@ endif()
 
 if(DAFT_AUDIO_ENGINE_BUILD_TESTS)
     enable_testing()
+    find_package(Threads REQUIRED)
     add_executable(daft_audio_engine_tests
         tests/TestMain.cpp
         tests/SchedulerTests.cpp
@@ -58,8 +59,9 @@ if(DAFT_AUDIO_ENGINE_BUILD_TESTS)
         tests/SceneGraphTests.cpp
         tests/JunoCoreTests.cpp
         tests/InstrumentNodeTests.cpp
+        tests/RealtimeControlQueueTests.cpp
     )
-    target_link_libraries(daft_audio_engine_tests PRIVATE daft_audio_engine)
+    target_link_libraries(daft_audio_engine_tests PRIVATE daft_audio_engine Threads::Threads)
     if(DAFT_AUDIO_ENGINE_ENABLE_SANITIZERS)
         target_compile_options(daft_audio_engine_tests PRIVATE
             -fsanitize=address,undefined
