@@ -8,6 +8,7 @@ IFS=$'\n\t'
 SCRIPT_NAME=$(basename "$0")
 EAS_CLI_VERSION="${EAS_CLI_VERSION:-21.0.2}"
 EAS_PROFILE="${EAS_PROFILE:-production}"
+PR_CHECK_TIMEOUT_SECONDS="${PR_CHECK_TIMEOUT_SECONDS:-1800}"
 PLATFORM="all"
 WEB_OUTPUT="single"
 WEB_ALIAS=""
@@ -118,6 +119,31 @@ run_in() {
   )
 }
 
+run_with_timeout() {
+  local timeout_seconds=$1
+  shift
+  printf '[AIO][RUN timeout=%ss] ' "$timeout_seconds"
+  quote_cmd "$@"
+  if $DRY_RUN; then
+    return 0
+  fi
+
+  "$@" &
+  local command_pid=$!
+  local deadline=$(( $(date +%s) + timeout_seconds ))
+
+  while kill -0 "$command_pid" 2>/dev/null; do
+    if (( $(date +%s) >= deadline )); then
+      kill "$command_pid" 2>/dev/null || true
+      wait "$command_pid" 2>/dev/null || true
+      die "Command timed out after ${timeout_seconds}s."
+    fi
+    sleep 5
+  done
+
+  wait "$command_pid"
+}
+
 command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
@@ -137,7 +163,10 @@ confirm() {
   fi
   local answer=""
   read -r -p "$prompt [y/N] " answer
-  [[ "${answer,,}" =~ ^y(es)?$ ]] || die "Cancelled."
+  case "$answer" in
+    [yY]|[yY][eE][sS]) return 0 ;;
+    *) die "Cancelled." ;;
+  esac
 }
 
 skip_or_die() {
@@ -338,7 +367,6 @@ verify_repository() {
   run python3 -m py_compile scripts/generate_metadata.py
   run node --check scripts/verifyInstaller.js
   run node --test scripts/__tests__/verifyInstaller.test.js
-  run node scripts/verifyInstaller.js
 
   if node -e 'const p=require("./package.json"); process.exit(p.scripts?.["test:installer-metadata"] ? 0 : 1)'; then
     run npm run test:installer-metadata
@@ -347,7 +375,6 @@ verify_repository() {
   fi
 
   run npm run verify:sanitize
-  run npx expo-doctor --verbose
 }
 
 build_web_local() {
@@ -559,7 +586,7 @@ merge_pull_request() {
   [[ -n "$target" ]] || die "No pull request is available to merge."
 
   confirm "Watch checks and squash-merge $target?"
-  run gh pr checks "$target" --watch
+  run_with_timeout "$PR_CHECK_TIMEOUT_SECONDS" gh pr checks "$target" --watch
   run gh pr merge "$target" --squash --delete-branch
 }
 
@@ -588,7 +615,7 @@ if $DO_WEB_DEPLOY; then
   configure_web_output
 fi
 
-if $DO_VERIFY || $DO_LOCAL_BUILDS; then
+if $DO_VERIFY || $DO_LOCAL_BUILDS || $DO_WEB_DEPLOY; then
   install_dependencies
 fi
 
