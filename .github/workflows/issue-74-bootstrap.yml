@@ -1,0 +1,48 @@
+name: Apply issue 74 patch
+
+on:
+  push:
+    branches:
+      - codex/issue-74-installer-metadata
+    paths:
+      - '.github/workflows/issue-74-bootstrap.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.head_commit.message == 'bootstrap: apply issue 74 patch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: codex/issue-74-installer-metadata
+          fetch-depth: 0
+
+      - name: Apply focused patch
+        run: |
+          git apply --check .github/issue-74-installer-metadata.patch
+          git apply .github/issue-74-installer-metadata.patch
+
+      - name: Validate focused changes
+        run: |
+          bash -n scripts/daftcitadel.sh
+          python3 -m py_compile scripts/generate_metadata.py
+          node --check scripts/verifyLocal.js
+          node --check scripts/__tests__/installerMetadata.test.js
+          node --test scripts/__tests__/installerMetadata.test.js
+          git diff --check
+
+      - name: Commit implementation
+        run: |
+          rm .github/issue-74-installer-metadata.patch
+          rm .github/workflows/issue-74-bootstrap.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: preserve installer plugin module metadata'
+          git push origin HEAD:codex/issue-74-installer-metadata
