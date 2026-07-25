@@ -1,6 +1,7 @@
 #include "audio_engine/RealtimeControlPlane.h"
 
 #include <chrono>
+#include <limits>
 #include <thread>
 
 #include "audio_engine/SceneGraph.h"
@@ -16,7 +17,7 @@ class RenderReaderLease final {
     readers_.fetch_add(1U, std::memory_order_acq_rel);
   }
 
-  ~RenderReaderLease() {
+  ~RenderReaderLease() noexcept {
     readers_.fetch_sub(1U, std::memory_order_acq_rel);
   }
 
@@ -26,6 +27,12 @@ class RenderReaderLease final {
  private:
   std::atomic<std::uint32_t>& readers_;
 };
+
+[[nodiscard]] std::uint64_t SaturatingAdd(std::uint64_t value,
+                                           std::uint64_t increment) noexcept {
+  const auto maximum = std::numeric_limits<std::uint64_t>::max();
+  return increment > maximum - value ? maximum : value + increment;
+}
 
 }  // namespace
 
@@ -63,6 +70,46 @@ bool RealtimeControlPlane::enqueueBatch(
   return false;
 }
 
+bool RealtimeControlPlane::consumeInstrumentBatch(
+    SceneGraph& graph, const RealtimeControlCommand& header) noexcept {
+  const auto eventCount = static_cast<std::size_t>(header.batchSize);
+  if (header.nodeId == kInvalidRealtimeNodeId || eventCount == 0U ||
+      eventCount > instrumentBatchScratch_.size()) {
+    commandQueue_.discardPublishedFromConsumer();
+    return false;
+  }
+
+  bool valid = true;
+  for (std::size_t index = 0U; index < eventCount; ++index) {
+    RealtimeControlCommand eventCommand{};
+    if (!commandQueue_.tryPop(eventCommand)) {
+      commandQueue_.discardPublishedFromConsumer();
+      return false;
+    }
+    if (eventCommand.type !=
+            RealtimeCommandType::kScheduleInstrumentEvent ||
+        eventCommand.nodeId != header.nodeId) {
+      valid = false;
+      continue;
+    }
+
+    InstrumentEvent event = eventCommand.instrumentEvent;
+    event.frame = eventCommand.frameIsRelative
+                      ? SaturatingAdd(graph.currentFrame(), eventCommand.frame)
+                      : eventCommand.frame;
+    if (eventCommand.frameIsRelative) {
+      event.retainAcrossPanic = false;
+    }
+    instrumentBatchScratch_[index] = event;
+  }
+
+  return valid && graph.applyRealtimeInstrumentBatch(
+                      header.nodeId,
+                      std::span<const InstrumentEvent>(
+                          instrumentBatchScratch_.data(), eventCount),
+                      header.replace);
+}
+
 void RealtimeControlPlane::render(
     AudioBufferView outputBuffer,
     std::uint64_t expectedPublicationToken) noexcept {
@@ -83,7 +130,13 @@ void RealtimeControlPlane::render(
   const auto started = std::chrono::steady_clock::now();
   RealtimeControlCommand command{};
   while (commandQueue_.tryPop(command)) {
-    (void)graph->applyRealtimeCommand(command);
+    const bool applied =
+        command.type == RealtimeCommandType::kScheduleInstrumentBatch
+            ? consumeInstrumentBatch(*graph, command)
+            : graph->applyRealtimeCommand(command);
+    if (!applied) {
+      commandFailures_.fetch_add(1U, std::memory_order_relaxed);
+    }
   }
 
   graph->render(outputBuffer);
@@ -100,8 +153,6 @@ void RealtimeControlPlane::render(
                       std::memory_order_relaxed);
   pendingInstrumentEvents_.store(graph->pendingInstrumentEventCount(),
                                  std::memory_order_relaxed);
-  commandFailures_.store(graph->realtimeCommandFailureCount(),
-                         std::memory_order_relaxed);
 
   const double sampleRate = graph->sampleRate();
   if (sampleRate > 0.0) {
