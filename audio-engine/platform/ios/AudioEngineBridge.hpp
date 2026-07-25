@@ -105,8 +105,8 @@ class AudioEngineBridge {
                                  std::vector<std::vector<float>> channelData);
   static bool unregisterClipBuffer(EngineGeneration generation,
                                    const std::string& key);
-  static std::shared_ptr<const ClipBuffer> clipBufferForKey(
-      EngineGeneration generation, const std::string& key);
+  static std::shared_ptr<const ClipBuffer> clipBufferForKey(EngineGeneration generation,
+                                                            const std::string& key);
   static RenderDiagnostics getDiagnostics(EngineGeneration generation);
 
  private:
