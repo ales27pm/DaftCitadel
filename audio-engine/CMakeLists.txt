@@ -13,6 +13,7 @@ add_library(daft_audio_engine
     src/DSPNode.cpp
     src/Scheduler.cpp
     src/SceneGraph.cpp
+    src/SceneGraphRealtimeBatch.cpp
     src/RealtimeControlPlane.cpp
     src/Automation.cpp
     src/Clock.cpp
