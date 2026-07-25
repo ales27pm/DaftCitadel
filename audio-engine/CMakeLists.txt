@@ -61,6 +61,7 @@ if(DAFT_AUDIO_ENGINE_BUILD_TESTS)
         tests/JunoCoreTests.cpp
         tests/InstrumentNodeTests.cpp
         tests/RealtimeControlQueueTests.cpp
+        tests/RealtimeControlPlaneTests.cpp
     )
     target_link_libraries(daft_audio_engine_tests PRIVATE daft_audio_engine Threads::Threads)
     if(DAFT_AUDIO_ENGINE_ENABLE_SANITIZERS)
