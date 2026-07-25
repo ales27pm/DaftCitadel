@@ -1,0 +1,255 @@
+diff --git a/.github/workflows/installer-metadata.yml b/.github/workflows/installer-metadata.yml
+new file mode 100644
+--- /dev/null
++++ b/.github/workflows/installer-metadata.yml
+@@ -0,0 +1,44 @@
++name: Installer metadata
++
++on:
++  pull_request:
++    paths:
++      - 'scripts/daftcitadel.sh'
++      - 'scripts/generate_metadata.py'
++      - 'scripts/__tests__/installerMetadata.test.js'
++      - 'scripts/verifyLocal.js'
++      - 'package.json'
++      - '.github/workflows/installer-metadata.yml'
++  push:
++    branches:
++      - main
++    paths:
++      - 'scripts/daftcitadel.sh'
++      - 'scripts/generate_metadata.py'
++      - 'scripts/__tests__/installerMetadata.test.js'
++      - 'scripts/verifyLocal.js'
++      - 'package.json'
++      - '.github/workflows/installer-metadata.yml'
++
++permissions:
++  contents: read
++
++jobs:
++  installer-metadata:
++    name: Shell-to-Python metadata regression
++    runs-on: ubuntu-24.04
++    timeout-minutes: 10
++
++    steps:
++      - name: Check out repository
++        uses: actions/checkout@v4
++        with:
++          persist-credentials: false
++
++      - name: Set up Node.js
++        uses: actions/setup-node@v4
++        with:
++          node-version: '22'
++
++      - name: Test installer metadata pipeline
++        run: npm run test:installer-metadata
+diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -4,6 +4,7 @@
+     "lint": "eslint . --ext .ts,.tsx",
+     "test": "jest",
+     "test:ci": "TZ=UTC jest --runInBand --silent",
++    "test:installer-metadata": "node --test scripts/__tests__/installerMetadata.test.js",
+     "typecheck": "tsc --noEmit",
+     "format": "prettier --write \"{src,docs}/**/*.{ts,tsx,md}\"",
+     "format:check": "prettier --check \"{src,docs}/**/*.{ts,tsx,md}\""
+diff --git a/scripts/__tests__/installerMetadata.test.js b/scripts/__tests__/installerMetadata.test.js
+new file mode 100644
+--- /dev/null
++++ b/scripts/__tests__/installerMetadata.test.js
+@@ -0,0 +1,130 @@
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const os = require('node:os');
++const path = require('node:path');
++const { spawnSync } = require('node:child_process');
++const test = require('node:test');
++
++const repositoryRoot = path.resolve(__dirname, '..', '..');
++const installerPath = path.join(repositoryRoot, 'scripts', 'daftcitadel.sh');
++const metadataGeneratorPath = path.join(
++  repositoryRoot,
++  'scripts',
++  'generate_metadata.py',
++);
++
++function extractShellFunction(source, functionName) {
++  const escapedName = functionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
++  const match = source.match(
++    new RegExp(`^${escapedName}\\(\\)\\s*\\{\\r?\\n[\\s\\S]*?^\\}`, 'm'),
++  );
++
++  assert.ok(match, `Unable to locate ${functionName} in ${installerPath}`);
++  return match[0];
++}
++
++function encodeModules(payload) {
++  const installerSource = fs.readFileSync(installerPath, 'utf8');
++  const encoderDefinition = extractShellFunction(installerSource, 'encode_base64');
++  const result = spawnSync(
++    'bash',
++    ['-c', `${encoderDefinition}\nencode_base64`],
++    {
++      encoding: 'utf8',
++      input: payload,
++    },
++  );
++
++  assert.equal(result.status, 0, result.stderr);
++  return result.stdout;
++}
++
++function metadataArguments(temporaryRoot, encodedModules) {
++  const profileManifestPath = path.join(temporaryRoot, 'citadel_profile.json');
++  const pluginHintsPath = path.join(temporaryRoot, 'plugin_cache_hints.json');
++
++  return {
++    pluginHintsPath,
++    profileManifestPath,
++    args: [
++      metadataGeneratorPath,
++      `--profile-manifest-out=${profileManifestPath}`,
++      `--plugin-hints-out=${pluginHintsPath}`,
++      '--profile-manifest-version=2',
++      '--plugin-hints-version=1',
++      '--manifest-generated-at=2026-07-25T00:00:00Z',
++      '--plugin-hints-generated-at=2026-07-25T00:00:00Z',
++      '--profile=apex',
++      '--profile-name=Daft Citadel Apex',
++      `--base-path=${temporaryRoot}`,
++      `--log-path=${path.join(temporaryRoot, 'install.log')}`,
++      `--plugin-cache-path=${path.join(temporaryRoot, 'PluginCache')}`,
++      `--plugin-cache-hints-path=${pluginHintsPath}`,
++      '--feature-ai=false',
++      '--feature-gui=false',
++      '--feature-expanded-synths=true',
++      '--feature-heavy-assets=false',
++      '--feature-groove-tools=false',
++      '--feature-experimental-synths=false',
++      '--feature-container=false',
++      '--plugin-hint-format=vst3',
++      '--plugin-hint-identifier=helm',
++      '--plugin-hint-name=Helm',
++      '--plugin-hint-binary-path=/usr/lib/vst3/Helm.vst3',
++      `--plugin-hint-cache-path=${path.join(temporaryRoot, 'PluginCache', 'vst3', 'helm')}`,
++      '--plugin-hint-enabled=true',
++      '--plugin-hint-available=true',
++      '--plugin-hint-version=1.0.0',
++      `--plugin-hint-modules=${encodedModules}`,
++    ],
++  };
++}
++
++test('installer metadata preserves encoded plugin modules end to end', () => {
++  const temporaryRoot = fs.mkdtempSync(
++    path.join(os.tmpdir(), 'daftcitadel-installer-metadata-'),
++  );
++  const modulePayload = 'core\nsynths\n';
++
++  try {
++    const encodedModules = encodeModules(modulePayload);
++    assert.equal(encodedModules, Buffer.from(modulePayload).toString('base64'));
++    assert.equal(
++      Buffer.from(encodedModules, 'base64').toString('utf8'),
++      modulePayload,
++    );
++
++    const { args, pluginHintsPath } = metadataArguments(
++      temporaryRoot,
++      encodedModules,
++    );
++    const result = spawnSync('python3', args, { encoding: 'utf8' });
++
++    assert.equal(result.status, 0, result.stderr);
++    const pluginHints = JSON.parse(fs.readFileSync(pluginHintsPath, 'utf8'));
++    assert.deepEqual(pluginHints.hints[0].modules, ['core', 'synths']);
++  } finally {
++    fs.rmSync(temporaryRoot, { force: true, recursive: true });
++  }
++});
++
++test('installer metadata rejects malformed base64 without writing output', () => {
++  const temporaryRoot = fs.mkdtempSync(
++    path.join(os.tmpdir(), 'daftcitadel-installer-metadata-invalid-'),
++  );
++
++  try {
++    const { args, pluginHintsPath, profileManifestPath } = metadataArguments(
++      temporaryRoot,
++      '%%%',
++    );
++    const result = spawnSync('python3', args, { encoding: 'utf8' });
++
++    assert.notEqual(result.status, 0);
++    assert.match(result.stderr, /Invalid base64 payload for plugin modules/);
++    assert.equal(fs.existsSync(profileManifestPath), false);
++    assert.equal(fs.existsSync(pluginHintsPath), false);
++  } finally {
++    fs.rmSync(temporaryRoot, { force: true, recursive: true });
++  }
++});
+diff --git a/scripts/daftcitadel.sh b/scripts/daftcitadel.sh
+--- a/scripts/daftcitadel.sh
++++ b/scripts/daftcitadel.sh
+@@ -10,13 +10,7 @@ bool_to_flag() {
+ }
+ 
+ encode_base64() {
+-    python3 - <<'PY'
+-import base64
+-import sys
+-
+-data = sys.stdin.buffer.read()
+-print(base64.b64encode(data).decode('utf-8'), end='')
+-PY
++    python3 -c 'import base64, sys; sys.stdout.write(base64.b64encode(sys.stdin.buffer.read()).decode("ascii"))'
+ }
+ 
+ register_plugin_hint() {
+diff --git a/scripts/generate_metadata.py b/scripts/generate_metadata.py
+--- a/scripts/generate_metadata.py
++++ b/scripts/generate_metadata.py
+@@ -12,10 +12,10 @@ def decode_modules(encoded: str) -> List[str]:
+     if not encoded:
+         return []
+     try:
+-        decoded = base64.b64decode(encoded.encode("utf-8"))
+-    except (ValueError, binascii.Error) as exc:
++        decoded = base64.b64decode(encoded.encode("ascii"), validate=True)
++        text = decoded.decode("utf-8")
++    except (ValueError, UnicodeEncodeError, UnicodeDecodeError, binascii.Error) as exc:
+         raise ValueError(f"Invalid base64 payload for plugin modules: {exc}") from exc
+-    text = decoded.decode("utf-8")
+     modules = [item for item in text.splitlines() if item]
+     return dedupe_preserve_order(modules)
+ 
+diff --git a/scripts/verifyLocal.js b/scripts/verifyLocal.js
+--- a/scripts/verifyLocal.js
++++ b/scripts/verifyLocal.js
+@@ -30,11 +30,16 @@ const checks = [
+ ];
+ 
+ if (process.platform !== 'win32') {
+-  checks.splice(7, 0, [
+-    'Installer integrity',
+-    process.execPath,
+-    ['scripts/verifyInstaller.js'],
+-  ]);
++  checks.splice(
++    7,
++    0,
++    [
++      'Installer integrity',
++      process.execPath,
++      ['scripts/verifyInstaller.js'],
++    ],
++    ['Installer metadata', npmCommand, ['run', 'test:installer-metadata']],
++  );
+ }
+ 
+ for (const [label, command, args] of checks) {
