@@ -26,7 +26,7 @@ struct RealtimeControlCommand {
   std::uint64_t endFrame = 0U;
   double parameterValue = 0.0;
   InstrumentEvent instrumentEvent{};
-  bool instrumentFrameIsRelative = false;
+  bool frameIsRelative = false;
   bool enabled = false;
 };
 
