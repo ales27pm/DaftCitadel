@@ -43,7 +43,7 @@ describe('instrument native bridge contract', () => {
   it('exports matching promise APIs on iOS and Android', () => {
     operations.forEach((operation) => {
       expect(iosModule).toContain(`RCT_EXPORT_METHOD(${operation}:`);
-      expect(androidModule).toMatch(new RegExp(`fun\\s+${operation}\\(`));
+      expect(androidModule).toMatch(new RegExp(`fun\s+${operation}\(`));
     });
   });
 
@@ -138,5 +138,19 @@ describe('instrument native bridge contract', () => {
     expect(startMethod).toContain('check(deviceDriver.isRunning())');
     expect(stopMethod).toMatch(/nativeStopTransport\(\)[\s\S]*deviceDriver\.stop\(\)/);
     expect(androidDeviceDriver).toMatch(/fun isRunning\(\): Boolean/);
+  });
+
+  it('keeps the Android audio render loop free of logs and exception handling', () => {
+    const renderLoop = methodBody(
+      androidDeviceDriver,
+      'private fun renderLoop(',
+      'private companion object',
+    );
+
+    expect(renderLoop).toContain('renderInterleaved(');
+    expect(renderLoop).toContain('track.write(');
+    expect(renderLoop).not.toMatch(/\btry\b|\bcatch\b|runCatching|Log\./);
+    expect(androidDeviceDriver).toContain('uncaughtExceptionHandler =');
+    expect(androidDeviceDriver).toContain('running.set(false)');
   });
 });
