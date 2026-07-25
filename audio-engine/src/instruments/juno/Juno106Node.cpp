@@ -47,14 +47,17 @@ namespace {
   }
 
   std::uint16_t numeric = 0U;
-  const auto parsed = std::from_chars(name.data(), name.data() + name.size(), numeric);
-  if (parsed.ec == std::errc{} && parsed.ptr == name.data() + name.size()) {
+  const auto parsed =
+      std::from_chars(name.data(), name.data() + name.size(), numeric);
+  if (parsed.ec == std::errc{} &&
+      parsed.ptr == name.data() + name.size()) {
     return static_cast<ParameterId>(numeric);
   }
   return std::nullopt;
 }
 
-[[nodiscard]] std::optional<std::size_t> ParameterIndex(ParameterId parameter) noexcept {
+[[nodiscard]] std::optional<std::size_t> ParameterIndex(
+    ParameterId parameter) noexcept {
   const auto numeric = static_cast<std::uint16_t>(parameter);
   if (numeric < static_cast<std::uint16_t>(ParameterId::kPulseWidth) ||
       numeric > static_cast<std::uint16_t>(ParameterId::kLfoDepth)) {
@@ -70,13 +73,30 @@ Juno106Node::Juno106Node(std::uint32_t maximumFramesPerBlock,
     : maximumFramesPerBlock_(maximumFramesPerBlock), polyphony_(polyphony) {}
 
 void Juno106Node::setParameter(const std::string& name, double value) {
+  const auto parameter = resolveParameterId(name);
+  if (parameter) {
+    (void)setParameterById(*parameter, value);
+  }
+}
+
+std::optional<NodeParameterId> Juno106Node::resolveParameterId(
+    std::string_view name) const noexcept {
   const auto parameter = ParameterForName(name);
-  if (!parameter || !std::isfinite(value) ||
+  if (!parameter || !ParameterIndex(*parameter)) {
+    return std::nullopt;
+  }
+  return static_cast<NodeParameterId>(*parameter);
+}
+
+bool Juno106Node::setParameterById(NodeParameterId parameter,
+                                   double value) noexcept {
+  if (!std::isfinite(value) ||
       value < -static_cast<double>(std::numeric_limits<float>::max()) ||
       value > static_cast<double>(std::numeric_limits<float>::max())) {
-    return;
+    return false;
   }
-  (void)setParameter(*parameter, static_cast<float>(value));
+  return setParameter(static_cast<ParameterId>(parameter),
+                      static_cast<float>(value));
 }
 
 bool Juno106Node::setParameter(ParameterId parameter, float value) noexcept {
@@ -90,11 +110,12 @@ bool Juno106Node::setParameter(ParameterId parameter, float value) noexcept {
 }
 
 bool Juno106Node::setImmediateParameter(std::uint16_t parameter,
-                                       float value) noexcept {
+                                        float value) noexcept {
   return setParameter(static_cast<ParameterId>(parameter), value);
 }
 
-bool Juno106Node::scheduleParameter(std::uint64_t frame, ParameterId parameter,
+bool Juno106Node::scheduleParameter(std::uint64_t frame,
+                                    ParameterId parameter,
                                     float value) noexcept {
   if (!ParameterIndex(parameter)) {
     return false;
@@ -149,7 +170,8 @@ void Juno106Node::resetInstrument() noexcept {
   }
 }
 
-void Juno106Node::renderInstrument(AudioBufferView buffer, std::size_t frameOffset,
+void Juno106Node::renderInstrument(AudioBufferView buffer,
+                                   std::size_t frameOffset,
                                    std::size_t frameCount) noexcept {
   if (!prepared_ || frameCount == 0U) {
     return;
@@ -157,8 +179,8 @@ void Juno106Node::renderInstrument(AudioBufferView buffer, std::size_t frameOffs
 
   std::size_t rendered = 0U;
   while (rendered < frameCount) {
-    const std::size_t chunk =
-        std::min<std::size_t>(maximumFramesPerBlock_, frameCount - rendered);
+    const std::size_t chunk = std::min<std::size_t>(
+        maximumFramesPerBlock_, frameCount - rendered);
     const std::size_t outputOffset = frameOffset + rendered;
     if (buffer.channelCount() >= 2U) {
       engine_.render(buffer.channel(0).subspan(outputOffset, chunk),
@@ -178,7 +200,8 @@ void Juno106Node::renderInstrument(AudioBufferView buffer, std::size_t frameOffs
   }
 }
 
-void Juno106Node::handleInstrumentEvent(const InstrumentEvent& event) noexcept {
+void Juno106Node::handleInstrumentEvent(
+    const InstrumentEvent& event) noexcept {
   if (!prepared_) {
     return;
   }
@@ -215,7 +238,8 @@ void Juno106Node::handleInstrumentEvent(const InstrumentEvent& event) noexcept {
   }
 }
 
-bool Juno106Node::validateInstrumentEvent(const InstrumentEvent& event) const noexcept {
+bool Juno106Node::validateInstrumentEvent(
+    const InstrumentEvent& event) const noexcept {
   return event.type != InstrumentEventType::kParameter ||
          ParameterIndex(static_cast<ParameterId>(event.parameter)).has_value();
 }
