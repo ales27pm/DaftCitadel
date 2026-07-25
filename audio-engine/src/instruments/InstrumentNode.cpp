@@ -9,7 +9,7 @@ namespace daft::audio {
 namespace {
 
 [[nodiscard]] std::uint64_t SaturatingAdd(std::uint64_t value,
-                                          std::size_t increment) noexcept {
+                                           std::size_t increment) noexcept {
   const auto maximum = std::numeric_limits<std::uint64_t>::max();
   if (increment > maximum - value) {
     return maximum;
@@ -27,14 +27,14 @@ void InstrumentNode::prepare(double sampleRate) {
   prepareInstrument(sampleRate);
 }
 
-void InstrumentNode::reset() {
+void InstrumentNode::reset() noexcept {
   eventCount_ = 0;
   timelineEventCount_ = 0;
   currentFrame_ = 0;
   resetInstrument();
 }
 
-void InstrumentNode::locate(std::uint64_t frame) {
+void InstrumentNode::locate(std::uint64_t frame) noexcept {
   eventCount_ = 0;
   timelineEventCount_ = 0;
   currentFrame_ = frame;
@@ -47,7 +47,7 @@ void InstrumentNode::clearScheduledEvents() noexcept {
 }
 
 void InstrumentNode::rewindTimelineForLoop(std::uint64_t startFrame,
-                                           std::uint64_t endFrame) noexcept {
+                                            std::uint64_t endFrame) noexcept {
   currentFrame_ = startFrame;
   resetInstrument();
   // Pending live events use absolute transport frames and must not survive a
@@ -84,7 +84,7 @@ void InstrumentNode::panic() noexcept {
   eventCount_ = retained;
 }
 
-void InstrumentNode::process(AudioBufferView buffer) {
+void InstrumentNode::process(AudioBufferView buffer) noexcept {
   buffer.fill(0.0F);
   const std::size_t frameCount = buffer.frameCount();
   if (frameCount == 0U) {
@@ -106,7 +106,8 @@ void InstrumentNode::process(AudioBufferView buffer) {
         next.frame <= blockStart
             ? 0U
             : static_cast<std::size_t>(std::min<std::uint64_t>(
-                  next.frame - blockStart, static_cast<std::uint64_t>(frameCount)));
+                  next.frame - blockStart,
+                  static_cast<std::uint64_t>(frameCount)));
     if (eventOffset > offset) {
       renderInstrument(buffer, offset, eventOffset - offset);
       offset = eventOffset;
@@ -133,7 +134,7 @@ bool InstrumentNode::scheduleEvent(const InstrumentEvent& event) noexcept {
 }
 
 bool InstrumentNode::scheduleEvents(std::span<const InstrumentEvent> events,
-                                    bool replace) noexcept {
+                                     bool replace) noexcept {
   const std::size_t retained = replace ? 0U : eventCount_;
   const auto incomingTimeline = static_cast<std::size_t>(std::count_if(
       events.begin(), events.end(),
@@ -147,14 +148,16 @@ bool InstrumentNode::scheduleEvents(std::span<const InstrumentEvent> events,
     }
   }
 
-  if (!replace && incomingTimeline > timelineEvents_.size() - timelineEventCount_) {
+  if (!replace &&
+      incomingTimeline > timelineEvents_.size() - timelineEventCount_) {
     // Repeated realtime append calls are allowed to recycle already-played
     // history. Session timelines use atomic replacement and remain fully
     // retained, while this bounded compaction prevents long live sessions from
     // exhausting the separate loop replay archive.
     const auto reclaimable = static_cast<std::size_t>(std::count_if(
-        timelineEvents_.begin(), timelineEvents_.begin() +
-                                     static_cast<std::ptrdiff_t>(timelineEventCount_),
+        timelineEvents_.begin(),
+        timelineEvents_.begin() +
+            static_cast<std::ptrdiff_t>(timelineEventCount_),
         [this](const InstrumentEvent& event) {
           return event.frame < currentFrame_;
         }));
@@ -227,9 +230,11 @@ void InstrumentNode::insertEvent(const InstrumentEvent& event) noexcept {
   ++eventCount_;
 }
 
-void InstrumentNode::insertTimelineEvent(const InstrumentEvent& event) noexcept {
+void InstrumentNode::insertTimelineEvent(
+    const InstrumentEvent& event) noexcept {
   std::size_t insertion = timelineEventCount_;
-  while (insertion > 0U && timelineEvents_[insertion - 1U].frame > event.frame) {
+  while (insertion > 0U &&
+         timelineEvents_[insertion - 1U].frame > event.frame) {
     timelineEvents_[insertion] = timelineEvents_[insertion - 1U];
     --insertion;
   }
@@ -238,7 +243,7 @@ void InstrumentNode::insertTimelineEvent(const InstrumentEvent& event) noexcept 
 }
 
 void InstrumentNode::restoreTimelineRange(std::uint64_t startFrame,
-                                          std::uint64_t endFrame) noexcept {
+                                           std::uint64_t endFrame) noexcept {
   eventCount_ = 0U;
   for (std::size_t index = 0U; index < timelineEventCount_; ++index) {
     const auto& event = timelineEvents_[index];
@@ -248,53 +253,63 @@ void InstrumentNode::restoreTimelineRange(std::uint64_t startFrame,
   }
 }
 
-bool InstrumentNode::scheduleNoteOn(std::uint64_t frame, std::uint8_t channel,
-                                    std::uint8_t note, float velocity) noexcept {
+bool InstrumentNode::scheduleNoteOn(std::uint64_t frame,
+                                     std::uint8_t channel,
+                                     std::uint8_t note,
+                                     float velocity) noexcept {
   return scheduleEvent(
       {frame, InstrumentEventType::kNoteOn, 0U, channel, note, velocity});
 }
 
-bool InstrumentNode::scheduleNoteOff(std::uint64_t frame, std::uint8_t channel,
-                                     std::uint8_t note, float releaseVelocity) noexcept {
-  return scheduleEvent(
-      {frame, InstrumentEventType::kNoteOff, 0U, channel, note, releaseVelocity});
+bool InstrumentNode::scheduleNoteOff(std::uint64_t frame,
+                                      std::uint8_t channel,
+                                      std::uint8_t note,
+                                      float releaseVelocity) noexcept {
+  return scheduleEvent({frame, InstrumentEventType::kNoteOff, 0U, channel,
+                        note, releaseVelocity});
 }
 
-bool InstrumentNode::scheduleControlChange(std::uint64_t frame, std::uint8_t channel,
-                                           std::uint8_t controller, float value) noexcept {
-  return scheduleEvent(
-      {frame, InstrumentEventType::kControlChange, 0U, channel, controller, value});
+bool InstrumentNode::scheduleControlChange(std::uint64_t frame,
+                                            std::uint8_t channel,
+                                            std::uint8_t controller,
+                                            float value) noexcept {
+  return scheduleEvent({frame, InstrumentEventType::kControlChange, 0U,
+                        channel, controller, value});
 }
 
-bool InstrumentNode::schedulePitchBend(std::uint64_t frame, std::uint8_t channel,
-                                       float normalizedBend) noexcept {
-  return scheduleEvent(
-      {frame, InstrumentEventType::kPitchBend, 0U, channel, 0U, normalizedBend});
+bool InstrumentNode::schedulePitchBend(std::uint64_t frame,
+                                        std::uint8_t channel,
+                                        float normalizedBend) noexcept {
+  return scheduleEvent({frame, InstrumentEventType::kPitchBend, 0U, channel,
+                        0U, normalizedBend});
 }
 
 bool InstrumentNode::scheduleChannelAftertouch(std::uint64_t frame,
-                                               std::uint8_t channel,
-                                               float pressure) noexcept {
-  return scheduleEvent(
-      {frame, InstrumentEventType::kChannelAftertouch, 0U, channel, 0U, pressure});
+                                                std::uint8_t channel,
+                                                float pressure) noexcept {
+  return scheduleEvent({frame, InstrumentEventType::kChannelAftertouch, 0U,
+                        channel, 0U, pressure});
 }
 
-bool InstrumentNode::schedulePolyAftertouch(std::uint64_t frame, std::uint8_t channel,
-                                            std::uint8_t note, float pressure) noexcept {
-  return scheduleEvent(
-      {frame, InstrumentEventType::kPolyAftertouch, 0U, channel, note, pressure});
+bool InstrumentNode::schedulePolyAftertouch(std::uint64_t frame,
+                                             std::uint8_t channel,
+                                             std::uint8_t note,
+                                             float pressure) noexcept {
+  return scheduleEvent({frame, InstrumentEventType::kPolyAftertouch, 0U,
+                        channel, note, pressure});
 }
 
-bool InstrumentNode::scheduleParameter(std::uint64_t frame, std::uint16_t parameter,
-                                       float value) noexcept {
-  return scheduleEvent(
-      {frame, InstrumentEventType::kParameter, parameter, 0U, 0U, value});
+bool InstrumentNode::scheduleParameter(std::uint64_t frame,
+                                        std::uint16_t parameter,
+                                        float value) noexcept {
+  return scheduleEvent({frame, InstrumentEventType::kParameter, parameter, 0U,
+                        0U, value});
 }
 
 bool InstrumentNode::scheduleAllNotesOff(std::uint64_t frame,
-                                         std::uint8_t channel) noexcept {
-  return scheduleEvent(
-      {frame, InstrumentEventType::kAllNotesOff, 0U, channel, 0U, 0.0F});
+                                          std::uint8_t channel) noexcept {
+  return scheduleEvent({frame, InstrumentEventType::kAllNotesOff, 0U, channel,
+                        0U, 0.0F});
 }
 
 bool InstrumentNode::IsNormalized(float value) noexcept {
