@@ -10,6 +10,7 @@ namespace daft::audio {
 
 enum class RealtimeCommandType : std::uint8_t {
   kScheduleInstrumentEvent,
+  kScheduleInstrumentBatch,
   kClearInstrumentEvents,
   kScheduleNodeParameter,
   kAllNotesOff,
@@ -26,8 +27,10 @@ struct RealtimeControlCommand {
   std::uint64_t endFrame = 0U;
   double parameterValue = 0.0;
   InstrumentEvent instrumentEvent{};
+  std::uint16_t batchSize = 0U;
   bool frameIsRelative = false;
   bool enabled = false;
+  bool replace = false;
 };
 
 static_assert(std::is_trivially_copyable_v<RealtimeControlCommand>);
