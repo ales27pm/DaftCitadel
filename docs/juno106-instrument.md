@@ -24,10 +24,13 @@ The integration is split into narrow layers:
    control threads, resolve graph nodes and parameters to stable numeric IDs,
    and publish fixed `RealtimeControlCommand` records through the shared
    [`RealtimeControlPlane`](../audio-engine/src/RealtimeControlPlane.cpp).
-5. The control plane owns a preallocated 4,096-command SPSC queue. The platform
-   callbacks drain it without mutexes, allocation, logging, I/O, JavaScript, or
-   exception handling, then invoke
-   [`SceneGraph`](../audio-engine/src/SceneGraph.cpp).
+5. The control plane owns a preallocated 4,096-command SPSC queue. The C++ DSP
+   render entrypoints drain it without mutexes, allocation, logging, I/O,
+   JavaScript, or exception handling, then invoke
+   [`SceneGraph`](../audio-engine/src/SceneGraph.cpp). Android performs the
+   required blocking `AudioTrack.write` only after DSP rendering in its device
+   driver; that render loop is separately kept free of logging and exception
+   handling.
 6. [`InstrumentNode`](../audio-engine/src/instruments/InstrumentNode.cpp) owns the
    fixed 1,024-event instrument timeline, while
    [`Juno106Node`](../audio-engine/src/instruments/juno/Juno106Node.cpp) translates
@@ -78,8 +81,10 @@ P8a establishes the following portable invariants:
   cannot target a replacement node that happens to reuse the same string ID;
 - live MIDI, parameters, locate, transport-loop changes, all-notes-off, and panic
   use a fixed SPSC queue with atomic batch publication;
-- iOS, Android, and the common render entrypoint contain no mutex acquisition,
-  logging, `try`/`catch`, explicit allocation, or `std::function` dispatch;
+- the iOS source-node callback, iOS and Android DSP bridges, Android device render
+  loop, and common render entrypoint contain no mutex acquisition, logging,
+  `try`/`catch`, explicit allocation, or `std::function` dispatch; the device
+  driver retains only the required `AudioTrack.write` operation;
 - add/remove/connect/disconnect are rejected while transport is playing;
   `GraphReconciler` serializes structural mutations, pauses playback, captures
   the stopped frame, and resumes only after a successful rebuild;
