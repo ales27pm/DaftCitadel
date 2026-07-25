@@ -9,6 +9,7 @@
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -20,6 +21,24 @@ namespace {
 
 using juno::Juno106Node;
 using juno::ParameterId;
+
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(undefined_behavior_sanitizer)
+constexpr bool kSanitizedBuild = true;
+#else
+constexpr bool kSanitizedBuild = false;
+#endif
+#elif defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_UNDEFINED__)
+constexpr bool kSanitizedBuild = true;
+#else
+constexpr bool kSanitizedBuild = false;
+#endif
+
+#if defined(__OPTIMIZE__)
+constexpr bool kOptimizedBuild = true;
+#else
+constexpr bool kOptimizedBuild = false;
+#endif
 
 class DynamicStereoBuffer final {
  public:
@@ -190,11 +209,22 @@ void RunConcurrentRealtimeStress(std::size_t blockFrames) {
 
   const double bufferBudgetMicros =
       static_cast<double>(blockFrames) / 48000.0 * 1'000'000.0;
+  const double p99TargetMicros = bufferBudgetMicros * 0.70;
   std::cout << "REALTIME_CONTROL_P99_US="
             << diagnostics.renderStatistics.p99RenderMicros
             << " block_frames=" << blockFrames
             << " budget_us=" << bufferBudgetMicros
-            << " xruns=" << diagnostics.xruns << '\n';
+            << " target_70pct_us=" << p99TargetMicros
+            << " xruns=" << diagnostics.xruns
+            << " sanitized=" << (kSanitizedBuild ? 1 : 0)
+            << " optimized=" << (kOptimizedBuild ? 1 : 0) << '\n';
+  if (!kSanitizedBuild && kOptimizedBuild &&
+      (static_cast<double>(diagnostics.renderStatistics.p99RenderMicros) >=
+           p99TargetMicros ||
+       diagnostics.xruns != 0U)) {
+    throw std::runtime_error(
+        "Realtime control-plane stress exceeded the p99 budget or reported xruns");
+  }
 
   plane.setPlaying(false);
   plane.waitUntilRenderIdle();
