@@ -1,0 +1,51 @@
+name: Installer integrity
+
+on:
+  pull_request_target:
+    paths:
+      - 'scripts/**'
+      - '.github/workflows/installer-integrity.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'scripts/**'
+      - '.github/workflows/installer-integrity.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  installer-integrity:
+    name: Shell syntax and installer structure
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out protected verifier
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
+          path: trusted
+          persist-credentials: false
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+          path: candidate
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Validate installer verifier fixtures
+        run: node --test trusted/scripts/__tests__/verifyInstaller.test.js
+
+      - name: Validate installer integrity
+        env:
+          DAFT_CITADEL_REPO_ROOT: ${{ github.workspace }}/candidate
+        run: node trusted/scripts/verifyInstaller.js
