@@ -29,8 +29,10 @@ class RenderReaderLease final {
 
 }  // namespace
 
-void RealtimeControlPlane::publishGraph(SceneGraph* graph) noexcept {
-  publishedGraph_.store(graph, std::memory_order_release);
+void RealtimeControlPlane::publishGraph(
+    SceneGraph* graph, std::uint64_t publicationToken) noexcept {
+  publishedGraph_.store(graph, std::memory_order_relaxed);
+  publicationToken_.store(publicationToken, std::memory_order_release);
 }
 
 void RealtimeControlPlane::setPlaying(bool playing) noexcept {
@@ -61,10 +63,14 @@ bool RealtimeControlPlane::enqueueBatch(
   return false;
 }
 
-void RealtimeControlPlane::render(AudioBufferView outputBuffer) noexcept {
+void RealtimeControlPlane::render(
+    AudioBufferView outputBuffer,
+    std::uint64_t expectedPublicationToken) noexcept {
   outputBuffer.fill(0.0F);
   RenderReaderLease reader(renderReaders_);
-  if (!playing_.load(std::memory_order_acquire)) {
+  if (publicationToken_.load(std::memory_order_acquire) !=
+          expectedPublicationToken ||
+      !playing_.load(std::memory_order_acquire)) {
     return;
   }
 
