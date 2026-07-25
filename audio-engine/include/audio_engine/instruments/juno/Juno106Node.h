@@ -3,7 +3,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "audio_engine/instruments/InstrumentNode.h"
@@ -25,19 +27,24 @@ class Juno106Node final : public InstrumentNode {
       std::size_t polyphony = JunoDSPEngine::kDefaultPolyphony) noexcept;
 
   // DSPNode compatibility path. Names are lowercase canonical Juno names or a
-  // decimal ParameterId. Realtime scheduling should use the numeric overload.
+  // decimal ParameterId. Realtime scheduling uses the numeric overloads.
   void setParameter(const std::string& name, double value) override;
+  [[nodiscard]] std::optional<NodeParameterId> resolveParameterId(
+      std::string_view name) const noexcept override;
+  [[nodiscard]] bool setParameterById(NodeParameterId parameter,
+                                      double value) noexcept override;
   [[nodiscard]] bool setParameter(ParameterId parameter, float value) noexcept;
   [[nodiscard]] bool setImmediateParameter(std::uint16_t parameter,
                                            float value) noexcept override;
-  [[nodiscard]] bool scheduleParameter(std::uint64_t frame, ParameterId parameter,
+  [[nodiscard]] bool scheduleParameter(std::uint64_t frame,
+                                       ParameterId parameter,
                                        float value) noexcept;
 
   void allNotesOff() noexcept override;
   [[nodiscard]] bool allNotesOff(std::uint8_t channel) noexcept;
 
   [[nodiscard]] bool isPrepared() const noexcept { return prepared_; }
-  [[nodiscard]] std::size_t activeVoiceCount() const noexcept;
+  [[nodiscard]] std::size_t activeVoiceCount() const noexcept override;
   [[nodiscard]] std::uint32_t maximumFramesPerBlock() const noexcept {
     return maximumFramesPerBlock_;
   }
@@ -46,7 +53,8 @@ class Juno106Node final : public InstrumentNode {
  protected:
   void prepareInstrument(double sampleRate) override;
   void resetInstrument() noexcept override;
-  void renderInstrument(AudioBufferView buffer, std::size_t frameOffset,
+  void renderInstrument(AudioBufferView buffer,
+                        std::size_t frameOffset,
                         std::size_t frameCount) noexcept override;
   void handleInstrumentEvent(const InstrumentEvent& event) noexcept override;
   [[nodiscard]] bool validateInstrumentEvent(
