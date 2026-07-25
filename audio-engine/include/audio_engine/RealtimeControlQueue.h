@@ -120,7 +120,8 @@ struct RealtimeRenderStatisticsSnapshot {
 // from power-of-two microsecond buckets by the non-realtime diagnostics reader.
 class RealtimeRenderStatistics final {
  public:
-  static constexpr std::size_t kBucketCount = 32U;
+  static constexpr std::size_t kBucketCount =
+      std::numeric_limits<std::uint64_t>::digits;
 
   void record(std::uint64_t renderMicros) noexcept {
     renderCount_.fetch_add(1U, std::memory_order_relaxed);
@@ -178,7 +179,7 @@ class RealtimeRenderStatistics final {
     if (bucket == 0U) {
       return 0U;
     }
-    if (bucket >= std::numeric_limits<std::uint64_t>::digits) {
+    if (bucket + 1U >= kBucketCount) {
       return std::numeric_limits<std::uint64_t>::max();
     }
     return (std::uint64_t{1U} << bucket) - 1U;
