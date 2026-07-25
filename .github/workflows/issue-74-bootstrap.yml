@@ -1,9 +1,9 @@
 name: Apply issue 74 patch
 
 on:
-  pull_request:
+  push:
     branches:
-      - main
+      - codex/issue-74-installer-metadata
     paths:
       - '.github/issue-74-installer-metadata.patch'
       - '.github/workflows/issue-74-bootstrap.yml'
@@ -13,9 +13,6 @@ permissions:
 
 jobs:
   apply:
-    if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'codex/issue-74-installer-metadata'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
