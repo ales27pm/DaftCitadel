@@ -15,24 +15,33 @@ class RenderClock {
     }
   }
 
-  [[nodiscard]] double sampleRate() const { return sampleRate_; }
+  [[nodiscard]] double sampleRate() const noexcept { return sampleRate_; }
 
-  [[nodiscard]] std::uint64_t frameTime() const { return frameTime_.load(std::memory_order_acquire); }
-
-  void advance() { frameTime_.fetch_add(framesPerBuffer_, std::memory_order_release); }
-
-  void advanceBy(std::uint32_t frames) { frameTime_.fetch_add(frames, std::memory_order_release); }
-
-  void locate(std::uint64_t frame) { frameTime_.store(frame, std::memory_order_release); }
-
-  void setFramesPerBuffer(std::uint32_t framesPerBuffer) {
-    if (framesPerBuffer == 0) {
-      throw std::invalid_argument("RenderClock buffer size must be positive");
-    }
-    framesPerBuffer_ = framesPerBuffer;
+  [[nodiscard]] std::uint64_t frameTime() const noexcept {
+    return frameTime_.load(std::memory_order_acquire);
   }
 
-  [[nodiscard]] std::uint32_t framesPerBuffer() const { return framesPerBuffer_; }
+  void advance() noexcept {
+    frameTime_.fetch_add(framesPerBuffer_, std::memory_order_release);
+  }
+
+  void advanceBy(std::uint32_t frames) noexcept {
+    frameTime_.fetch_add(frames, std::memory_order_release);
+  }
+
+  void locate(std::uint64_t frame) noexcept {
+    frameTime_.store(frame, std::memory_order_release);
+  }
+
+  void setFramesPerBuffer(std::uint32_t framesPerBuffer) noexcept {
+    if (framesPerBuffer != 0U) {
+      framesPerBuffer_ = framesPerBuffer;
+    }
+  }
+
+  [[nodiscard]] std::uint32_t framesPerBuffer() const noexcept {
+    return framesPerBuffer_;
+  }
 
  private:
   double sampleRate_;
