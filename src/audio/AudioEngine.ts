@@ -107,6 +107,18 @@ export type RenderDiagnostics = {
   xruns: number;
   lastRenderDurationMicros: number;
   clipBufferBytes: number;
+  initialized?: boolean;
+  activeVoices?: number;
+  pendingInstrumentEvents?: number;
+  realtimeQueueDepth?: number;
+  realtimeQueueOverflows?: number;
+  realtimeCommandFailures?: number;
+  renderCount?: number;
+  averageRenderDurationMicros?: number;
+  maximumRenderDurationMicros?: number;
+  p50RenderDurationMicros?: number;
+  p95RenderDurationMicros?: number;
+  p99RenderDurationMicros?: number;
 };
 
 export class AudioEngine {
@@ -214,7 +226,30 @@ export class AudioEngine {
       diagnostics === null ||
       !Number.isFinite(diagnostics.xruns) ||
       !Number.isFinite(diagnostics.lastRenderDurationMicros) ||
-      !Number.isFinite(diagnostics.clipBufferBytes)
+      !Number.isFinite(diagnostics.clipBufferBytes) ||
+      (diagnostics.initialized !== undefined &&
+        typeof diagnostics.initialized !== 'boolean') ||
+      (diagnostics.activeVoices !== undefined &&
+        !Number.isFinite(diagnostics.activeVoices)) ||
+      (diagnostics.pendingInstrumentEvents !== undefined &&
+        !Number.isFinite(diagnostics.pendingInstrumentEvents)) ||
+      (diagnostics.realtimeQueueDepth !== undefined &&
+        !Number.isFinite(diagnostics.realtimeQueueDepth)) ||
+      (diagnostics.realtimeQueueOverflows !== undefined &&
+        !Number.isFinite(diagnostics.realtimeQueueOverflows)) ||
+      (diagnostics.realtimeCommandFailures !== undefined &&
+        !Number.isFinite(diagnostics.realtimeCommandFailures)) ||
+      (diagnostics.renderCount !== undefined && !Number.isFinite(diagnostics.renderCount)) ||
+      (diagnostics.averageRenderDurationMicros !== undefined &&
+        !Number.isFinite(diagnostics.averageRenderDurationMicros)) ||
+      (diagnostics.maximumRenderDurationMicros !== undefined &&
+        !Number.isFinite(diagnostics.maximumRenderDurationMicros)) ||
+      (diagnostics.p50RenderDurationMicros !== undefined &&
+        !Number.isFinite(diagnostics.p50RenderDurationMicros)) ||
+      (diagnostics.p95RenderDurationMicros !== undefined &&
+        !Number.isFinite(diagnostics.p95RenderDurationMicros)) ||
+      (diagnostics.p99RenderDurationMicros !== undefined &&
+        !Number.isFinite(diagnostics.p99RenderDurationMicros))
     ) {
       throw new Error('AudioEngine returned invalid diagnostics payload');
     }

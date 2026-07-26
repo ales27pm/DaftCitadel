@@ -391,6 +391,20 @@ RCT_EXPORT_METHOD(getRenderDiagnostics:(RCTPromiseResolveBlock)resolve
       @"xruns" : @(static_cast<NSInteger>(diagnostics.xruns)),
       @"lastRenderDurationMicros" : @(diagnostics.lastRenderDurationMicros),
       @"clipBufferBytes" : @(static_cast<NSInteger>(diagnostics.clipBufferBytes)),
+      @"activeVoices" : @(static_cast<NSInteger>(diagnostics.activeVoices)),
+      @"pendingInstrumentEvents" :
+          @(static_cast<NSInteger>(diagnostics.pendingInstrumentEvents)),
+      @"realtimeQueueDepth" : @(static_cast<NSInteger>(diagnostics.realtimeQueueDepth)),
+      @"realtimeQueueOverflows" :
+          @(static_cast<NSInteger>(diagnostics.realtimeQueueOverflows)),
+      @"realtimeCommandFailures" :
+          @(static_cast<NSInteger>(diagnostics.realtimeCommandFailures)),
+      @"renderCount" : @(static_cast<NSInteger>(diagnostics.renderCount)),
+      @"averageRenderDurationMicros" : @(diagnostics.averageRenderDurationMicros),
+      @"maximumRenderDurationMicros" : @(diagnostics.maximumRenderDurationMicros),
+      @"p50RenderDurationMicros" : @(diagnostics.p50RenderDurationMicros),
+      @"p95RenderDurationMicros" : @(diagnostics.p95RenderDurationMicros),
+      @"p99RenderDurationMicros" : @(diagnostics.p99RenderDurationMicros),
     });
   } catch (const std::exception& ex) {
     os_log_error(ModuleLogger(), "getRenderDiagnostics failed: %{public}s", ex.what());

@@ -679,7 +679,7 @@ describe('NativeAudioEngine TurboModule', () => {
 
     it('returns initial diagnostics with zeros', async () => {
       const diagnostics = await NativeAudioEngine.getRenderDiagnostics();
-      expect(diagnostics).toEqual({
+      expect(diagnostics).toMatchObject({
         xruns: 0,
         lastRenderDurationMicros: 0,
         clipBufferBytes: 0,
@@ -1072,7 +1072,7 @@ describe('NativeAudioEngine TurboModule', () => {
         clipBufferBytes: 8192,
       });
       const diagnostics = await engine.getRenderDiagnostics();
-      expect(diagnostics).toEqual({
+      expect(diagnostics).toMatchObject({
         xruns: 2,
         lastRenderDurationMicros: 4200,
         clipBufferBytes: 8192,

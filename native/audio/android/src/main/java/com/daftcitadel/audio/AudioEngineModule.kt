@@ -366,6 +366,39 @@ override fun getName(): String = NAME
         if (payload.size >= 3) {
           putDouble("clipBufferBytes", payload[2])
         }
+        if (payload.size >= 4) {
+          putDouble("activeVoices", payload[3])
+        }
+        if (payload.size >= 5) {
+          putDouble("pendingInstrumentEvents", payload[4])
+        }
+        if (payload.size >= 6) {
+          putDouble("realtimeQueueDepth", payload[5])
+        }
+        if (payload.size >= 7) {
+          putDouble("realtimeQueueOverflows", payload[6])
+        }
+        if (payload.size >= 8) {
+          putDouble("realtimeCommandFailures", payload[7])
+        }
+        if (payload.size >= 9) {
+          putDouble("renderCount", payload[8])
+        }
+        if (payload.size >= 10) {
+          putDouble("averageRenderDurationMicros", payload[9])
+        }
+        if (payload.size >= 11) {
+          putDouble("maximumRenderDurationMicros", payload[10])
+        }
+        if (payload.size >= 12) {
+          putDouble("p50RenderDurationMicros", payload[11])
+        }
+        if (payload.size >= 13) {
+          putDouble("p95RenderDurationMicros", payload[12])
+        }
+        if (payload.size >= 14) {
+          putDouble("p99RenderDurationMicros", payload[13])
+        }
       }
       promise.resolve(diagnostics)
     } catch (error: Exception) {
@@ -446,10 +479,21 @@ private external fun nativeScheduleAutomation(nodeId: String, parameter: String,
   /**
  * Fetches render diagnostics from the native audio engine.
  *
- * @return A DoubleArray with three elements:
+ * @return A DoubleArray with 14 elements when available:
  *         - index 0 — the number of xruns (underruns),
  *         - index 1 — the last render duration in microseconds,
- *         - index 2 — total clip buffer bytes currently registered.
+ *         - index 2 — total clip buffer bytes currently registered,
+ *         - index 3 — active voices,
+ *         - index 4 — pending instrument events,
+ *         - index 5 — realtime command queue depth,
+ *         - index 6 — realtime queue overflows,
+ *         - index 7 — realtime command failures,
+ *         - index 8 — render count,
+ *         - index 9 — average render duration in microseconds,
+ *         - index 10 — maximum render duration in microseconds,
+ *         - index 11 — p50 render duration in microseconds,
+ *         - index 12 — p95 render duration in microseconds,
+ *         - index 13 — p99 render duration in microseconds.
  */
 private external fun nativeGetDiagnostics(): DoubleArray
   /**

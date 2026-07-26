@@ -423,23 +423,48 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeScheduleAutomation(JNIEnv* en
 /**
  * @brief Retrieve runtime diagnostics from the audio engine.
  *
- * @return jdoubleArray A 3-element double array where element 0 is the number of xruns,
- * element 1 is the last render duration in microseconds, and element 2 is the total
- * number of bytes retained by registered clip buffers. Returns `nullptr` if allocation fails.
+ * @return jdoubleArray containing render diagnostics with the following entries:
+ *   0 — number of xruns,
+ *   1 — last render duration in microseconds,
+ *   2 — total bytes retained by registered clip buffers,
+ *   3 — activeVoices,
+ *   4 — pendingInstrumentEvents,
+ *   5 — realtimeQueueDepth,
+ *   6 — realtimeQueueOverflows,
+ *   7 — realtimeCommandFailures,
+ *   8 — renderCount,
+ *   9 — averageRenderDurationMicros,
+ *   10 — maximumRenderDurationMicros,
+ *   11 — p50RenderDurationMicros,
+ *   12 — p95RenderDurationMicros,
+ *   13 — p99RenderDurationMicros.
+ * Returns `nullptr` if allocation fails.
  */
 JNIEXPORT jdoubleArray JNICALL
 Java_com_daftcitadel_audio_AudioEngineModule_nativeGetDiagnostics(JNIEnv* env, jobject /*thiz*/) {
-  jdoubleArray result = env->NewDoubleArray(3);
+  constexpr jsize kPayloadSize = 14;
+  jdoubleArray result = env->NewDoubleArray(kPayloadSize);
   if (result == nullptr) {
     return nullptr;
   }
   const auto diagnostics = AudioEngineBridge::getDiagnostics();
-  const jdouble payload[3] = {
+  const jdouble payload[kPayloadSize] = {
       static_cast<jdouble>(diagnostics.xruns),
       diagnostics.lastRenderDurationMicros,
       static_cast<jdouble>(diagnostics.clipBufferBytes),
+      static_cast<jdouble>(diagnostics.activeVoices),
+      static_cast<jdouble>(diagnostics.pendingInstrumentEvents),
+      static_cast<jdouble>(diagnostics.realtimeQueueDepth),
+      static_cast<jdouble>(diagnostics.realtimeQueueOverflows),
+      static_cast<jdouble>(diagnostics.realtimeCommandFailures),
+      static_cast<jdouble>(diagnostics.renderCount),
+      diagnostics.averageRenderDurationMicros,
+      diagnostics.maximumRenderDurationMicros,
+      diagnostics.p50RenderDurationMicros,
+      diagnostics.p95RenderDurationMicros,
+      diagnostics.p99RenderDurationMicros,
   };
-  env->SetDoubleArrayRegion(result, 0, 3, payload);
+  env->SetDoubleArrayRegion(result, 0, kPayloadSize, payload);
   return result;
 }
 
