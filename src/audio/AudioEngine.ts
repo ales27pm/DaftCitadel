@@ -121,12 +121,21 @@ export type RenderDiagnostics = {
   p99RenderDurationMicros?: number;
 };
 
+export type AutomationPublisher = (
+  nodeId: string,
+  lane: AutomationLane,
+) => Promise<void>;
+
 export class AudioEngine {
   private readonly sampleRate: number;
   private readonly framesPerBuffer: number;
   private readonly clock: ClockSyncService;
+  private readonly publishAutomationLane: AutomationPublisher;
 
-  constructor(params: { sampleRate: number; framesPerBuffer: number; bpm: number }) {
+  constructor(
+    params: { sampleRate: number; framesPerBuffer: number; bpm: number },
+    options: { publishAutomation?: AutomationPublisher } = {},
+  ) {
     if (!isNativeModuleAvailable()) {
       throw new Error('AudioEngine native module is unavailable');
     }
@@ -143,6 +152,7 @@ export class AudioEngine {
       params.framesPerBuffer,
       params.bpm,
     );
+    this.publishAutomationLane = options.publishAutomation ?? publishAutomationLane;
   }
 
   public getClock(): ClockSyncService {
@@ -178,7 +188,7 @@ export class AudioEngine {
   }
 
   public async publishAutomation(nodeId: string, lane: AutomationLane): Promise<void> {
-    await publishAutomationLane(nodeId, lane);
+    await this.publishAutomationLane(nodeId, lane);
   }
 
   public async startTransport(): Promise<void> {

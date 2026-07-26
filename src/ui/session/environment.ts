@@ -14,10 +14,12 @@ import type {
 import {
   AudioEngine,
   NativeAudioFileLoader,
+  WebAudioFileLoader,
   PluginHost,
   SessionAudioBridge,
   isNativeModuleAvailable,
   isNativeAudioFileLoaderAvailable,
+  isWebAudioEngineAvailable,
   isPluginHostAvailable,
   type AudioFileLoader,
   type PluginDescriptor,
@@ -239,21 +241,31 @@ export const createPassiveSessionEnvironment = async (
 export const createProductionSessionEnvironment = async (
   options: ProductionEnvironmentOptions = {},
 ): Promise<SessionEnvironment> => {
-  if (!isNativeModuleAvailable()) {
-    throw new NativeAudioUnavailableError('AudioEngine native module is unavailable');
-  }
-  if (!isNativeAudioFileLoaderAvailable()) {
-    throw new Error('Audio sample loader native module is unavailable');
-  }
-
   const sampleRate = options.sampleRate ?? DEFAULT_SAMPLE_RATE;
   const framesPerBuffer = options.framesPerBuffer ?? DEFAULT_FRAMES_PER_BUFFER;
   const bpm = options.bpm ?? DEFAULT_BPM;
   const sessionId = options.sessionId ?? DEMO_SESSION_ID;
 
+  if (Platform.OS === 'web') {
+    if (!isWebAudioEngineAvailable()) {
+      throw new NativeAudioUnavailableError('Web Audio API is unavailable');
+    }
+  } else {
+    if (!isNativeModuleAvailable()) {
+      throw new NativeAudioUnavailableError('AudioEngine native module is unavailable');
+    }
+    if (!isNativeAudioFileLoaderAvailable()) {
+      throw new Error('Audio sample loader native module is unavailable');
+    }
+  }
+
   const audioEngine = new AudioEngine({ sampleRate, framesPerBuffer, bpm });
   await audioEngine.init();
-  const fileLoader = options.fileLoader ?? new NativeAudioFileLoader();
+  const fileLoader =
+    options.fileLoader ??
+    (Platform.OS === 'web'
+      ? new WebAudioFileLoader()
+      : new NativeAudioFileLoader());
   const pluginHost = instantiatePluginHost();
   const resolvePluginDescriptor = pluginHost
     ? createPluginDescriptorResolver(pluginHost)

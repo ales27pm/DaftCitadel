@@ -556,7 +556,7 @@ export const TurboModuleRegistry = {
   getEnforcing: <T>(name: string): T => NativeModules[name] as T,
 };
 
-export const Platform: { OS: 'ios' | 'android' | 'macos'; Version: number } = {
+export const Platform: { OS: 'ios' | 'android' | 'macos' | 'web'; Version: number } = {
   OS: 'ios',
   Version: 17,
 };

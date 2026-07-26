@@ -1,0 +1,257 @@
+--------- beginning of main
+07-26 16:31:41.148   442   442 E AudioFlinger: Function: getAudioPolicyConfig Line: 2493 Failed 
+07-26 16:31:41.161   442   442 W AudioFlinger: loadHwModule() sound dose reporting is not available
+07-26 16:31:41.161   442   442 I AudioFlinger: loadHwModule() Loaded primary audio interface, handle 10
+07-26 16:31:41.162   442   442 I AudioFlinger: openOutput() this 0x7b6f79b71130, module 10 Device AUDIO_DEVICE_OUT_SPEAKER, @:, SamplingRate 48000, Format 0x000001, Channels 0x3, flags 0x2
+07-26 16:31:41.163   442   442 I AudioFlinger: operator(): Using 3000 ms as standby time
+07-26 16:31:41.163   442   442 I AudioFlinger: HAL output buffer size 1088 frames, normal sink buffer size 1088 frames
+07-26 16:31:41.180   442   442 D AudioFlinger: Failed to add event callback
+07-26 16:31:41.182   442   569 I AudioFlinger: AudioFlinger's thread 0x7b70fddba8e0 tid=569 ready to run
+07-26 16:31:41.182   442   569 W AudioFlinger: no wake lock to update, system not ready yet
+07-26 16:31:41.182   442   569 D AudioFlinger: ro.audio.silent is ignored since no output device is set
+07-26 16:31:41.192   442   569 W AudioFlinger: no wake lock to update, system not ready yet
+07-26 16:31:41.192   442   569 D AudioFlinger: ro.audio.silent is ignored since no output device is set
+07-26 16:31:41.194   442   442 W AudioFlinger: moveEffects() AUDIO_SESSION_OUTPUT_MIX not found in orphans, checking other mix
+07-26 16:31:41.194   442   442 W AudioFlinger: moveEffects() bad srcIo 0
+07-26 16:31:41.240   442   569 D AudioFlinger: updateHalSupportedLatencyModes_l: thread(13) status -38 supported latency modes: { }
+07-26 16:31:41.241   442   442 I AudioFlinger: openOutput() this 0x7b6f79b71130, module 10 Device AUDIO_DEVICE_OUT_TELEPHONY_TX, @:, SamplingRate 48000, Format 0x000001, Channels 0x3, flags 0
+07-26 16:31:41.241   442   442 I AudioFlinger: HAL output buffer size 1088 frames, normal sink buffer size 1088 frames
+07-26 16:31:41.241   442   442 D AudioFlinger: Failed to add event callback
+07-26 16:31:41.241   442   573 I AudioFlinger: AudioFlinger's thread 0x7b70fdb568e0 tid=573 ready to run
+07-26 16:31:41.241   442   573 W AudioFlinger: no wake lock to update, system not ready yet
+07-26 16:31:41.241   442   573 D AudioFlinger: ro.audio.silent is ignored since no output device is set
+07-26 16:31:41.242   442   573 W AudioFlinger: no wake lock to update, system not ready yet
+07-26 16:31:41.242   442   573 D AudioFlinger: ro.audio.silent is ignored since no output device is set
+07-26 16:31:41.242   442   573 D AudioFlinger: updateHalSupportedLatencyModes_l: thread(21) status -38 supported latency modes: { }
+07-26 16:31:41.245   442   574 I AudioFlinger: AudioFlinger's thread 0x7b7101002b88 tid=574 ready to run
+07-26 16:31:41.245   442   574 W AudioFlinger: no wake lock to update, system not ready yet
+07-26 16:31:41.246   442   574 W AudioFlinger: no wake lock to update, system not ready yet
+07-26 16:31:41.246   442   577 I AudioFlinger: AudioFlinger's thread 0x7b7101002b88 tid=577 ready to run
+07-26 16:31:41.246   442   577 W AudioFlinger: no wake lock to update, system not ready yet
+07-26 16:31:41.247   442   577 W AudioFlinger: no wake lock to update, system not ready yet
+07-26 16:31:41.247   442   579 I AudioFlinger: AudioFlinger's thread 0x7b7101002b88 tid=579 ready to run
+07-26 16:31:41.247   442   579 W AudioFlinger: no wake lock to update, system not ready yet
+07-26 16:31:41.247   442   579 W AudioFlinger: no wake lock to update, system not ready yet
+07-26 16:31:41.248   442   442 W AudioFlinger: loadHwModule() sound dose reporting is not available
+07-26 16:31:41.248   442   442 I AudioFlinger: loadHwModule() Loaded r_submix audio interface, handle 18
+07-26 16:31:41.249   442   581 I AudioFlinger: AudioFlinger's thread 0x7b7101002b88 tid=581 ready to run
+07-26 16:31:41.249   442   581 W AudioFlinger: no wake lock to update, system not ready yet
+07-26 16:31:41.249   442   581 W AudioFlinger: no wake lock to update, system not ready yet
+07-26 16:31:41.251   442   442 W AudioFlinger: loadHwModule() sound dose reporting is not available
+07-26 16:31:41.251   442   442 I AudioFlinger: loadHwModule() Loaded bluetooth audio interface, handle 26
+--------- beginning of system
+07-26 16:31:49.001   593   627 I ActivityManager: Connection with lmkd established
+07-26 16:31:52.741   593   593 W ActivityManager: Unable to start service Intent { act=android.service.notification.NotificationListenerService cmp=com.google.android.apps.nexuslauncher/com.android.launcher3.notification.NotificationListener } U=0: not found
+07-26 16:31:52.742   593   593 W ActivityManager: Unable to start service Intent { act=android.service.notification.NotificationListenerService cmp=com.google.android.apps.nexuslauncher/com.android.launcher3.notification.NotificationListener } U=0: not found
+07-26 16:31:52.742   593   593 W ActivityManager: Unable to start service Intent { act=android.service.notification.NotificationListenerService cmp=com.google.android.as/com.google.android.apps.miphone.aiai.common.notification.service.AiAiNotificationListenerService } U=0: not found
+07-26 16:31:52.746   593   593 W ActivityManager: Unable to start service Intent { act=android.service.notification.NotificationAssistantService cmp=com.google.android.as/com.google.android.apps.miphone.aiai.common.notification.service.AiAiNotificationAssistantService } U=0: not found
+07-26 16:31:52.770   442   573 W AudioFlinger: no wake lock to update, system not ready yet
+07-26 16:31:52.770   442   569 W AudioFlinger: no wake lock to update, system not ready yet
+07-26 16:31:52.787   442   534 D AudioFlinger: isLowRamDevice:false totalMemory:2592718848 mClientSharedHeapSize:8388608
+07-26 16:31:53.087   593   593 I ActivityManager: System now ready
+07-26 16:31:53.101   593   593 W ActivityManager: Too early to start/bind service in system_server: Phase=550 ComponentInfo{com.android.server.telecom/com.android.server.telecom.components.TelecomService}
+07-26 16:31:53.102   593   593 W ActivityManager: Too early to start/bind service in system_server: Phase=550 ComponentInfo{com.android.server.telecom/com.android.server.telecom.components.TelecomService}
+07-26 16:31:53.133   593   626 W ActivityManager: com.android.systemui inode == 0 (b/152760674)
+07-26 16:31:53.133   593   626 W ActivityManager: com.google.android.gms inode == 0 (b/152760674)
+07-26 16:31:53.141   442   534 I AudioFlinger: systemReady
+07-26 16:31:53.141   593   626 I ActivityManager: Start proc 978:com.android.systemui/u0a181 for service {com.android.systemui/com.android.systemui.wallpapers.ImageWallpaper}
+07-26 16:31:53.142   593   626 W ActivityManager: com.google.android.permissioncontroller inode == 0 (b/152760674)
+07-26 16:31:53.142   593   626 W ActivityManager: com.google.android.gms inode == 0 (b/152760674)
+07-26 16:31:53.158   593   626 I ActivityManager: Start proc 986:com.google.android.permissioncontroller/u0a203 for service {com.google.android.permissioncontroller/com.android.permissioncontroller.permission.service.PermissionControllerServiceImpl}
+07-26 16:31:53.158   593   626 W ActivityManager: com.android.dynsystem inode == 0 (b/152760674)
+07-26 16:31:53.158   593   626 W ActivityManager: com.google.android.gms inode == 0 (b/152760674)
+07-26 16:31:53.163   593   626 I ActivityManager: Start proc 997:WebViewLoader-x86_64/1037 [android.webkit.WebViewLibraryLoader$RelroFileCreator] for 
+07-26 16:31:53.260   593   961 I ActivityManager: Process WebViewLoader-x86_64 (pid 997) has died: psvc PER 
+07-26 16:31:53.309   593   626 W ActivityManager: com.google.android.networkstack.tethering inode == 0 (b/152760674)
+07-26 16:31:53.309   593   626 W ActivityManager: com.google.android.gms inode == 0 (b/152760674)
+07-26 16:31:53.320   593   593 I ActivityManager: Current user:0
+07-26 16:31:53.323   593   626 I ActivityManager: Start proc 1080:com.android.networkstack.process/1073 for service {com.google.android.networkstack/com.android.server.NetworkStackService}
+07-26 16:31:53.442   593   626 W ActivityManager: com.android.bluetooth inode == 0 (b/152760674)
+07-26 16:31:53.442   593   626 W ActivityManager: com.google.android.gms inode == 0 (b/152760674)
+07-26 16:31:53.444   593   626 I ActivityManager: Start proc 1134:com.google.android.bluetooth/1002 for service {com.google.android.bluetooth/com.android.bluetooth.btservice.AdapterService}
+07-26 16:31:53.457   593   626 W ActivityManager: com.android.se inode == 0 (b/152760674)
+07-26 16:31:53.457   593   626 W ActivityManager: com.google.android.gms inode == 0 (b/152760674)
+07-26 16:31:53.480   593   626 I ActivityManager: Start proc 1147:com.android.se/1068 for added application com.android.se
+07-26 16:31:53.481   593   626 W ActivityManager: com.android.providers.telephony inode == 0 (b/152760674)
+07-26 16:31:53.485   593   626 W ActivityManager: com.google.android.gms inode == 0 (b/152760674)
+07-26 16:31:53.495   593   626 I ActivityManager: Start proc 1159:com.android.phone/1001 for added application com.android.phone
+07-26 16:31:53.495   593   626 W ActivityManager: com.android.dynsystem inode == 0 (b/152760674)
+07-26 16:31:53.495   593   626 W ActivityManager: com.google.android.gms inode == 0 (b/152760674)
+07-26 16:31:53.503   593   626 I ActivityManager: Start proc 1172:com.android.settings/1000 for top-activity {com.android.settings/com.android.settings.FallbackHome}
+07-26 16:31:53.554   593   626 W ActivityManager: com.android.bluetooth inode == 0 (b/152760674)
+07-26 16:31:53.558   593   626 W ActivityManager: com.google.android.gms inode == 0 (b/152760674)
+07-26 16:31:53.565   593   626 I ActivityManager: Start proc 1192:com.android.bluetooth/1002 for content provider {com.android.bluetooth/com.google.android.bluetooth.BluetoothLegacyMigration}
+07-26 16:31:53.600   593  1184 W ActivityManager: Unable to start service Intent { act=android.service.smartspace.SmartspaceService cmp=com.google.android.as/com.google.android.apps.miphone.aiai.app.AiAiSmartspaceService } U=0: not found
+07-26 16:31:53.603   593  1184 W ActivityManager: Unable to start service Intent { act=android.service.smartspace.SmartspaceService cmp=com.google.android.as/com.google.android.apps.miphone.aiai.app.AiAiSmartspaceService } U=0: not found
+07-26 16:31:53.606   593  1061 W ActivityManager: Unable to start service Intent { act=android.service.smartspace.SmartspaceService cmp=com.google.android.as/com.google.android.apps.miphone.aiai.app.AiAiSmartspaceService } U=0: not found
+07-26 16:31:53.610   593  1061 W ActivityManager: Unable to start service Intent { act=android.service.smartspace.SmartspaceService cmp=com.google.android.as/com.google.android.apps.miphone.aiai.app.AiAiSmartspaceService } U=0: not found
+07-26 16:31:53.882   593   626 W ActivityManager: com.google.android.apps.nexuslauncher inode == 0 (b/152760674)
+07-26 16:31:53.882   593   626 W ActivityManager: com.google.android.gms inode == 0 (b/152760674)
+07-26 16:31:53.895   593   626 I ActivityManager: Start proc 1252:com.google.android.apps.nexuslauncher/u0a179 for service {com.google.android.apps.nexuslauncher/com.android.quickstep.TouchInteractionService}
+07-26 16:31:53.912   593   593 W ActivityManager: Unbind failed: could not find connection for android.app.LoadedApk$ServiceDispatcher$InnerConnection@70d61bf
+07-26 16:31:53.913   593   593 W ActivityManager: Unbind failed: could not find connection for android.app.LoadedApk$ServiceDispatcher$InnerConnection@d35008c
+07-26 16:31:53.913   593   593 W ActivityManager: Unbind failed: could not find connection for android.app.LoadedApk$ServiceDispatcher$InnerConnection@e0413d5
+07-26 16:31:53.913   593   593 W ActivityManager: Unbind failed: could not find connection for android.app.LoadedApk$ServiceDispatcher$InnerConnection@18587ea
+07-26 16:31:54.023   593   593 W ActivityManager: Unable to start service Intent { act=android.service.notification.NotificationListenerService cmp=com.google.android.apps.nexuslauncher/com.android.launcher3.notification.NotificationListener } U=0: not found
+07-26 16:31:54.024   593   593 W ActivityManager: Unable to start service Intent { act=android.service.notification.NotificationListenerService cmp=com.google.android.as/com.google.android.apps.miphone.aiai.common.notification.service.AiAiNotificationListenerService } U=0: not found
+07-26 16:31:54.024   593   593 W ActivityManager: Unable to start service Intent { act=android.service.notification.NotificationAssistantService cmp=com.google.android.as/com.google.android.apps.miphone.aiai.common.notification.service.AiAiNotificationAssistantService } U=0: not found
+07-26 16:31:54.059   593   626 W ActivityManager: com.google.android.gms inode == 0 (b/152760674)
+07-26 16:31:54.070   593   626 I ActivityManager: Start proc 1295:com.google.android.gms.persistent/u0a143 for broadcast {com.google.android.gms/com.google.android.gms.chimera.GmsIntentOperationService$PersistentTrustedReceiver}
+07-26 16:31:54.569   593   609 W ActivityManager: pid 1159 com.android.phone sent binder code 54 with flags 2 to frozen apps and got error -74
+07-26 16:31:54.631   593   616 I ActivityManager: About to commit checkpoint
+07-26 16:31:54.703   593   626 W ActivityManager: com.google.android.ext.services inode == 0 (b/152760674)
+07-26 16:31:54.703   593   626 W ActivityManager: com.google.android.gms inode == 0 (b/152760674)
+07-26 16:31:54.704   593   616 I ActivityManager: User 0 state changed from BOOTING to RUNNING_LOCKED
+07-26 16:31:54.715   593   626 I ActivityManager: Start proc 1419:com.google.android.ext.services/u0a190 for on-hold
+07-26 16:31:54.716   593   626 W ActivityManager: com.google.android.apps.wellbeing inode == 0 (b/152760674)
+07-26 16:31:54.716   593   626 W ActivityManager: com.google.android.gms inode == 0 (b/152760674)
+07-26 16:31:54.747   593   626 I ActivityManager: Start proc 1428:com.google.android.apps.wellbeing/u0a142 for on-hold
+07-26 16:31:54.814   593   626 W ActivityManager: com.google.android.inputmethod.latin inode == 0 (b/152760674)
+07-26 16:31:54.814   593   626 W ActivityManager: com.google.android.gms inode == 0 (b/152760674)
+07-26 16:31:54.818   593   626 I ActivityManager: Start proc 1459:com.google.android.inputmethod.latin/u0a153 for service {com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME}
+07-26 16:31:54.956   593   613 I ActivityManager: User 0 state changed from RUNNING_LOCKED to RUNNING_UNLOCKING
+07-26 16:31:54.996   593   626 I ActivityManager: Start proc 1490:com.google.android.gms/u0a143 for service {com.google.android.gms/com.google.android.gms.chimera.GmsIntentOperationService}
+07-26 16:31:55.015   593   626 I ActivityManager: Start proc 1510:com.google.android.providers.media.module/u0a204 for service {com.google.android.providers.media.module/com.android.providers.media.fuse.ExternalStorageServiceImpl}
+07-26 16:31:55.056   593   626 I ActivityManager: Start proc 1526:com.google.android.as/u0a137 for service {com.google.android.as/com.google.android.apps.miphone.aiai.app.AiAiContentCaptureService}
+07-26 16:31:55.085   593   626 I ActivityManager: Start proc 1541:com.google.android.googlequicksearchbox:interactor/u0a144 for service {com.google.android.googlequicksearchbox/com.google.android.voiceinteraction.GsaVoiceInteractionService}
+07-26 16:31:55.098   593   626 I ActivityManager: Start proc 1559:com.android.providers.calendar/u0a100 for content provider {com.android.providers.calendar/com.android.providers.calendar.CalendarProvider2}
+07-26 16:31:55.102   593   626 I ActivityManager: Start proc 1569:com.android.printspooler/u0a127 for service {com.android.printspooler/com.android.printspooler.model.PrintSpoolerService}
+07-26 16:31:55.107   593   625 I ActivityManager: User 0 state changed from RUNNING_UNLOCKING to RUNNING_UNLOCKED
+07-26 16:31:55.124   593   626 I ActivityManager: Start proc 1583:com.android.emulator.multidisplay/1000 for added application com.android.emulator.multidisplay
+07-26 16:31:55.188   593   626 I ActivityManager: Start proc 1607:com.google.android.googlequicksearchbox:search/u0a144 for service {com.google.android.googlequicksearchbox/com.google.android.apps.search.podcasts.browser.PodcastBrowserService}
+07-26 16:31:55.205   593   626 I ActivityManager: Start proc 1619:com.google.android.googlesdksetup/u0a171 for top-activity {com.google.android.googlesdksetup/com.google.android.googlesdksetup.DefaultActivity}
+07-26 16:31:55.282   593   626 I ActivityManager: Start proc 1646:com.android.keychain/1000 for service {com.android.keychain/com.android.keychain.KeyChainService}
+07-26 16:31:55.504   593   626 I ActivityManager: Start proc 1721:android.process.media/u0a95 for content provider {com.android.providers.media/com.android.providers.media.LegacyMediaProvider}
+07-26 16:31:55.644   593   626 I ActivityManager: Start proc 1795:android.process.acore/u0a91 for content provider {com.android.providers.contacts/com.android.providers.contacts.ContactsProvider2}
+07-26 16:31:55.674   593   626 I ActivityManager: Start proc 1801:com.android.carrierconfig/u0a178 for service {com.android.carrierconfig/com.android.carrierconfig.DefaultCarrierConfigService}
+07-26 16:31:55.772   593   961 W ActivityManager: Unable to start service Intent { act=com.google.android.play.core.splitinstall.BIND_SPLIT_INSTALL_SERVICE pkg=com.android.vending } U=0: not found
+07-26 16:31:55.775   593   610 W ActivityManager: Unable to start service Intent { act=com.google.android.play.core.splitinstall.BIND_SPLIT_INSTALL_SERVICE pkg=com.android.vending } U=0: not found
+07-26 16:31:55.779   593  1085 W ActivityManager: Slow operation: 53ms so far, now at finishAttachApplicationInner: after mServices.attachApplicationLocked
+07-26 16:31:55.779   593  1085 W ActivityManager: Slow operation: 53ms so far, now at finishAttachApplicationInner: after dispatching broadcasts
+07-26 16:31:55.827   593   626 I ActivityManager: Start proc 1867:com.google.android.as.oss/u0a130 for service {com.google.android.as.oss/com.google.android.apps.miphone.astrea.grpc.AstreaGrpcService}
+07-26 16:31:56.189   593  1074 W ActivityManager: Slow operation: 109ms so far, now at finishAttachApplicationInner: after mServices.attachApplicationLocked
+07-26 16:31:56.190   593  1074 W ActivityManager: Slow operation: 109ms so far, now at finishAttachApplicationInner: after dispatching broadcasts
+07-26 16:31:56.222   593  1603 W ActivityManager: Slow operation: 118ms so far, now at finishAttachApplicationInner: after mServices.attachApplicationLocked
+07-26 16:31:56.222   593  1603 W ActivityManager: Slow operation: 118ms so far, now at finishAttachApplicationInner: after dispatching broadcasts
+07-26 16:31:56.233   593  1840 W ActivityManager: Service lookup failed: association not allowed between packages com.google.android.as.oss and com.google.android.gms
+07-26 16:31:56.755   593   626 I ActivityManager: Start proc 2070:com.google.android.tts/u0a165 for service {com.google.android.tts/com.google.android.apps.speech.tts.googletts.service.GoogleTtsService}
+07-26 16:31:56.842   593   626 I ActivityManager: Start proc 2150:com.google.android.partnersetup/u0a132 for broadcast {com.google.android.partnersetup/com.google.android.partnersetup.PhoneStateReceiver}
+07-26 16:31:57.038   593   626 I ActivityManager: Start proc 2199:com.android.imsserviceentitlement/u0a138 for broadcast {com.android.imsserviceentitlement/com.android.imsserviceentitlement.ImsEntitlementReceiver}
+07-26 16:31:57.284   593   626 I ActivityManager: Start proc 2282:com.google.android.cellbroadcastreceiver/u0a207 for broadcast {com.google.android.cellbroadcastreceiver/com.android.cellbroadcastreceiver.CellBroadcastReceiver}
+07-26 16:31:57.676   593   626 I ActivityManager: Start proc 2342:com.android.cellbroadcastreceiver/u0a108 for content provider {com.android.cellbroadcastreceiver/com.android.cellbroadcastreceiver.LegacyCellBroadcastContentProvider}
+07-26 16:31:57.699   593   626 I ActivityManager: Start proc 2353:com.google.android.devicelockcontroller/u0a194 for broadcast {com.google.android.devicelockcontroller/com.android.devicelockcontroller.receivers.RecordBootTimestampReceiver}
+07-26 16:31:57.727   593   626 I ActivityManager: Start proc 2369:com.google.android.gms.unstable/u0a143 for service {com.google.android.gms/com.google.android.gms.droidguard.DroidGuardService}
+07-26 16:31:58.098   593   626 I ActivityManager: Start proc 2412:com.android.localtransport/1000 for service {com.android.localtransport/com.android.localtransport.LocalTransportService}
+07-26 16:31:58.135   593   626 I ActivityManager: Start proc 2423:com.google.android.apps.wallpaper/u0a176 for content provider {com.google.android.apps.wallpaper/com.google.android.apps.wallpaper.provider.RecentWallpapersProvider}
+07-26 16:31:58.212   593   626 I ActivityManager: Start proc 2444:com.android.managedprovisioning/u0a102 for broadcast {com.android.managedprovisioning/com.android.managedprovisioning.ota.PreBootListener}
+07-26 16:31:58.212   593   626 W ActivityManager: Slow operation: 74ms so far, now at startProcess: starting to update pids map
+07-26 16:31:58.242   593   626 W ActivityManager: Slow operation: 104ms so far, now at startProcess: done updating pids map
+07-26 16:31:59.177   593  1061 I ActivityManager: Broadcasting: Intent { act=com.android.emulator.multidisplay.START flg=0x400000 cmp=com.android.emulator.multidisplay/.MultiDisplayServiceReceiver }
+07-26 16:31:59.195   593   609 W ActivityManager: Slow operation: 295ms so far, now at finishAttachApplicationInner: after mServices.attachApplicationLocked
+07-26 16:31:59.199   593   609 W ActivityManager: Slow operation: 298ms so far, now at finishAttachApplicationInner: after dispatching broadcasts
+07-26 16:31:59.199   593  1941 W ActivityManager: Slow operation: 305ms so far, now at finishAttachApplicationInner: after mServices.attachApplicationLocked
+07-26 16:31:59.199   593  1941 W ActivityManager: Slow operation: 305ms so far, now at finishAttachApplicationInner: after dispatching broadcasts
+07-26 16:31:59.204   593  1941 W ActivityManager: Slow operation: 310ms so far, now at finishAttachApplicationInner: after updateOomAdjLocked
+07-26 16:31:59.224   593  1061 I ActivityManager: Enqueued broadcast Intent { act=com.android.emulator.multidisplay.START flg=0x400000 cmp=com.android.emulator.multidisplay/.MultiDisplayServiceReceiver }: 0
+07-26 16:31:59.425   593   613 I ActivityManager: Broadcast completed: result=0
+07-26 16:31:59.434   593   626 I ActivityManager: Start proc 2603:com.android.externalstorage/u0a104 for broadcast {com.android.externalstorage/com.android.externalstorage.MountReceiver}
+07-26 16:31:59.676   593   626 I ActivityManager: Start proc 2626:com.google.android.settings.intelligence/u0a140 for broadcast {com.google.android.settings.intelligence/com.google.android.settings.intelligence.modules.contextualcards.impl.JobBootBroadcastReceiver}
+07-26 16:31:59.813   593   626 I ActivityManager: Start proc 2665:com.google.android.webview:webview_service/u0a151 for service {com.google.android.webview/org.chromium.android_webview.services.VariationsSeedServer}
+07-26 16:31:59.878   593   609 I ActivityManager: Start proc 2674:com.google.android.webview:sandboxed_process0:org.chromium.content.app.SandboxedProcessService0:0/u0ai9000 for  {com.google.android.googlequicksearchbox/org.chromium.content.app.SandboxedProcessService0:0}
+07-26 16:31:59.909   593   626 W ActivityManager: Slow operation: 68ms so far, now at startProcess: returned from zygote!
+07-26 16:32:00.178   593   626 I ActivityManager: Start proc 2724:com.android.chrome/u0a145 for broadcast {com.android.chrome/com.google.android.apps.chrome.rlz.RevenueStatsConfigurationUpdateReceiver}
+07-26 16:32:00.178   593   626 W ActivityManager: Slow operation: 144ms so far, now at startProcess: starting to update pids map
+07-26 16:32:00.206   593   626 W ActivityManager: Slow operation: 172ms so far, now at startProcess: done updating pids map
+07-26 16:32:00.246   593  2559 I ActivityManager: Process com.android.keychain (pid 1646) has died: cch+65 CEM 
+07-26 16:32:00.246   593  1936 I ActivityManager: Process com.android.imsserviceentitlement (pid 2199) has died: cch+55 CEM 
+07-26 16:32:00.259   593  1838 I ActivityManager: Process com.google.android.devicelockcontroller (pid 2353) has died: cch+25 CEM 
+07-26 16:32:00.259   593  1935 I ActivityManager: Process com.google.android.googlesdksetup (pid 1619) has died: cch+5 CEM 
+07-26 16:32:00.295   593  1835 I ActivityManager: Process com.android.localtransport (pid 2412) has died: cch+5 CEM 
+07-26 16:32:00.406   593  1061 I ActivityManager: Process com.android.printspooler (pid 1569) has died: cch+5 CEM 
+07-26 16:32:00.416   593  2558 I ActivityManager: Process com.google.android.tts (pid 2070) has died: cch+5 CEM 
+07-26 16:32:00.446   593   626 I ActivityManager: Start proc 2777:com.google.android.webview:webview_apk/u0a151 for service {com.google.android.webview/org.chromium.android_webview.nonembedded.AwComponentUpdateService}
+07-26 16:32:00.671   593   610 W ActivityManager: pid 1295 com.google.android.gms.persistent sent binder code 4 with flags 1 to frozen apps and got error -32
+07-26 16:32:00.774   593   626 I ActivityManager: Start proc 2835:com.android.carrierdefaultapp/u0a111 for broadcast {com.android.carrierdefaultapp/com.android.carrierdefaultapp.CarrierDefaultBroadcastReceiver}
+07-26 16:32:00.893   593   626 I ActivityManager: Start proc 2856:com.google.android.documentsui/u0a97 for broadcast {com.google.android.documentsui/com.android.documentsui.PreBootReceiver}
+07-26 16:32:01.308   593  1835 I ActivityManager: Background started FGS: Allowed [callingPackage: com.google.android.inputmethod.latin; callingUid: 10153; uidState: IMPB; uidBFSL: n/a; intent: Intent { cmp=com.google.android.inputmethod.latin/com.google.android.apps.inputmethod.libs.dataservice.superpacks.SuperpacksForegroundTaskService }; code:CURRENT_INPUT_METHOD; tempAllowListReason:<null>; targetSdkVersion:34; callerTargetSdkVersion:34; startForegroundCount:0; bindFromPackage:null: isBindService:false]
+07-26 16:32:01.352   593  1287 W ActivityManager: Foreground service started from background can not have location/camera/microphone access: service com.google.android.inputmethod.latin/com.google.android.apps.inputmethod.libs.dataservice.superpacks.SuperpacksForegroundTaskService
+07-26 16:32:01.436   593   613 I ActivityManager: Posting BOOT_COMPLETED user #0
+07-26 16:32:01.595   593   626 I ActivityManager: Start proc 2921:com.google.android.rkpdapp/u0a195 for service {com.google.android.rkpdapp/com.android.rkpdapp.service.RemoteProvisioningService}
+07-26 16:32:01.617   593   626 I ActivityManager: Start proc 2923:com.android.traceur/u0a124 for broadcast {com.android.traceur/com.android.traceur.Receiver}
+07-26 16:32:01.645   593   626 I ActivityManager: Start proc 2925:com.google.android.devicelockcontroller/u0a194 for service {com.google.android.devicelockcontroller/com.android.devicelockcontroller.DeviceLockControllerService}
+07-26 16:32:01.753   593  2558 I ActivityManager: Background started FGS: Allowed [callingPackage: com.google.android.apps.wellbeing; callingUid: 10142; uidState: BTOP; uidBFSL: [BFSL]; intent: Intent { cmp=com.google.android.apps.wellbeing/com.google.apps.tiktok.concurrent.InternalForegroundService (has extras) }; code:BACKGROUND_ACTIVITY_PERMISSION; tempAllowListReason:<2b1cf62 android.intent.action.LOCKED_BOOT_COMPLETED/u0,reasonCode:LOCKED_BOOT_COMPLETED,duration:20000,callingUid:1000>; targetSdkVersion:34; callerTargetSdkVersion:34; startForegroundCount:0; bindFromPackage:null: isBindService:false]
+07-26 16:32:01.824   593   626 I ActivityManager: Start proc 2995:com.google.android.onetimeinitializer/u0a128 for broadcast {com.google.android.onetimeinitializer/com.google.android.onetimeinitializer.OneTimeInitializerReceiver}
+07-26 16:32:01.971   593  1940 W ActivityManager: Receiver with filter android.content.IntentFilter@11b3cf1 already registered for pid 1252, callerPackage is com.google.android.apps.nexuslauncher
+07-26 16:32:02.024   593   626 I ActivityManager: Start proc 3021:com.android.camera2/u0a156 for broadcast {com.android.camera2/com.android.camera.SetActivitiesCameraReceiver}
+07-26 16:32:02.294   593   626 I ActivityManager: Start proc 3053:com.android.dynsystem/1000 for broadcast {com.android.dynsystem/com.android.dynsystem.BootCompletedReceiver}
+07-26 16:32:02.499   593   626 I ActivityManager: Start proc 3068:com.android.imsserviceentitlement/u0a138 for broadcast {com.android.imsserviceentitlement/com.android.imsserviceentitlement.fcm.FcmRegistrationReceiver}
+07-26 16:32:02.509   593   626 I ActivityManager: Start proc 3071:com.android.dynsystem:dynsystem/1000 for service {com.android.dynsystem/com.android.dynsystem.DynamicSystemInstallationService}
+07-26 16:32:02.754   593   626 I ActivityManager: Start proc 3112:com.android.nfc/1027 for broadcast {com.android.nfc/com.android.nfc.NfcBootCompletedReceiver}
+07-26 16:32:03.188   593   651 I ActivityManager: Killing 1419:com.google.android.ext.services/u0a190 (adj 100): change com.google.android.ext.services
+07-26 16:32:03.189   593   651 W ActivityManager: Scheduling restart of crashed service com.google.android.ext.services/android.ext.services.autofill.InlineSuggestionRenderServiceImpl in 20000ms for connection
+07-26 16:32:03.266   593   624 W ActivityManager: Rescheduling restart of crashed service com.google.android.ext.services/android.ext.services.autofill.InlineSuggestionRenderServiceImpl in 29923ms for mem-pressure-event
+07-26 16:32:03.275   593   651 I ActivityManager: Killing 3112:com.android.nfc/1027 (adj 905): change com.android.nfc
+07-26 16:32:03.326   593   626 I ActivityManager: Start proc 3156:com.android.shell/2000 for broadcast {com.android.shell/com.android.shell.HeapDumpReceiver}
+07-26 16:32:03.523   593   651 I ActivityManager: Killing 2925:com.google.android.devicelockcontroller/u0a194 (adj 100): change com.google.android.devicelockcontroller
+07-26 16:32:03.524   593   651 W ActivityManager: Scheduling restart of crashed service com.google.android.devicelockcontroller/com.android.devicelockcontroller.DeviceLockControllerService in 10000ms for connection
+07-26 16:32:03.531   593   651 I ActivityManager:   Force stopping service ServiceRecord{63b8b8c u0 com.google.android.devicelockcontroller/com.android.devicelockcontroller.DeviceLockControllerService c:android}
+07-26 16:32:03.549   593   626 I ActivityManager: Start proc 3182:com.google.android.configupdater/u0a136 for broadcast {com.google.android.configupdater/com.google.android.configupdater.MainReceiver}
+07-26 16:32:03.884   593   626 I ActivityManager: Start proc 3203:com.google.android.federatedcompute/u0a200 for broadcast {com.google.android.federatedcompute/com.android.federatedcompute.services.FederatedComputeBroadcastReceiver}
+07-26 16:32:04.211   593   626 I ActivityManager: Start proc 3223:com.google.android.healthconnect.controller/u0a197 for broadcast {com.google.android.healthconnect.controller/com.android.healthconnect.controller.safetycenter.SafetySourceBroadcastReceiver}
+07-26 16:32:04.372   593   651 I ActivityManager: Killing 2626:com.google.android.settings.intelligence/u0a140 (adj 0): change com.google.android.settings.intelligence
+07-26 16:32:04.394   593  1941 W ActivityManager: finishReceiver: no app for android.os.BinderProxy@82298a1
+07-26 16:32:04.528   593   626 I ActivityManager: Start proc 3249:com.google.android.ondevicepersonalization.services/u0a199 for broadcast {com.google.android.ondevicepersonalization.services/com.android.ondevicepersonalization.services.OnDevicePersonalizationBroadcastReceiver}
+07-26 16:32:04.601   593   651 E ActivityManager: Unable to freeze binder for 3223: -11
+07-26 16:32:04.604   593   651 I ActivityManager: Killing 3223:com.google.android.healthconnect.controller/u0a197 (adj 0): change com.google.android.healthconnect.controller
+07-26 16:32:04.749   593   626 I ActivityManager: Start proc 3266:com.google.android.packageinstaller/u0a101 for broadcast {com.google.android.packageinstaller/com.android.packageinstaller.common.TemporaryFileManager}
+07-26 16:32:04.971   593   626 I ActivityManager: Start proc 3288:com.google.android.tts/u0a165 for broadcast {com.google.android.tts/androidx.work.impl.background.systemalarm.RescheduleReceiver}
+07-26 16:32:05.305   593  2559 I ActivityManager: Start proc 3319:com.google.android.settings.intelligence/u0a140 for broadcast {com.google.android.settings.intelligence/com.google.android.settings.intelligence.modules.routines.impl.WifiBroadcastReceiver}
+07-26 16:32:06.599   593   625 I ActivityManager: reportOnUserCompletedEvent(0): stored=10, eligible=111
+07-26 16:32:07.009   593   626 I ActivityManager: Start proc 3403:com.google.android.apps.messaging/u0a134 for content provider {com.google.android.apps.messaging/com.google.android.apps.messaging.settings.search.MessagesSearchIndexablesProvider}
+07-26 16:32:07.037   593   626 I ActivityManager: Start proc 3406:com.google.android.apps.safetyhub/u0a129 for content provider {com.google.android.apps.safetyhub/com.google.android.apps.safetyhub.platformsettings.search.EmergencySearchIndexablesProvider}
+07-26 16:32:07.056   593   626 W ActivityManager: Slow operation: 53ms so far, now at startProcess: done updating battery stats
+07-26 16:32:07.057   593   626 W ActivityManager: Slow operation: 53ms so far, now at startProcess: building log message
+07-26 16:32:07.057   593   626 I ActivityManager: Start proc 3418:com.google.android.gms.ui/u0a143 for content provider {com.google.android.gms/com.google.android.gms.accountsettings.content.SettingsSearchContentProvider}
+07-26 16:32:07.057   593   626 W ActivityManager: Slow operation: 53ms so far, now at startProcess: starting to update pids map
+07-26 16:32:07.057   593   626 W ActivityManager: Slow operation: 53ms so far, now at startProcess: done updating pids map
+07-26 16:32:07.064   593   626 W ActivityManager: Slow operation: 53ms so far, now at startProcess: returned from zygote!
+07-26 16:32:07.081   593   626 W ActivityManager: Slow operation: 70ms so far, now at startProcess: done updating battery stats
+07-26 16:32:07.081   593   626 W ActivityManager: Slow operation: 70ms so far, now at startProcess: building log message
+07-26 16:32:07.081   593   626 I ActivityManager: Start proc 3430:com.google.android.healthconnect.controller/u0a197 for content provider {com.google.android.healthconnect.controller/com.android.healthconnect.controller.searchindexables.HealthConnectSearchIndexablesProvider}
+07-26 16:32:07.081   593   626 W ActivityManager: Slow operation: 70ms so far, now at startProcess: starting to update pids map
+07-26 16:32:07.082   593   626 W ActivityManager: Slow operation: 71ms so far, now at startProcess: done updating pids map
+07-26 16:32:07.082   593   626 W ActivityManager: Slow operation: 70ms so far, now at startProcess: asking zygote to start proc
+07-26 16:32:07.093   593   626 W ActivityManager: Slow operation: 81ms so far, now at startProcess: returned from zygote!
+07-26 16:32:07.102   593   626 W ActivityManager: Slow operation: 90ms so far, now at startProcess: done updating battery stats
+07-26 16:32:07.102   593   626 W ActivityManager: Slow operation: 91ms so far, now at startProcess: building log message
+07-26 16:32:07.102   593   626 I ActivityManager: Start proc 3441:com.google.android.marvin.talkback/u0a166 for content provider {com.google.android.marvin.talkback/com.google.android.accessibility.talkback.preference.search.TalkBackSearchIndexablesProvider}
+07-26 16:32:07.102   593   626 W ActivityManager: Slow operation: 91ms so far, now at startProcess: starting to update pids map
+07-26 16:32:07.102   593   626 W ActivityManager: Slow operation: 91ms so far, now at startProcess: done updating pids map
+07-26 16:32:07.479   593  1287 I ActivityManager: Background started FGS: Allowed [callingPackage: com.google.android.apps.messaging; callingUid: 10134; uidState: RCVR; uidBFSL: n/a; intent: Intent { cmp=com.google.android.apps.messaging/com.google.apps.tiktok.concurrent.InternalForegroundService (has extras) }; code:BACKGROUND_FGS_PERMISSION; tempAllowListReason:<null>; targetSdkVersion:35; callerTargetSdkVersion:35; startForegroundCount:0; bindFromPackage:null: isBindService:false]
+07-26 16:32:07.494   593  1835 W ActivityManager: Foreground service started from background can not have location/camera/microphone access: service com.google.android.apps.messaging/com.google.apps.tiktok.concurrent.InternalForegroundService
+07-26 16:32:07.910   593   626 I ActivityManager: Start proc 3604:com.google.android.apps.messaging:rcs/u0a134 for service {com.google.android.apps.messaging/com.google.android.ims.service.JibeService}
+07-26 16:32:07.953   593  2559 W ActivityManager: Unable to start service Intent { cmp=com.google.android.apps.tachyon/.clientapi.ClientApiService } U=0: not found
+07-26 16:32:08.180   593  1838 W ActivityManager: pid 1490 com.google.android.gms sent binder code 1 with flags 2 to frozen apps and got error -2147483646
+07-26 16:32:09.265   593   613 I ActivityManager: Finished processing BOOT_COMPLETED for u0
+07-26 16:32:09.331   593   626 I ActivityManager: Start proc 3682:com.google.android.ext.services/u0a190 for service {com.google.android.ext.services/android.ext.services.watchdog.ExplicitHealthCheckServiceImpl}
+07-26 16:32:12.437   593  1073 W ActivityManager: Unable to start service Intent { act=android.settings.hats.START_SERVICE pkg=com.google.android.settings.intelligence (has extras) } U=0: not found
+07-26 16:32:12.440   593   651 E ActivityManager: Unable to freeze binder for 3319: -11
+07-26 16:32:12.440   593   651 I ActivityManager: Killing 3319:com.google.android.settings.intelligence/u0a140 (adj 0): change com.google.android.settings.intelligence
+07-26 16:32:12.442   593   651 W ActivityManager: Scheduling restart of crashed service com.google.android.settings.intelligence/.modules.routines.impl.RoutinesJobIntentService in 1000ms for connection
+07-26 16:32:12.442   593   651 W ActivityManager: Scheduling restart of crashed service com.google.android.settings.intelligence/.modules.appsearchindexing.impl.AppSearchIndexUpdateJobService in 11000ms for connection
+07-26 16:32:13.463   593   626 I ActivityManager: Start proc 3825:com.google.android.settings.intelligence/u0a140 for service {com.google.android.settings.intelligence/com.google.android.settings.intelligence.modules.routines.impl.RoutinesJobIntentService}
+07-26 16:32:14.855   593  1184 I ActivityManager: Background started FGS: Allowed [callingPackage: com.google.android.inputmethod.latin; callingUid: 10153; uidState: IMPB; uidBFSL: n/a; intent: Intent { cmp=com.google.android.inputmethod.latin/com.google.android.apps.inputmethod.libs.dataservice.superpacks.SuperpacksForegroundTaskService }; code:BOOT_COMPLETED; tempAllowListReason:<24ac045 android.intent.action.BOOT_COMPLETED/u0,reasonCode:BOOT_COMPLETED,duration:20000,callingUid:1000>; targetSdkVersion:34; callerTargetSdkVersion:34; startForegroundCount:0; bindFromPackage:null: isBindService:false]
+07-26 16:32:14.869   593   673 W ActivityManager: Foreground service started from background can not have location/camera/microphone access: service com.google.android.inputmethod.latin/com.google.android.apps.inputmethod.libs.dataservice.superpacks.SuperpacksForegroundTaskService
+07-26 16:32:15.547   593  1839 I ActivityManager: Background started FGS: Allowed [callingPackage: com.google.android.inputmethod.latin; callingUid: 10153; uidState: IMPB; uidBFSL: n/a; intent: Intent { cmp=com.google.android.inputmethod.latin/com.google.android.apps.inputmethod.libs.dataservice.superpacks.SuperpacksForegroundTaskService }; code:BOOT_COMPLETED; tempAllowListReason:<24ac045 android.intent.action.BOOT_COMPLETED/u0,reasonCode:BOOT_COMPLETED,duration:20000,callingUid:1000>; targetSdkVersion:34; callerTargetSdkVersion:34; startForegroundCount:0; bindFromPackage:null: isBindService:false]
+07-26 16:32:15.559   593  1085 W ActivityManager: Foreground service started from background can not have location/camera/microphone access: service com.google.android.inputmethod.latin/com.google.android.apps.inputmethod.libs.dataservice.superpacks.SuperpacksForegroundTaskService
+07-26 16:32:20.101   593   624 W ActivityManager: pid 593 system sent binder code 2 with flags 1 to frozen apps and got error -32
+07-26 16:32:20.101   593   624 W ActivityManager: pid 593 system sent binder code 2 with flags 1 to frozen apps and got error -32
+07-26 16:32:20.101   593   624 W ActivityManager: pid 593 system sent binder code 2 with flags 1 to frozen apps and got error -32
+07-26 16:32:20.114   593   624 W ActivityManager: pid 593 system sent binder code 2 with flags 1 to frozen apps and got error -32
+07-26 16:32:20.117   593   624 W ActivityManager: pid 593 system sent binder code 2 with flags 1 to frozen apps and got error -32
+07-26 16:32:20.121   593   624 W ActivityManager: pid 593 system sent binder code 2 with flags 1 to frozen apps and got error -32
+07-26 16:32:22.491   593  1073 W ActivityManager: pid 1295 com.google.android.gms.persistent sent binder code 4 with flags 1 to frozen apps and got error -2147483646
+07-26 16:32:23.638   593  1840 I ActivityManager: Background started FGS: Allowed [callingPackage: com.google.android.apps.wellbeing; callingUid: 10142; uidState: BTOP; uidBFSL: [BFSL]; intent: Intent { cmp=com.google.android.apps.wellbeing/com.google.apps.tiktok.concurrent.InternalForegroundService (has extras) }; code:BACKGROUND_ACTIVITY_PERMISSION; tempAllowListReason:<24ac045 android.intent.action.BOOT_COMPLETED/u0,reasonCode:BOOT_COMPLETED,duration:20000,callingUid:1000>; targetSdkVersion:34; callerTargetSdkVersion:34; startForegroundCount:0; bindFromPackage:null: isBindService:false]
+07-26 16:32:36.144   593  1941 W ActivityManager: stopServiceToken startId 1458 is last, but have 1 remaining args
+07-26 16:32:36.818   593  1602 W ActivityManager: registerReceiverWithFeature: no app for null
+07-26 16:32:36.860   593   626 I ActivityManager: Start proc 4196:com.daftcitadel.citadel/u0a209 for next-top-activity {com.daftcitadel.citadel/com.daftcitadel.citadel.MainActivity}

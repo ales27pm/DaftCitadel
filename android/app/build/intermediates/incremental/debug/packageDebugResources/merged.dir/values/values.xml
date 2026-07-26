@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <color name="colorPrimary">#023c69</color>
+    <color name="colorPrimaryDark">#ffffff</color>
+    <color name="splashscreen_background">#FFFFFF</color>
     <integer name="react_native_dev_server_port">8081</integer>
     <integer name="react_native_inspector_proxy_port">8081</integer>
     <string name="app_name">DaftCitadel</string>

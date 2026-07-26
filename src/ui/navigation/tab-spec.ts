@@ -1,5 +1,3 @@
-import type { StudioIconName } from '../design-system';
-
 export type AppTabParamList = {
   Arrangement: undefined;
   Mixer: undefined;
@@ -7,7 +5,32 @@ export type AppTabParamList = {
   Settings: undefined;
 };
 
+export type StudioIconName =
+  | 'arrangement'
+  | 'mixer'
+  | 'performance'
+  | 'settings'
+  | 'play'
+  | 'stop'
+  | 'rewind'
+  | 'plus'
+  | 'engine'
+  | 'waveform'
+  | 'midi'
+  | 'diagnostics'
+  | 'chevronDown'
+  | 'chevronUp'
+  | 'mute'
+  | 'solo';
+
 export type AppTabName = keyof AppTabParamList;
+
+export const APP_TAB_SEQUENCE: ReadonlyArray<AppTabName> = [
+  'Arrangement',
+  'Mixer',
+  'Performance',
+  'Settings',
+];
 
 export const APP_TABS: ReadonlyArray<{
   name: AppTabName;

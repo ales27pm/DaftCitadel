@@ -5,6 +5,11 @@ type Logger = Pick<typeof console, 'debug' | 'info' | 'warn' | 'error'>;
 type NodeId = string;
 
 type ConnectionKey = string;
+type TransportSnapshot = {
+  frame: number;
+  currentFrame?: number;
+  isPlaying: boolean;
+};
 
 export type GraphReconciliationResult = {
   removedNodeIds: ReadonlySet<string>;
@@ -126,7 +131,7 @@ export class GraphReconciler {
       if (transport.isPlaying) {
         await this.audioEngine.stopTransport();
         const stopped = await this.audioEngine.getTransportState();
-        resumeFrame = Math.max(0, Math.floor(stopped.currentFrame));
+        resumeFrame = Math.max(0, Math.floor(extractTransportFrame(stopped)));
       }
 
       const result = await operation();
@@ -282,5 +287,15 @@ export class GraphReconciler {
     );
   }
 }
+
+const extractTransportFrame = (transport: TransportSnapshot): number => {
+  if (Number.isFinite(transport.frame)) {
+    return transport.frame;
+  }
+  if (Number.isFinite(transport.currentFrame)) {
+    return transport.currentFrame as number;
+  }
+  throw new Error('Transport state missing frame information');
+};
 
 export type { ConnectionKey };

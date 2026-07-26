@@ -17,6 +17,10 @@ import {
 } from '../screens';
 import { useAdaptiveLayout } from '../layout';
 import { SessionAppProvider } from '../session';
+import {
+  APP_TAB_SEQUENCE as APP_TAB_SEQUENCE_SPEC,
+  type AppTabName,
+} from './tab-spec';
 
 export type ArrangementStackParamList = {
   ArrangementHome: undefined;
@@ -28,6 +32,8 @@ export type AppTabParamList = {
   Performance: undefined;
   Settings: undefined;
 };
+
+export const APP_TAB_SEQUENCE = APP_TAB_SEQUENCE_SPEC;
 
 const ArrangementStack = createNativeStackNavigator<ArrangementStackParamList>();
 const Tab = createBottomTabNavigator<AppTabParamList>();
@@ -41,6 +47,13 @@ const ArrangementStackNavigator = () => (
     />
   </ArrangementStack.Navigator>
 );
+
+const TAB_SCREEN_BY_NAME: Record<AppTabName, React.ComponentType> = {
+  Arrangement: ArrangementStackNavigator,
+  Mixer: MixerScreen,
+  Performance: PerformanceScreen,
+  Settings: SettingsScreen,
+};
 
 const TabBarThemeProvider: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
   const theme = useTheme();
@@ -75,10 +88,9 @@ const TabBarThemeProvider: React.FC<{ children?: React.ReactNode }> = ({ childre
           lazy: true,
         }}
       >
-        <Tab.Screen name="Arrangement" component={ArrangementStackNavigator} />
-        <Tab.Screen name="Mixer" component={MixerScreen} />
-        <Tab.Screen name="Performance" component={PerformanceScreen} />
-        <Tab.Screen name="Settings" component={SettingsScreen} />
+        {APP_TAB_SEQUENCE.map((name) => (
+          <Tab.Screen key={name} name={name} component={TAB_SCREEN_BY_NAME[name]} />
+        ))}
       </Tab.Navigator>
       {children}
     </NavigationContainer>

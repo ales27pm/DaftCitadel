@@ -24,6 +24,7 @@ const setDevFlag = (value: boolean) => {
 describe('SessionAppProvider', () => {
   const originalDev = Boolean((globalThis as { __DEV__?: boolean }).__DEV__);
   const originalPlatform = Platform.OS;
+  const originalNativeBridgePref = process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE;
 
   const createDeferred = <T,>() => {
     let resolve!: (value: T | PromiseLike<T>) => void;
@@ -55,10 +56,19 @@ describe('SessionAppProvider', () => {
     };
   };
 
+  const setWebNativeBridgePreference = (value: string | undefined) => {
+    if (value === undefined) {
+      delete process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE;
+      return;
+    }
+    process.env.EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE = value;
+  };
+
   afterEach(() => {
     jest.resetAllMocks();
     Platform.OS = originalPlatform;
     setDevFlag(originalDev);
+    setWebNativeBridgePreference(originalNativeBridgePref);
   });
 
   const renderWithConsumer = async () => {
@@ -132,6 +142,50 @@ describe('SessionAppProvider', () => {
     expect(name).toBe('Demo Performance');
   });
 
+  it('bootstraps the production environment on web release builds', async () => {
+    setDevFlag(false);
+    Platform.OS = 'web';
+    setWebNativeBridgePreference('true');
+    const productionEnvironment = await createTestEnvironment('web-prod-session');
+    const productionSpy = jest
+      .spyOn(environmentModule, 'createProductionSessionEnvironment')
+      .mockResolvedValue(productionEnvironment);
+    const passiveSpy = jest
+      .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+      .mockImplementation(() => {
+        throw new Error('Passive environment should not be used');
+      });
+
+    const { status, name } = await renderWithConsumer();
+
+    expect(productionSpy).toHaveBeenCalledTimes(1);
+    expect(passiveSpy).not.toHaveBeenCalled();
+    expect(status).toBe('ready');
+    expect(name).toBe('Demo Performance');
+  });
+
+  it('forces the passive environment on web when native bridge is explicitly disabled', async () => {
+    setDevFlag(false);
+    Platform.OS = 'web';
+    setWebNativeBridgePreference('false');
+    const passiveEnvironment = await createTestEnvironment('web-passive-disabled-flag');
+    const passiveSpy = jest
+      .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+      .mockResolvedValue(passiveEnvironment);
+    const productionSpy = jest
+      .spyOn(environmentModule, 'createProductionSessionEnvironment')
+      .mockImplementation(() => {
+        throw new Error('Production environment should not be used');
+      });
+
+    const { status, name } = await renderWithConsumer();
+
+    expect(passiveSpy).toHaveBeenCalledTimes(1);
+    expect(productionSpy).not.toHaveBeenCalled();
+    expect(status).toBe('ready');
+    expect(name).toBe('Demo Performance');
+  });
+
   it('falls back to passive environment when native audio is unavailable', async () => {
     setDevFlag(false);
     Platform.OS = 'android';
@@ -142,6 +196,27 @@ describe('SessionAppProvider', () => {
     const productionSpy = jest
       .spyOn(environmentModule, 'createProductionSessionEnvironment')
       .mockRejectedValue(new NativeAudioUnavailableError('Audio unavailable'));
+
+    const { status, name } = await renderWithConsumer();
+
+    expect(productionSpy).toHaveBeenCalledTimes(1);
+    expect(passiveSpy).toHaveBeenCalledTimes(1);
+    expect(status).toBe('ready');
+    expect(name).toBe('Demo Performance');
+  });
+
+  it('falls back to passive environment when web audio is unavailable', async () => {
+    setDevFlag(false);
+    Platform.OS = 'web';
+    const fallbackEnvironment = await createTestEnvironment('web-fallback-session');
+    const passiveSpy = jest
+      .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+      .mockResolvedValue(fallbackEnvironment);
+    const productionSpy = jest
+      .spyOn(environmentModule, 'createProductionSessionEnvironment')
+      .mockRejectedValue(
+        new NativeAudioUnavailableError('Web Audio API is not available'),
+      );
 
     const { status, name } = await renderWithConsumer();
 
