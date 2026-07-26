@@ -168,12 +168,13 @@ describe('maintain:docs automation', () => {
   it('surfaces interpreter resolution failures', async () => {
     const sandboxRoot = await createTempRoot();
     await bootstrapSandbox(sandboxRoot);
-  
+
     const applyResult = await runMaintainDocs(sandboxRoot, ['--no-prettier'], {
       MAINTAIN_DOCS_PYTHON: '/nonexistent/python',
+      PATH: '/tmp/invalid-path-does-not-exist',
     });
-  
+
     expect(applyResult.code).toBe(1);
     expect(applyResult.stderr).toContain('Unable to locate a Python interpreter');
   });
-  });
+});

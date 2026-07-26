@@ -151,8 +151,9 @@ class CollabNetworkDiagnosticsModule(
     }
     payload.putDouble("timestamp", System.currentTimeMillis().toDouble())
 
-    if (info.rssi != WifiInfo.INVALID_RSSI) {
-      payload.putInt("rssi", info.rssi)
+    val rssi = info.rssi
+    if (rssi != Int.MIN_VALUE) {
+      payload.putInt("rssi", rssi)
     }
 
     val linkSpeed = info.linkSpeed

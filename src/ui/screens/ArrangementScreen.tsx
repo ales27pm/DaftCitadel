@@ -77,7 +77,9 @@ export const ArrangementScreen: React.FC = () => {
     () =>
       pluginAlerts.map((alert) => {
         const label = alert.descriptor?.name ?? alert.instanceId;
-        const timestamp = new Date(alert.timestamp).toLocaleString();
+        const timestamp = new Date(alert.timestamp).toLocaleString('en-US', {
+          timeZone: 'UTC',
+        });
         const recoveryNote = alert.recovered ? ' • Recovered' : '';
         return (
           <NeonSurface

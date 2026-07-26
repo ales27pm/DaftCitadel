@@ -10,7 +10,7 @@ module.exports = {
         },
         android: {
           sourceDir: path.join(__dirname, 'native/collab/android'),
-          packageImportPath: 'com.daftcitadel.collab.CollabNetworkDiagnosticsPackage',
+          packageImportPath: 'import com.daftcitadel.collab.CollabNetworkDiagnosticsPackage;',
           packageInstance: 'new CollabNetworkDiagnosticsPackage()',
         },
       },
