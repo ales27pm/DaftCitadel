@@ -32,9 +32,9 @@ const hashString = (input: string): number => {
 };
 
 const parseTimeSignature = (
-  timeSignature: string,
+  timeSignature: string | undefined,
 ): { numerator: number; denominator: number } => {
-  const [rawNumerator, rawDenominator] = timeSignature.split('/');
+  const [rawNumerator, rawDenominator] = (timeSignature ?? '4/4').split('/');
   const numerator = Number.parseInt(rawNumerator ?? '4', 10);
   const denominator = Number.parseInt(rawDenominator ?? '4', 10);
   return {
@@ -528,7 +528,7 @@ export const buildTransport = (
 
   return {
     bpm: session.metadata.bpm,
-    timeSignature: session.metadata.timeSignature,
+    timeSignature: session.metadata.timeSignature ?? '4/4',
     lengthBeats: totalBeats,
     totalBars,
     playheadBeats,

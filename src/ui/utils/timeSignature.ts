@@ -3,8 +3,10 @@ export interface ParsedTimeSignature {
   denominator: number;
 }
 
-export const parseTimeSignature = (timeSignature: string): ParsedTimeSignature => {
-  const [rawNumerator, rawDenominator] = timeSignature.split('/');
+export const parseTimeSignature = (
+  timeSignature: string | undefined,
+): ParsedTimeSignature => {
+  const [rawNumerator, rawDenominator] = (timeSignature ?? '4/4').split('/');
   const numerator = Number.parseInt(rawNumerator ?? '', 10);
   const denominator = Number.parseInt(rawDenominator ?? '', 10);
 
@@ -14,7 +16,7 @@ export const parseTimeSignature = (timeSignature: string): ParsedTimeSignature =
   };
 };
 
-export const quarterNoteBeatsPerBar = (timeSignature: string): number => {
+export const quarterNoteBeatsPerBar = (timeSignature: string | undefined): number => {
   const { numerator, denominator } = parseTimeSignature(timeSignature);
   return numerator * (4 / denominator);
 };

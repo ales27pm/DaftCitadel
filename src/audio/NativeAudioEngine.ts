@@ -1,5 +1,5 @@
 import type { TurboModule } from 'react-native';
-import { TurboModuleRegistry, NativeModules } from 'react-native';
+import { NativeModules, Platform, TurboModuleRegistry } from 'react-native';
 
 type NodeId = string;
 
@@ -58,9 +58,16 @@ export interface AudioEngineSpec extends TurboModule {
 
 const moduleName = 'AudioEngineModule';
 
+const unavailableModule = new Proxy({} as AudioEngineSpec, {
+  get: () => () =>
+    Promise.reject(new Error(`${moduleName} is not available on this platform`)),
+});
+
 export const NativeAudioEngine: AudioEngineSpec =
-  TurboModuleRegistry.getEnforcing<AudioEngineSpec>(moduleName);
+  Platform.OS === 'web'
+    ? unavailableModule
+    : TurboModuleRegistry.getEnforcing<AudioEngineSpec>(moduleName);
 
 export const isNativeModuleAvailable = (): boolean => {
-  return NativeModules[moduleName] != null;
+  return Platform.OS !== 'web' && NativeModules[moduleName] != null;
 };

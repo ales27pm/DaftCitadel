@@ -1,5 +1,5 @@
 import type { TurboModule } from 'react-native';
-import { NativeModules, TurboModuleRegistry } from 'react-native';
+import { NativeModules, Platform, TurboModuleRegistry } from 'react-native';
 import type {
   PluginDescriptor,
   PluginInstanceHandle,
@@ -56,9 +56,16 @@ export type PluginHostEventPayloads = {
 
 const moduleName = 'PluginHostModule';
 
+const unavailableModule = new Proxy({} as PluginHostSpec, {
+  get: () => () =>
+    Promise.reject(new Error(`${moduleName} is not available on this platform`)),
+});
+
 export const NativePluginHost: PluginHostSpec =
-  TurboModuleRegistry.getEnforcing<PluginHostSpec>(moduleName);
+  Platform.OS === 'web'
+    ? unavailableModule
+    : TurboModuleRegistry.getEnforcing<PluginHostSpec>(moduleName);
 
 export const isPluginHostAvailable = (): boolean => {
-  return NativeModules[moduleName] != null;
+  return Platform.OS !== 'web' && NativeModules[moduleName] != null;
 };
