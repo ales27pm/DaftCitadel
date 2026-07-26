@@ -6,8 +6,6 @@ import {
   TrackID,
   PluginSlotType,
   RoutingSignalType,
-  type InstrumentPresetMetadata,
-  type Juno106ParameterMap,
   type AudioTransportSnapshot,
 } from '../../session';
 import type { PluginCrashReport } from '../../audio';
@@ -25,7 +23,7 @@ export interface ClipViewModel {
   name: string;
   startMs: number;
   durationMs: number;
-  audioFile?: string;
+  audioFile: string;
   automationCurveIds: AutomationCurveID[];
   midiNotes: MidiNoteViewModel[];
 }
@@ -43,14 +41,6 @@ export interface TrackPluginViewModel {
   emits: RoutingSignalType[];
 }
 
-export interface JunoInstrumentViewModel {
-  nodeId: string;
-  instrumentType: 'juno106';
-  label?: string;
-  parameters: Juno106ParameterMap;
-  preset?: InstrumentPresetMetadata;
-}
-
 export interface TrackViewModel {
   id: TrackID;
   name: string;
@@ -65,7 +55,6 @@ export interface TrackViewModel {
   midiNotes: MidiNoteViewModel[];
   meterLevel: number;
   plugins: TrackPluginViewModel[];
-  instrument?: JunoInstrumentViewModel;
 }
 
 export type PlayheadReferenceSource = 'runtime' | 'diagnostics';

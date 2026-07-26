@@ -5,11 +5,9 @@ export const ScrollView = 'ScrollView';
 export const SafeAreaView = 'SafeAreaView';
 export const Text = 'Text';
 export const Pressable = 'Pressable';
-export const ActivityIndicator = 'ActivityIndicator';
 export const TouchableOpacity = 'TouchableOpacity';
 export const FlatList = 'FlatList';
 export const SectionList = 'SectionList';
-export const Switch = 'Switch';
 
 export const StyleSheet = {
   create: <T extends Record<string, unknown>>(styles: T): T => styles,
@@ -28,11 +26,6 @@ type AccessibilityListener = (enabled: boolean) => void;
 
 const reduceMotionListeners = new Set<AccessibilityListener>();
 const screenReaderListeners = new Set<AccessibilityListener>();
-
-type AppStateStatus = 'active' | 'background' | 'inactive' | 'unknown' | 'extension';
-type AppStateListener = (state: AppStateStatus) => void;
-
-const appStateListeners = new Set<AppStateListener>();
 
 let reduceMotionEnabled = false;
 let screenReaderEnabled = false;
@@ -78,28 +71,6 @@ export const AccessibilityInfo = {
   },
 };
 
-export const AppState = {
-  currentState: 'active' as AppStateStatus,
-  addEventListener: (event: 'change', listener: AppStateListener) => {
-    if (event === 'change') {
-      appStateListeners.add(listener);
-    }
-    return {
-      remove: () => {
-        appStateListeners.delete(listener);
-      },
-    };
-  },
-  __emit(state: AppStateStatus) {
-    AppState.currentState = state;
-    appStateListeners.forEach((listener) => listener(state));
-  },
-  __reset() {
-    AppState.currentState = 'active';
-    appStateListeners.clear();
-  },
-};
-
 class MockNativeEventEmitter {
   private readonly listeners = new Map<string, Set<(...args: unknown[]) => void>>();
 
@@ -140,14 +111,6 @@ type AudioEngineNode = {
 
 type AutomationPoint = { frame: number; value: number };
 
-type MockMidiEvent = {
-  frame: number;
-  type: number;
-  channel: number;
-  data1: number;
-  data2: number;
-};
-
 type AudioEngineMockState = {
   initialized: boolean;
   sampleRate: number;
@@ -160,12 +123,6 @@ type AudioEngineMockState = {
     clipBufferBytes: number;
   };
   automations: Map<string, Map<string, AutomationPoint[]>>;
-  midiEvents: Map<string, MockMidiEvent[]>;
-  instrumentParameters: Map<string, Map<number, number>>;
-  scheduledInstrumentParameters: Map<
-    string,
-    Array<{ frame: number; parameterId: number; value: number }>
-  >;
   clipBuffers: Map<
     string,
     {
@@ -192,9 +149,6 @@ const audioEngineState: AudioEngineMockState = {
   connections: new Set(),
   diagnostics: { xruns: 0, lastRenderDurationMicros: 0, clipBufferBytes: 0 },
   automations: new Map(),
-  midiEvents: new Map(),
-  instrumentParameters: new Map(),
-  scheduledInstrumentParameters: new Map(),
   clipBuffers: new Map(),
   transport: {
     frame: 0,
@@ -225,7 +179,9 @@ const computeTransportFrame = (now: number): number => {
   if (elapsedMs <= 0 || audioEngineState.sampleRate <= 0) {
     return audioEngineState.transport.startFrame;
   }
-  const framesAdvanced = Math.floor((elapsedMs / 1000) * audioEngineState.sampleRate);
+  const framesAdvanced = Math.floor(
+    (elapsedMs / 1000) * audioEngineState.sampleRate,
+  );
   return audioEngineState.transport.startFrame + framesAdvanced;
 };
 
@@ -247,9 +203,6 @@ const audioEngineModule = {
     audioEngineState.nodes.clear();
     audioEngineState.connections.clear();
     audioEngineState.automations.clear();
-    audioEngineState.midiEvents.clear();
-    audioEngineState.instrumentParameters.clear();
-    audioEngineState.scheduledInstrumentParameters.clear();
     audioEngineState.diagnostics.xruns = 0;
     audioEngineState.diagnostics.lastRenderDurationMicros = 0;
     audioEngineState.diagnostics.clipBufferBytes = 0;
@@ -282,7 +235,7 @@ const audioEngineModule = {
     sampleRate: number,
     channels: number,
     frames: number,
-    channelData: Array<string | ArrayBuffer | ArrayBufferView>,
+    channelData: Array<ArrayBuffer | ArrayBufferView>,
   ) => {
     const key = bufferKey.trim();
     if (!key) {
@@ -302,19 +255,14 @@ const audioEngineModule = {
     }
     const floatChannels = channelData.map((payload, index) => {
       let source: ArrayBuffer;
-      if (typeof payload === 'string') {
-        const decoded = Buffer.from(payload, 'base64');
-        source = Uint8Array.from(decoded).buffer;
-      } else if (isArrayBufferLike(payload)) {
-        const bytes = new Uint8Array(payload);
-        source = Uint8Array.from(bytes).buffer;
+      if (isArrayBufferLike(payload)) {
+        source = payload;
       } else if (ArrayBuffer.isView(payload)) {
         const view = payload as ArrayBufferView;
-        const bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
-        source = Uint8Array.from(bytes).buffer;
+        source = view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
       } else {
         throw new Error(
-          `channelData[${index}] must be base64, an ArrayBuffer, or an ArrayBufferView`,
+          `channelData[${index}] must be an ArrayBuffer or ArrayBufferView`,
         );
       }
       const view = new Float32Array(source);
@@ -353,9 +301,6 @@ const audioEngineModule = {
       }
     });
     audioEngineState.automations.delete(trimmedId);
-    audioEngineState.midiEvents.delete(trimmedId);
-    audioEngineState.instrumentParameters.delete(trimmedId);
-    audioEngineState.scheduledInstrumentParameters.delete(trimmedId);
   },
   connectNodes: async (source: string, destination: string) => {
     const trimmedSource = source.trim();
@@ -442,71 +387,6 @@ const audioEngineModule = {
     nextPoints.sort((lhs, rhs) => lhs.frame - rhs.frame);
     parameterMap.set(trimmedParam, nextPoints);
   },
-  sendMidiEvent: async (
-    nodeId: string,
-    type: number,
-    channel: number,
-    data1: number,
-    data2: number,
-    frameOffset: number,
-  ) => {
-    const trimmedId = nodeId.trim();
-    if (!audioEngineState.nodes.has(trimmedId)) {
-      throw new Error(`Node '${trimmedId}' is not registered`);
-    }
-    const frame = computeTransportFrame(Date.now()) + frameOffset;
-    const events = audioEngineState.midiEvents.get(trimmedId) ?? [];
-    events.push({ frame, type, channel, data1, data2 });
-    events.sort((left, right) => left.frame - right.frame);
-    audioEngineState.midiEvents.set(trimmedId, events);
-  },
-  sendMidiEvents: async (nodeId: string, events: MockMidiEvent[], replace: boolean) => {
-    const trimmedId = nodeId.trim();
-    if (!audioEngineState.nodes.has(trimmedId)) {
-      throw new Error(`Node '${trimmedId}' is not registered`);
-    }
-    const previous = replace ? [] : (audioEngineState.midiEvents.get(trimmedId) ?? []);
-    const next = [...previous, ...events.map((event) => ({ ...event }))];
-    next.sort((left, right) => left.frame - right.frame);
-    audioEngineState.midiEvents.set(trimmedId, next);
-  },
-  setInstrumentParameter: async (
-    nodeId: string,
-    parameterId: number,
-    value: number,
-    _frameOffset: number,
-  ) => {
-    const trimmedId = nodeId.trim();
-    if (!audioEngineState.nodes.has(trimmedId)) {
-      throw new Error(`Node '${trimmedId}' is not registered`);
-    }
-    const parameters = audioEngineState.instrumentParameters.get(trimmedId) ?? new Map();
-    parameters.set(parameterId, value);
-    audioEngineState.instrumentParameters.set(trimmedId, parameters);
-  },
-  sendInstrumentParameters: async (
-    nodeId: string,
-    events: Array<{ frame: number; parameterId: number; value: number }>,
-    replace: boolean,
-  ) => {
-    const trimmedId = nodeId.trim();
-    if (!audioEngineState.nodes.has(trimmedId)) {
-      throw new Error(`Node '${trimmedId}' is not registered`);
-    }
-    const previous = replace
-      ? []
-      : (audioEngineState.scheduledInstrumentParameters.get(trimmedId) ?? []);
-    const next = [...previous, ...events.map((event) => ({ ...event }))];
-    next.sort((left, right) => left.frame - right.frame);
-    audioEngineState.scheduledInstrumentParameters.set(trimmedId, next);
-  },
-  allNotesOff: async (nodeId: string) => {
-    const trimmedId = nodeId.trim();
-    if (!audioEngineState.nodes.has(trimmedId)) {
-      throw new Error(`Node '${trimmedId}' is not registered`);
-    }
-    audioEngineState.midiEvents.set(trimmedId, []);
-  },
   getRenderDiagnostics: async () => ({
     xruns: audioEngineState.diagnostics.xruns,
     lastRenderDurationMicros: audioEngineState.diagnostics.lastRenderDurationMicros,
@@ -530,11 +410,9 @@ type MockLoggerModule = {
 const loggerEntries: LoggerEntry[] = [];
 
 const createLoggerModule = (): MockLoggerModule => ({
-  logWithLevel: jest.fn(
-    (level: string, message: string, metadata?: Record<string, unknown>) => {
-      loggerEntries.push({ level, message, metadata });
-    },
-  ),
+  logWithLevel: jest.fn((level: string, message: string, metadata?: Record<string, unknown>) => {
+    loggerEntries.push({ level, message, metadata });
+  }),
   __getLogs: () => [...loggerEntries],
   __clearLogs: () => {
     loggerEntries.splice(0, loggerEntries.length);
@@ -546,9 +424,6 @@ const loggerModule = createLoggerModule();
 const pluginHostEmitter = new MockNativeEventEmitter();
 
 const pluginHostModule = {
-  // Unit tests model a fully wired native render host. Production bridges must
-  // expose the same explicit signal before JS advertises plugin capability.
-  runtimeReady: true,
   queryAvailablePlugins: async () => [],
   instantiatePlugin: async () => ({
     instanceId: 'mock-instance',
@@ -678,26 +553,17 @@ export class NativeEventEmitter extends MockNativeEventEmitter {
 }
 
 export const TurboModuleRegistry = {
-  get: <T>(name: string): T | null => (NativeModules[name] as T) ?? null,
   getEnforcing: <T>(name: string): T => NativeModules[name] as T,
 };
 
-export const Platform: {
-  OS: 'ios' | 'android' | 'macos';
-  Version: number;
-  select: <T>(specifics: Record<string, T | undefined>) => T | undefined;
-} = {
+export const Platform: { OS: 'ios' | 'android' | 'macos'; Version: number } = {
   OS: 'ios',
   Version: 17,
-  select: <T>(specifics: Record<string, T | undefined>): T | undefined =>
-    specifics[Platform.OS] ?? specifics.native ?? specifics.default,
 };
 
 export const PermissionsAndroid = {
   PERMISSIONS: {
-    ACCESS_FINE_LOCATION: 'android.permission.ACCESS_FINE_LOCATION',
-    ACCESS_COARSE_LOCATION: 'android.permission.ACCESS_COARSE_LOCATION',
-    NEARBY_WIFI_DEVICES: 'android.permission.NEARBY_WIFI_DEVICES',
+    WRITE_EXTERNAL_STORAGE: 'android.permission.WRITE_EXTERNAL_STORAGE',
   },
   RESULTS: {
     GRANTED: 'granted',
@@ -705,8 +571,6 @@ export const PermissionsAndroid = {
   },
   check: async () => true,
   request: async () => 'granted',
-  requestMultiple: async (permissions: string[]) =>
-    Object.fromEntries(permissions.map((permission) => [permission, 'granted'])),
 };
 
 export type TurboModule = unknown;

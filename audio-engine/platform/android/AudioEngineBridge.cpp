@@ -4,7 +4,6 @@
 #include <chrono>
 #include <cmath>
 #include <exception>
-#include <limits>
 
 #include "audio_engine/DSPNode.h"
 
@@ -18,7 +17,6 @@ std::unique_ptr<SceneGraph> AudioEngineBridge::graph_;
 std::mutex AudioEngineBridge::mutex_;
 std::atomic<std::uint64_t> AudioEngineBridge::xruns_{0};
 std::atomic<double> AudioEngineBridge::lastRenderDurationMicros_{0.0};
-bool AudioEngineBridge::isPlaying_{false};
 std::unordered_map<std::string, AudioEngineBridge::ClipBufferEntry> AudioEngineBridge::clipBuffers_;
 
 /**
@@ -34,7 +32,6 @@ void AudioEngineBridge::initialize(JNIEnv*, double sampleRate, std::uint32_t fra
   graph_ = std::make_unique<SceneGraph>(sampleRate, framesPerBuffer);
   xruns_.store(0);
   lastRenderDurationMicros_.store(0.0);
-  isPlaying_ = false;
   __android_log_print(ANDROID_LOG_INFO, kTag, "Audio engine initialized at %.2f Hz", sampleRate);
 }
 
@@ -49,7 +46,6 @@ void AudioEngineBridge::shutdown() {
   graph_.reset();
   xruns_.store(0);
   lastRenderDurationMicros_.store(0.0);
-  isPlaying_ = false;
   clipBuffers_.clear();
   __android_log_print(ANDROID_LOG_INFO, kTag, "Audio engine shutdown");
 }
@@ -62,9 +58,6 @@ void AudioEngineBridge::shutdown() {
  * rendering, the output buffers are filled with zeros, the xrun counter is incremented, and the
  * last render duration is reset to 0. On successful render the elapsed time in microseconds is
  * stored in the diagnostics state.
- *
- * The embedding app must invoke this function from its platform audio-device
- * callback. The bridge deliberately owns transport/graph state, not a device.
  *
  * @param outputs Array of pointers to per-channel float sample buffers (length == channelCount).
  *                Each buffer must be able to hold frameCount samples.
@@ -81,11 +74,6 @@ void AudioEngineBridge::render(float** outputs, std::size_t channelCount, std::s
     return;
   }
   if (!graph_) {
-    view.fill(0.0F);
-    lastRenderDurationMicros_.store(0.0);
-    return;
-  }
-  if (!isPlaying_) {
     view.fill(0.0F);
     lastRenderDurationMicros_.store(0.0);
     return;
@@ -109,45 +97,6 @@ void AudioEngineBridge::render(float** outputs, std::size_t channelCount, std::s
   const auto end = std::chrono::steady_clock::now();
   const auto micros = std::chrono::duration<double, std::micro>(end - start).count();
   lastRenderDurationMicros_.store(micros);
-}
-
-void AudioEngineBridge::startTransport() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (!graph_) {
-    throw std::runtime_error("Audio engine is not initialized");
-  }
-  isPlaying_ = true;
-}
-
-void AudioEngineBridge::stopTransport() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (graph_) {
-    graph_->panicInstruments();
-  }
-  isPlaying_ = false;
-}
-
-void AudioEngineBridge::locateTransport(std::uint64_t frame) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (!graph_) {
-    throw std::runtime_error("Audio engine is not initialized");
-  }
-  graph_->locate(frame);
-}
-
-void AudioEngineBridge::setTransportLoop(std::uint64_t startFrame,
-                                         std::uint64_t endFrame,
-                                         bool enabled) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (!graph_) {
-    throw std::runtime_error("Audio engine is not initialized");
-  }
-  graph_->setTransportLoop(startFrame, endFrame, enabled);
-}
-
-AudioEngineBridge::TransportState AudioEngineBridge::getTransportState() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return {graph_ ? graph_->currentFrame() : 0, graph_ != nullptr && isPlaying_};
 }
 
 /**
@@ -202,48 +151,14 @@ void AudioEngineBridge::scheduleParameterAutomation(const std::string& nodeId, c
                                                     std::uint64_t frame, double value) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (!graph_) {
-    throw std::runtime_error("Audio engine is not initialized");
-  }
-  graph_->scheduleAutomation(nodeId,
-                             [parameter, value](DSPNode& node) { node.setParameter(parameter, value); }, frame);
-}
-
-void AudioEngineBridge::scheduleInstrumentEventFromNow(
-    const std::string& nodeId, InstrumentEvent event,
-    std::uint64_t frameOffset) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (!graph_) {
-    throw std::runtime_error("Audio engine is not initialized");
-  }
-  const auto currentFrame = graph_->currentFrame();
-  if (frameOffset > std::numeric_limits<std::uint64_t>::max() - currentFrame) {
-    throw std::out_of_range("Instrument event frame overflow");
-  }
-  if (event.type == InstrumentEventType::kParameter && frameOffset == 0U) {
-    graph_->setInstrumentParameter(nodeId, event.parameter, event.value);
     return;
   }
-  event.frame = currentFrame + frameOffset;
-  event.retainAcrossPanic = false;
-  graph_->scheduleInstrumentEvents(nodeId, std::span<const InstrumentEvent>(&event, 1U));
-}
-
-void AudioEngineBridge::scheduleInstrumentEvents(
-    const std::string& nodeId, std::span<const InstrumentEvent> events,
-    bool replace) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (!graph_) {
-    throw std::runtime_error("Audio engine is not initialized");
+  try {
+    graph_->scheduleAutomation(nodeId,
+                               [parameter, value](DSPNode& node) { node.setParameter(parameter, value); }, frame);
+  } catch (const std::exception& ex) {
+    __android_log_print(ANDROID_LOG_ERROR, kTag, "Failed to schedule automation: %s", ex.what());
   }
-  graph_->scheduleInstrumentEvents(nodeId, events, replace);
-}
-
-void AudioEngineBridge::allNotesOff(const std::string& nodeId) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (!graph_) {
-    throw std::runtime_error("Audio engine is not initialized");
-  }
-  graph_->allNotesOff(nodeId);
 }
 
 bool AudioEngineBridge::registerClipBuffer(const std::string& key, double sampleRate, std::size_t channelCount,
@@ -267,13 +182,10 @@ bool AudioEngineBridge::registerClipBuffer(const std::string& key, double sample
   const std::size_t byteSize = channelCount * frameCount * sizeof(float);
 
   std::lock_guard<std::mutex> lock(mutex_);
-  auto [entryIt, inserted] = clipBuffers_.try_emplace(key);
-  auto& entry = entryIt->second;
+  auto& entry = clipBuffers_[key];
   entry.buffer = std::move(buffer);
   entry.byteSize = byteSize;
-  if (inserted || entry.referenceCount == 0) {
-    entry.referenceCount = 1;
-  }
+  entry.referenceCount += 1;
   return true;
 }
 

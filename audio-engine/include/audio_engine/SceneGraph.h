@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -15,46 +14,84 @@
 #include "audio_engine/DSPNode.h"
 #include "audio_engine/Scheduler.h"
 #include "audio_engine/Clock.h"
-#include "audio_engine/instruments/InstrumentNode.h"
 
-namespace daft::audio {
+/**
+   * Construct a scene graph configured for audio processing.
+   * @param sampleRate The audio sample rate in Hz used for processing.
+   * @param framesPerBuffer The expected number of frames per render buffer.
+   */
+  
+  /**
+   * Add a DSP node to the scene graph under the given identifier.
+   * @param id Identifier for the node; must be unique within the graph.
+   * @param node Ownership of the node to insert into the graph.
+   * @returns `true` if the node was added successfully, `false` if an entry with the same id already exists.
+   */
+  
+  /**
+   * Remove the node associated with the given identifier from the scene graph.
+   * @param id Identifier of the node to remove; no action is taken if the id is not present.
+   */
+  
+  /**
+   * Create a directed connection from a source node to a destination node.
+   * @param source Identifier of the source node.
+   * @param destination Identifier of the destination node.
+   * @returns `true` if the connection was established, `false` if the connection could not be created (e.g., nodes missing or connection invalid).
+   */
+  
+  /**
+   * Remove the directed connection between the specified source and destination nodes.
+   * @param source Identifier of the source node.
+   * @param destination Identifier of the destination node.
+   */
+  
+  /**
+   * Render audio by processing the graph topology and write the mixed output into the provided buffer.
+   * @param outputBuffer View into the destination buffer that will receive the rendered audio.
+   */
+  
+  /**
+   * Schedule a one-time automation callback to be invoked for a node at a specific render frame.
+   * @param nodeId Identifier of the node to automate.
+   * @param cb Callback invoked with the target node to perform parameter updates.
+   * @param frame Absolute render frame at which the callback should execute.
+   */
+  
+  /**
+   * Return the configured audio sample rate for this scene graph.
+   * @returns The sample rate in Hz.
+   */
+  
+  /**
+   * Identifier used for the graph's output bus.
+   */
+  
+  /**
+   * Return the maximum number of supported audio channels.
+   * @returns The compile-time upper limit on supported channels.
+   */
+  
+  /**
+   * Return the maximum supported frames per buffer.
+   * @returns The compile-time upper limit on frames per buffer.
+   */
+  namespace daft::audio {
 
 class SceneGraph {
  public:
-  /** Construct a graph configured for the platform render callback. */
   explicit SceneGraph(double sampleRate, std::uint32_t framesPerBuffer);
 
-  /** Add or remove uniquely identified DSP nodes. */
   bool addNode(const std::string& id, std::unique_ptr<DSPNode> node);
   void removeNode(const std::string& id);
-
-  /** Connect nodes, including the reserved output-bus destination. */
   bool connect(const std::string& source, const std::string& destination);
   void disconnect(const std::string& source, const std::string& destination);
 
-  /** Render one planar buffer and advance the transport clock. */
   void render(AudioBufferView outputBuffer);
-  void locate(std::uint64_t frame);
-  /** Configure a native, half-open transport loop [startFrame, endFrame). */
-  void setTransportLoop(std::uint64_t startFrame, std::uint64_t endFrame,
-                        bool enabled);
-
-  /** Schedule a node lookup and callback at an absolute transport frame. */
   void scheduleAutomation(const std::string& nodeId, std::function<void(DSPNode&)> cb,
                           std::uint64_t frame);
 
-  /** Queue bounded, sample-accurate events on an instrument node. */
-  void scheduleInstrumentEvents(const std::string& nodeId,
-                                std::span<const InstrumentEvent> events,
-                                bool replace = false);
-  void setInstrumentParameter(const std::string& nodeId,
-                              std::uint16_t parameter, float value);
-  void allNotesOff(const std::string& nodeId);
-  void allNotesOff();
-  void panicInstruments() noexcept;
-
   [[nodiscard]] double sampleRate() const { return sampleRate_; }
-  [[nodiscard]] std::uint64_t currentFrame() const { return clock_.frameTime(); }
 
   static constexpr std::string_view kOutputBusId = "__output__";
 
@@ -88,10 +125,6 @@ class SceneGraph {
 
   double sampleRate_;
   std::unordered_map<std::string, std::unique_ptr<DSPNode>> nodes_;
-  // Scheduled callbacks resolve nodes lazily. The incarnation prevents an event
-  // queued for a removed node from targeting a later node that reuses its ID.
-  std::unordered_map<std::string, std::uint64_t> nodeIncarnations_;
-  std::uint64_t nextNodeIncarnation_ = 1;
   std::vector<Connection> connections_;
   RenderClock clock_;
   RealTimeScheduler<128> scheduler_;
@@ -99,17 +132,9 @@ class SceneGraph {
   std::vector<std::string> renderOrder_;
   std::unordered_map<std::string, std::vector<std::string>> inboundEdges_;
   std::vector<std::string> outputSources_;
-  std::uint64_t loopStartFrame_ = 0;
-  std::uint64_t loopEndFrame_ = 0;
-  bool transportLoopEnabled_ = false;
 
-  [[nodiscard]] bool wouldIntroduceCycle(const std::string& source,
-                                         const std::string& destination) const;
   void rebuildTopology();
   void ensureNodeBuffers(std::size_t channelCount, std::size_t frameCount);
-  void renderSection(AudioBufferView outputBuffer, std::size_t frameOffset,
-                     std::size_t frameCount);
-  void rewindTransportLoop();
-};
+}; 
 
 }  // namespace daft::audio

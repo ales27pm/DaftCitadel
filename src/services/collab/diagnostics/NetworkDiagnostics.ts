@@ -1,10 +1,5 @@
 import { EventEmitter } from 'events';
-import {
-  NativeEventEmitter,
-  NativeModules,
-  PermissionsAndroid,
-  Platform,
-} from 'react-native';
+import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 
 import { getAndroidApiLevel } from '../../platform/android';
 
@@ -16,8 +11,6 @@ export interface LinkMetrics {
   readonly interfaceName?: string;
   readonly rssi?: number;
   readonly noise?: number;
-  /** Normalized Wi-Fi signal reported by iOS (0...1); it is not dBm. */
-  readonly signalStrength?: number;
   readonly linkSpeedMbps?: number;
   readonly transmitRateMbps?: number;
   readonly timestamp: number;
@@ -61,12 +54,10 @@ function evaluateQuality({
   rssi,
   noise,
   linkSpeedMbps,
-  signalStrength,
 }: {
   rssi?: number;
   noise?: number;
   linkSpeedMbps?: number;
-  signalStrength?: number;
 }): NetworkQualityCategory {
   if (typeof rssi === 'number' && rssi > -55 && (linkSpeedMbps ?? 0) > 400) {
     return 'excellent';
@@ -79,14 +70,6 @@ function evaluateQuality({
   }
   if (typeof noise === 'number' && noise < -90) {
     return 'degraded';
-  }
-  if (typeof rssi !== 'number' && typeof signalStrength === 'number') {
-    if (signalStrength >= 0.75) {
-      return 'good';
-    }
-    if (signalStrength >= 0.35) {
-      return 'degraded';
-    }
   }
   return 'unusable';
 }
@@ -104,11 +87,6 @@ function coerceInterfaceName(raw: Record<string, unknown>): string | undefined {
 function normalizeMetrics(raw: Record<string, unknown>): LinkMetrics {
   const rssi = clamp(normalizeNumber(raw.rssi as NullableNumber), -120, -10);
   const noise = clamp(normalizeNumber(raw.noise as NullableNumber), -140, -20);
-  const signalStrength = clamp(
-    normalizeNumber(raw.signalStrength as NullableNumber),
-    0,
-    1,
-  );
   const linkSpeedMbps = clamp(
     normalizeNumber(raw.linkSpeedMbps as NullableNumber),
     0,
@@ -125,63 +103,18 @@ function normalizeMetrics(raw: Record<string, unknown>): LinkMetrics {
     interfaceName: coerceInterfaceName(raw),
     rssi,
     noise,
-    signalStrength,
     linkSpeedMbps,
     transmitRateMbps,
     timestamp,
-    category: evaluateQuality({ rssi, noise, linkSpeedMbps, signalStrength }),
+    category: evaluateQuality({ rssi, noise, linkSpeedMbps }),
   };
 }
-
-const ANDROID_API_LEVEL_NEARBY_WIFI_DEVICES = 33;
-
-const requestAndroidWifiPermission = async (): Promise<void> => {
-  if (Platform.OS !== 'android') {
-    return;
-  }
-
-  const apiLevel = getAndroidApiLevel();
-  if (typeof apiLevel === 'number' && apiLevel >= ANDROID_API_LEVEL_NEARBY_WIFI_DEVICES) {
-    const permission = PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES;
-    if (await PermissionsAndroid.check(permission)) {
-      return;
-    }
-    const result = await PermissionsAndroid.request(permission);
-    if (result === PermissionsAndroid.RESULTS.GRANTED) {
-      return;
-    }
-    throw new Error('Nearby Wi-Fi permission was denied');
-  }
-
-  const legacyPermissions = [
-    PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-    PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
-  ];
-  const existing = await Promise.all(
-    legacyPermissions.map((permission) => PermissionsAndroid.check(permission)),
-  );
-  if (existing.some(Boolean)) {
-    return;
-  }
-  const results = await PermissionsAndroid.requestMultiple(legacyPermissions);
-  if (
-    legacyPermissions.some(
-      (permission) => results[permission] === PermissionsAndroid.RESULTS.GRANTED,
-    )
-  ) {
-    return;
-  }
-  throw new Error('Location permission for Wi-Fi diagnostics was denied');
-};
 
 class DefaultNetworkDiagnostics implements NetworkDiagnostics {
   private readonly module?: NativeDiagnosticsModule;
   private readonly emitter: NativeEventEmitter | EventEmitter;
   private cachedFallbackMetrics: LinkMetrics | null = null;
   private subscriberCount = 0;
-  private permissionRequest: Promise<void> | null = null;
-  private observationStart: Promise<void> | null = null;
-  private observationStarted = false;
 
   constructor(module?: NativeDiagnosticsModule) {
     this.module = module;
@@ -203,7 +136,6 @@ class DefaultNetworkDiagnostics implements NetworkDiagnostics {
       return this.getFallbackMetrics();
     }
 
-    await this.ensureNativePermission();
     const metrics = await this.module.getCurrentLinkMetrics();
     return normalizeMetrics(metrics);
   }
@@ -215,11 +147,12 @@ class DefaultNetworkDiagnostics implements NetworkDiagnostics {
       return () => {};
     }
 
-    let active = true;
+    if (this.subscriberCount === 0) {
+      this.startNativeObservation();
+    }
+
     const handler = (payload: Record<string, unknown>) => {
-      if (active) {
-        listener(normalizeMetrics(payload));
-      }
+      listener(normalizeMetrics(payload));
     };
 
     const subscription = (this.emitter as NativeEventEmitter).addListener(
@@ -228,19 +161,8 @@ class DefaultNetworkDiagnostics implements NetworkDiagnostics {
     );
 
     this.subscriberCount += 1;
-    this.ensureNativeObservationStarted().catch((error) => {
-      if (!active) {
-        return;
-      }
-      console.warn('Unable to start Wi-Fi diagnostics observation', error);
-      listener(this.getFallbackMetrics());
-    });
 
     return () => {
-      if (!active) {
-        return;
-      }
-      active = false;
       subscription.remove();
       this.subscriberCount = Math.max(0, this.subscriberCount - 1);
       if (this.subscriberCount === 0) {
@@ -259,49 +181,21 @@ class DefaultNetworkDiagnostics implements NetworkDiagnostics {
     return this.cachedFallbackMetrics;
   }
 
-  private async startNativeObservation(): Promise<void> {
+  private startNativeObservation(): void {
     if (!this.module) {
-      return;
-    }
-    await this.ensureNativePermission();
-    if (this.subscriberCount === 0 || this.observationStarted) {
       return;
     }
     if (typeof this.module.beginObserving === 'function') {
       this.module.beginObserving();
-      this.observationStarted = true;
     } else if (typeof this.module.startObserving === 'function') {
       this.module.startObserving();
-      this.observationStarted = true;
     }
-  }
-
-  private ensureNativeObservationStarted(): Promise<void> {
-    if (this.observationStarted) {
-      return Promise.resolve();
-    }
-    if (!this.observationStart) {
-      this.observationStart = this.startNativeObservation().finally(() => {
-        this.observationStart = null;
-      });
-    }
-    return this.observationStart;
-  }
-
-  private ensureNativePermission(): Promise<void> {
-    if (!this.permissionRequest) {
-      this.permissionRequest = requestAndroidWifiPermission().finally(() => {
-        this.permissionRequest = null;
-      });
-    }
-    return this.permissionRequest;
   }
 
   private stopNativeObservation(): void {
-    if (!this.module || !this.observationStarted) {
+    if (!this.module) {
       return;
     }
-    this.observationStarted = false;
     if (typeof this.module.endObserving === 'function') {
       this.module.endObserving();
     } else if (typeof this.module.stopObserving === 'function') {
@@ -317,6 +211,8 @@ export function createNetworkDiagnostics(): NetworkDiagnostics {
 
   return new DefaultNetworkDiagnostics(nativeModule);
 }
+
+const ANDROID_API_LEVEL_NEARBY_WIFI_DEVICES = 33;
 
 export function requiresLocationPermission(): boolean {
   if (Platform.OS !== 'android') {

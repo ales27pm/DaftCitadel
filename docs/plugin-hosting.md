@@ -13,8 +13,6 @@ The JavaScript layer interacts with native plugin hosts through the `PluginHost`
 
 The host depends on the typed bridge contract defined in `src/audio/plugins/NativePluginHost.ts` and emits lifecycle updates through a `NativeEventEmitter`.
 
-> **Current capability:** plugin audio rendering is disabled on iOS and Android. Both native modules expose `runtimeReady: false`, return no discovery results, and reject instantiation. The control bridges remain as implementation scaffolding, but neither platform wires `PluginHostBridge::SetRenderCallback` into the device render path; Android also does not package the required VST3 sandbox executable. JavaScript treats a host as available only when native explicitly reports `runtimeReady: true`.
-
 ## Installer plugin sourcing
 
 The `scripts/daftcitadel.sh` bootstrap now favors vendor-maintained endpoints and exposes modular feature toggles.
@@ -29,40 +27,39 @@ The `scripts/daftcitadel.sh` bootstrap now favors vendor-maintained endpoints an
 
 Location: [`native/plugins/ios/AUv3PluginHost.swift`](../native/plugins/ios/AUv3PluginHost.swift)
 
-Implemented scaffolding:
+Key characteristics:
 
 1. **Component discovery** – Uses `AVAudioUnitComponentManager` to enumerate AUv3 effects. Each component is converted into a structured descriptor that lists audio/MIDI capabilities and parameter metadata sourced from the unit's parameter tree.
 2. **Sandbox provisioning** – Plugins run inside a per-identifier directory under `Application Support/Plugins`. The host sets `isExcludedFromBackup` to avoid leaking presets into iCloud and surfaces permission failures via the `sandboxPermissionRequired` event.
-3. **Instantiation target** – Descriptor, preset, and parameter scaffolding is retained for completion, but the exported method currently rejects with `runtime_unavailable`. AUAudioUnit activation and audio rendering must be implemented together before a unit can appear active.
+3. **Instantiation** – `instantiatePlugin` spins up `AUAudioUnit` instances off the main thread, monitors render callbacks for non-zero error statuses, and publishes crash events that include restart tokens. The host returns CPU load and latency estimates to JS.
 4. **Preset and automation** – Presets are loaded through `currentPreset`; automation is scheduled with `AUParameterAutomationEvent` using millisecond timestamps converted to sample offsets.
-5. **Crash-handling target** – Event payload and cleanup helpers exist, but no render observer is active while instantiation is disabled. Crash recovery must be verified with the future render bridge before capability is enabled.
+5. **Crash handling** – Render observers emit a `pluginCrashed` event when the audio unit reports an error. JS acknowledges the crash, optionally restarts the plugin, and the Swift host removes the stale observer tokens to avoid leaks.
 
-### Requirements before enabling `runtimeReady`
+### Build requirements
 
 - Link the Objective-C++ bridge into the React Native target (`PluginHostModule`).
 - Add the AudioToolbox and AVFoundation frameworks.
-- Register a real-time-safe `PluginHostBridge::SetRenderCallback` that maps each `hostInstanceId` to the AUAudioUnit render block, and clear it during teardown.
+- Grant the app the `com.apple.security.network.client` entitlement if plugins perform outbound requests.
 - Persist AUv3 sandboxes under `Application Support/Plugins/<format>/<identifier>` so multiple plugin formats can safely share the same identifier without clobbering metadata; the JavaScript sandbox manager mirrors this layout when restoring state after restarts.
-- Keep iOS and macOS sandbox models distinct: `com.apple.security.*` file/network entitlements are macOS App Sandbox keys, not permissions to add to this iOS host. Any AUv3 extension owns and declares its own supported capabilities.
+- Include `com.apple.security.files.user-selected.read-write` and `com.apple.security.files.downloads.read-write` entitlements when plugins import user content from outside the sandbox.
 
 ## VST3 (Android / desktop) bridge
 
 Location: [`native/plugins/android/src/main/java/com/daftcitadel/plugins/VST3PluginHostModule.kt`](../native/plugins/android/src/main/java/com/daftcitadel/plugins/VST3PluginHostModule.kt)
 
-Implemented scaffolding:
+Highlights:
 
-1. **Discovery path** – Scanner and descriptor parsing code exists, but the exported discovery method returns an empty list while the runtime is unavailable.
+1. **Discovery** – The host scans `filesDir/plugins` and the external app-specific `plugins` directory for `.vst3` bundles. It parses `Contents/Info.json` for metadata and parameters.
 2. **Sandboxing** – Each plugin instance obtains a dedicated directory under `filesDir/plugin-sandboxes/<identifier>`. Permission failures trigger the `sandboxPermissionRequired` event with the relevant Android storage permissions.
-3. **Process isolation target** – The bridge expects a dedicated `vst3sandbox` process and JSON commands over STDIN. No executable is packaged today, so exported instantiation rejects with `runtime_unavailable` before a handle can be created.
+3. **Process isolation** – Plugins launch inside a dedicated sandbox process (`vst3sandbox`). Commands (preset loading, parameter changes, automation envelopes) are streamed over STDIN as JSON. Exit codes are monitored on a daemon thread; abnormal termination results in a crash event.
 4. **Crash recovery** – The React Native layer acknowledges crashes, optionally restarts a fresh process, and receives the sandbox path for post-mortem logs.
 5. **Desktop reuse** – The process wrapper can be reused on desktop platforms by shipping the same command-line sandbox binary and reusing the TypeScript host API.
 
-### Requirements before enabling `runtimeReady`
+### Build and runtime prerequisites
 
 - Package a `vst3sandbox` executable (or `libvst3sandbox.so`) into `filesDir` or the native library directory during installation.
-- Connect sandbox rendering to `PluginHostBridge::SetRenderCallback` with bounded, real-time-safe buffer transfer and deterministic teardown.
 - Ensure plugins include a `Contents/Info.json` manifest describing parameters. The loader tolerates missing manifests but skips descriptors it cannot parse.
-- Keep plugin bundles in `filesDir` or `getExternalFilesDir`; these app-specific roots require no broad storage permission. A future user-selected import flow should use Android's Storage Access Framework instead of legacy read/write permissions.
+- Declare the `READ_EXTERNAL_STORAGE` and `WRITE_EXTERNAL_STORAGE` permissions in `AndroidManifest.xml` for plugins stored on shared storage. On Android 13+, only `READ_MEDIA_AUDIO` is required; the host automatically suppresses legacy prompts on API 33+.
 - Sandbox directories follow the convention `filesDir/plugin-sandboxes/<format>/<identifier>` so AUv3, VST3, and future formats can maintain isolated cache directories. The JavaScript sandbox manager persists this mapping to AsyncStorage to avoid redundant permission prompts.
 - When surfacing crash notifications via toasts or system notifications on Android 13+, request the `POST_NOTIFICATIONS` permission to ensure retry affordances are visible.
 
@@ -70,13 +67,12 @@ Implemented scaffolding:
 
 The JS facade coordinates sandboxes, native instantiation, and crash handling:
 
-1. `isPluginHostAvailable()` first requires the native `runtimeReady` signal. The current mobile bridges fail this check, so production session bootstrap omits `PluginHost` entirely.
-2. Once a future runtime is ready, `PluginHost.listAvailablePlugins()` caches descriptors for routing graph configuration.
-3. `PluginHost.loadPlugin(descriptor, options)` ensures the sandbox exists, requests native instantiation, and registers crash listeners.
-4. `PluginHost.scheduleAutomation` validates instance ownership before calling the native automation scheduler; `automateParameter` remains as a compatibility wrapper.
-5. `PluginHost.onCrash` subscribers receive normalized crash reports and can trigger session routing recovery.
-6. `PluginSandboxManager` centralizes Android permission prompts, persists sandbox metadata per plugin format in AsyncStorage, and reuses resolved sandboxes across launches.
-7. Restart tokens emitted by the native hosts are verified before JavaScript attempts an automatic recovery, preventing stale processes from being resurrected.
+1. `PluginHost.listAvailablePlugins()` caches descriptors for routing graph configuration.
+2. `PluginHost.loadPlugin(descriptor, options)` ensures the sandbox exists, requests native instantiation, and registers crash listeners.
+3. `PluginHost.scheduleAutomation` validates instance ownership before calling the native automation scheduler; `automateParameter` remains as a compatibility wrapper.
+4. `PluginHost.onCrash` subscribers receive normalized crash reports and can trigger session routing recovery.
+5. `PluginSandboxManager` centralizes Android permission prompts, persists sandbox metadata per plugin format in AsyncStorage, and reuses resolved sandboxes across launches.
+6. Restart tokens emitted by the native hosts are verified before JavaScript attempts an automatic recovery, preventing stale processes from being resurrected.
 
 ## Routing integration
 
@@ -101,8 +97,7 @@ Plugin instances are represented in the session model as `RoutingNode` entries w
 
 Automated coverage includes:
 
-- `src/audio/__tests__/NativePluginHost.test.ts` – verifies capability detection fails closed without an explicit render-ready signal.
-- `src/audio/__tests__/PluginHost.test.ts` – validates the future JS lifecycle contract using a mock native module that explicitly models a render-ready host.
+- `src/audio/__tests__/PluginHost.test.ts` – validates JS lifecycle hooks, crash recovery, and automation scheduling using mock native modules.
 - `src/audio/__tests__/SessionAudioBridge.test.ts` – exercises plugin lifecycle diffing, automation scheduling, routing graph mutations, and crash recovery rebinds.
 - `src/session/__tests__/routingGraph.test.ts` – verifies routing graph normalization and validation logic for plugin nodes, sends, and sidechains.
 - `src/ui/session/__tests__/SessionViewModelProvider.test.tsx` – ensures crash notifications propagate into the session view model and verifies manual retry hooks update crash state.
@@ -111,14 +106,14 @@ Use the following commands before committing:
 
 ```bash
 npm run lint
-npm run test:ci
+npm run test
 npm run typecheck
-npm run format:check
+npm run prettier
 ```
 
 ## Limitations & future work
 
-- Mobile plugin hosting is intentionally unavailable until the platform render callbacks and Android sandbox executable are implemented and verified on device.
+- The Android bridge assumes a sandbox binary capable of handling JSON control messages; provide this executable when packaging the app or during developer setup.
 - AUv3 crash detection relies on render observer errors; plug-ins that fail silently may require additional watchdog logic (e.g., heartbeat messages from the audio unit).
 - Parameter automation timing assumes millisecond-resolution envelopes; align session tempo maps if sample-accurate timing is required.
 - Native engines must map `hostInstanceId` back to the underlying plugin process/AudioUnit. Older builds that only expected the session-level `instanceId` should be updated accordingly.

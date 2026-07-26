@@ -24,47 +24,9 @@ void GainNode::setParameter(const std::string& name, double value) {
   }
 }
 
-void TrackOutputNode::process(AudioBufferView buffer) {
-  const auto channels = buffer.channelCount();
-  for (std::size_t channel = 0; channel < channels; ++channel) {
-    double channelGain = gain_;
-    if (channels >= 2 && channel == 0 && pan_ > 0.0) {
-      channelGain *= 1.0 - pan_;
-    } else if (channels >= 2 && channel == 1 && pan_ < 0.0) {
-      channelGain *= 1.0 + pan_;
-    }
-    auto samples = buffer.channel(channel);
-    for (auto& sample : samples) {
-      sample *= static_cast<float>(channelGain);
-    }
-  }
-}
-
-void TrackOutputNode::setParameter(const std::string& name, double value) {
-  if (!std::isfinite(value)) {
-    return;
-  }
-  if (name == "gain") {
-    gain_ = std::max(0.0, value);
-    return;
-  }
-  if (name == "volume") {
-    gain_ = std::pow(10.0, value / 20.0);
-    return;
-  }
-  if (name == "pan") {
-    pan_ = std::clamp(value, -1.0, 1.0);
-  }
-}
-
 void SineOscillatorNode::prepare(double sampleRate) {
   DSPNode::prepare(sampleRate);
   phase_ = 0.0;
-}
-
-void SineOscillatorNode::locate(std::uint64_t frame) {
-  const double phaseDelta = (2.0 * std::numbers::pi * frequency_) / sampleRate();
-  phase_ = std::fmod(static_cast<double>(frame) * phaseDelta, 2.0 * std::numbers::pi);
 }
 
 void SineOscillatorNode::process(AudioBufferView buffer) {
@@ -91,17 +53,11 @@ void SineOscillatorNode::setParameter(const std::string& name, double value) {
 MixerNode::MixerNode(std::size_t inputCount) : inputs_(inputCount) {}
 
 void MixerNode::process(AudioBufferView buffer) {
-  // SceneGraph has already summed all connected sources into `buffer`. Preserve
-  // that graph input and apply the mixer's gain instead of clearing it.
   for (std::size_t ch = 0; ch < buffer.channelCount(); ++ch) {
     auto channelData = buffer.channel(ch);
-    for (auto& sample : channelData) {
-      sample *= static_cast<float>(gain_);
-    }
+    std::fill(channelData.begin(), channelData.end(), 0.0F);
   }
 
-  // Retain support for explicitly supplied inputs used by embedders outside the
-  // SceneGraph. These inputs are additive to graph-connected sources.
   for (const auto& input : inputs_) {
     if (input.size() != buffer.frameCount()) {
       continue;
@@ -134,8 +90,6 @@ void ClipPlayerNode::prepare(double sampleRate) {
 }
 
 void ClipPlayerNode::reset() { processedFrames_ = 0; }
-
-void ClipPlayerNode::locate(std::uint64_t frame) { processedFrames_ = frame; }
 
 void ClipPlayerNode::setClipBuffer(ClipBufferData data) {
   if (data.frameCount == 0 || data.channels.empty()) {
@@ -175,9 +129,8 @@ void ClipPlayerNode::process(AudioBufferView buffer) {
   const std::uint64_t bufferFrameCount = static_cast<std::uint64_t>(clipBuffer_.frameCount);
   const std::uint64_t effectiveEnd = std::min<std::uint64_t>(endFrame, startFrame + bufferFrameCount);
   const std::uint64_t playbackFrames = effectiveEnd > startFrame ? (effectiveEnd - startFrame) : 0;
-  const std::uint64_t fadeInFrames = std::min(fadeInFrames_, playbackFrames);
-  const std::uint64_t fadeOutFrames = std::min(fadeOutFrames_, playbackFrames);
-  const std::uint64_t fadeOutStart = effectiveEnd - fadeOutFrames;
+  const std::uint64_t fadeOutStart =
+      (fadeOutFrames_ >= playbackFrames || playbackFrames == 0) ? startFrame : (effectiveEnd - fadeOutFrames_);
 
   for (std::size_t frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
     const std::uint64_t absoluteFrame = processedFrames_ + frameIndex;
@@ -191,18 +144,14 @@ void ClipPlayerNode::process(AudioBufferView buffer) {
     }
 
     double amplitude = gain_;
-    if (fadeInFrames > 0 && absoluteFrame < startFrame + fadeInFrames) {
+    if (fadeInFrames_ > 0 && absoluteFrame < startFrame + fadeInFrames_) {
       const std::uint64_t offset = absoluteFrame - startFrame;
-      amplitude *= fadeInFrames == 1
-                       ? 0.0
-                       : static_cast<double>(offset) / static_cast<double>(fadeInFrames - 1);
+      amplitude *= static_cast<double>(offset + 1) / static_cast<double>(fadeInFrames_);
     }
-    if (fadeOutFrames > 0 && absoluteFrame >= fadeOutStart) {
-      const std::uint64_t remaining = effectiveEnd - absoluteFrame - 1;
-      amplitude *= fadeOutFrames == 1
-                       ? 0.0
-                       : static_cast<double>(remaining) /
-                             static_cast<double>(fadeOutFrames - 1);
+    if (fadeOutFrames_ > 0 && absoluteFrame >= fadeOutStart) {
+      const std::uint64_t remaining = effectiveEnd > absoluteFrame ? (effectiveEnd - absoluteFrame) : 0;
+      const auto divisor = std::max<std::uint64_t>(1, std::min(fadeOutFrames_, playbackFrames));
+      amplitude *= static_cast<double>(remaining) / static_cast<double>(divisor);
     }
 
     for (std::size_t channel = 0; channel < outputChannels; ++channel) {

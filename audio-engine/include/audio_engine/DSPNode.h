@@ -27,10 +27,6 @@ class DSPNode {
 
   virtual void prepare(double sampleRate) { sampleRate_ = sampleRate; }
   virtual void reset() {}
-  virtual void locate(std::uint64_t frame) {
-    static_cast<void>(frame);
-    reset();
-  }
   virtual void process(AudioBufferView buffer) = 0;
   virtual void setParameter(const std::string& name, double value) = 0;
 
@@ -49,20 +45,9 @@ class GainNode final : public DSPNode {
   double gain_ = 1.0;
 };
 
-class TrackOutputNode final : public DSPNode {
- public:
-  void process(AudioBufferView buffer) override;
-  void setParameter(const std::string& name, double value) override;
-
- private:
-  double gain_ = 1.0;
-  double pan_ = 0.0;
-};
-
 class SineOscillatorNode final : public DSPNode {
  public:
   void prepare(double sampleRate) override;
-  void locate(std::uint64_t frame) override;
   void process(AudioBufferView buffer) override;
   void setParameter(const std::string& name, double value) override;
 
@@ -105,7 +90,6 @@ class ClipPlayerNode final : public DSPNode {
 
   void prepare(double sampleRate) override;
   void reset() override;
-  void locate(std::uint64_t frame) override;
   void process(AudioBufferView buffer) override;
   void setParameter(const std::string& name, double value) override;
 

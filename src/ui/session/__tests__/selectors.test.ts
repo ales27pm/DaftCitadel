@@ -1,6 +1,5 @@
 import { buildDiagnosticsView, buildTracks, buildTransport } from '../selectors';
 import type { SessionDiagnosticsView } from '../types';
-import { createDefaultJunoTrack } from '../../../session';
 import type { Session, Track, RoutingGraph, PluginRoutingNode } from '../../../session';
 import type { PluginCrashReport } from '../../../audio';
 
@@ -158,31 +157,6 @@ describe('session selectors', () => {
     expect(track.meterLevel).toBeCloseTo(0.8, 2);
     expect(track.waveform.length).toBeGreaterThan(0);
     expect(track.midiNotes).toHaveLength(1);
-  });
-
-  it('exposes persisted Juno instrument metadata to the UI', () => {
-    const session = createSession();
-    session.tracks = [
-      createDefaultJunoTrack('juno-track', {
-        name: 'Live Juno',
-        parameters: { cutoffHz: 2750, chorusMode: 2 },
-        preset: { id: 'stage', name: 'Stage', version: 1 },
-      }),
-    ];
-
-    const [track] = buildTracks(session, {
-      status: 'ready',
-      xruns: 0,
-      renderLoad: 0.1,
-    });
-
-    expect(track.instrument).toEqual({
-      nodeId: 'juno-track:instrument:juno106',
-      instrumentType: 'juno106',
-      label: 'Juno-106',
-      parameters: expect.objectContaining({ cutoffHz: 2750, chorusMode: 2 }),
-      preset: { id: 'stage', name: 'Stage', version: 1 },
-    });
   });
 
   it('derives diagnostics view from native payloads and snapshots', () => {

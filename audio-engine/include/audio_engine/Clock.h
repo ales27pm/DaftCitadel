@@ -23,8 +23,6 @@ class RenderClock {
 
   void advanceBy(std::uint32_t frames) { frameTime_.fetch_add(frames, std::memory_order_release); }
 
-  void locate(std::uint64_t frame) { frameTime_.store(frame, std::memory_order_release); }
-
   void setFramesPerBuffer(std::uint32_t framesPerBuffer) {
     if (framesPerBuffer == 0) {
       throw std::invalid_argument("RenderClock buffer size must be positive");

@@ -14,11 +14,6 @@ export interface PluginAutomationPoint {
 }
 
 export interface PluginHostSpec extends TurboModule {
-  /**
-   * Native hosts must set this only after their render callback is connected to
-   * the audio engine. Merely linking the discovery/control bridge is not enough.
-   */
-  readonly runtimeReady?: boolean;
   queryAvailablePlugins(format?: string): Promise<PluginDescriptor[]>;
   instantiatePlugin(
     identifier: string,
@@ -61,39 +56,9 @@ export type PluginHostEventPayloads = {
 
 const moduleName = 'PluginHostModule';
 
-type TurboModuleLookup = {
-  get?<T extends TurboModule>(name: string): T | null;
-};
-
-const resolveNativePluginHost = (): PluginHostSpec | undefined => {
-  const registry = TurboModuleRegistry as unknown as TurboModuleLookup | undefined;
-  const turboModule = registry?.get?.<PluginHostSpec>(moduleName);
-  if (turboModule) {
-    return turboModule;
-  }
-
-  return (NativeModules as Record<string, unknown> | undefined)?.[moduleName] as
-    | PluginHostSpec
-    | undefined;
-};
-
-const unavailablePluginHost = new Proxy({} as PluginHostSpec, {
-  get: (_target, property) => {
-    if (typeof property === 'symbol' || property === 'then') {
-      return undefined;
-    }
-
-    return async () => {
-      throw new Error(
-        `${moduleName}.${property} is unavailable. Use a native development build that includes the plugin host.`,
-      );
-    };
-  },
-});
-
 export const NativePluginHost: PluginHostSpec =
-  resolveNativePluginHost() ?? unavailablePluginHost;
+  TurboModuleRegistry.getEnforcing<PluginHostSpec>(moduleName);
 
 export const isPluginHostAvailable = (): boolean => {
-  return resolveNativePluginHost()?.runtimeReady === true;
+  return NativeModules[moduleName] != null;
 };
