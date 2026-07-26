@@ -1,0 +1,177 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="com.daftcitadel.citadel"
+4    android:versionCode="1"
+5    android:versionName="1.0" >
+6
+7    <uses-sdk
+8        android:minSdkVersion="24"
+9        android:targetSdkVersion="35" />
+10
+11    <uses-permission android:name="android.permission.INTERNET" />
+11-->/home/ales27pm/Documents/DaftCitadel/android/app/src/main/AndroidManifest.xml:3:5-67
+11-->/home/ales27pm/Documents/DaftCitadel/android/app/src/main/AndroidManifest.xml:3:22-64
+12    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+12-->[:daft-citadel-audio] /home/ales27pm/Documents/DaftCitadel/native/collab/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:7:5-76
+12-->[:daft-citadel-audio] /home/ales27pm/Documents/DaftCitadel/native/collab/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:7:22-73
+13    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+13-->[:daft-citadel-audio] /home/ales27pm/Documents/DaftCitadel/native/collab/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:8:5-79
+13-->[:daft-citadel-audio] /home/ales27pm/Documents/DaftCitadel/native/collab/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:8:22-76
+14    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
+14-->[:daft-citadel-audio] /home/ales27pm/Documents/DaftCitadel/native/collab/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:9:5-78
+14-->[:daft-citadel-audio] /home/ales27pm/Documents/DaftCitadel/native/collab/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:9:22-75
+15    <!--
+16    This manifest file is used only by Gradle to configure debug-only capabilities
+17    for React Native Apps.
+18    -->
+19    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+19-->[com.facebook.react:react-android:0.73.6] /home/ales27pm/.gradle/caches/transforms-4/4c2315c0b14f91b5b61d6ac80353597e/transformed/jetified-react-android-0.73.6-debug/AndroidManifest.xml:16:5-78
+19-->[com.facebook.react:react-android:0.73.6] /home/ales27pm/.gradle/caches/transforms-4/4c2315c0b14f91b5b61d6ac80353597e/transformed/jetified-react-android-0.73.6-debug/AndroidManifest.xml:16:22-75
+20
+21    <permission
+21-->[androidx.core:core:1.15.0] /home/ales27pm/.gradle/caches/transforms-4/d0d584d3042dc006194fdf4621c6d8d6/transformed/core-1.15.0/AndroidManifest.xml:22:5-24:47
+22        android:name="com.daftcitadel.citadel.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+22-->[androidx.core:core:1.15.0] /home/ales27pm/.gradle/caches/transforms-4/d0d584d3042dc006194fdf4621c6d8d6/transformed/core-1.15.0/AndroidManifest.xml:23:9-81
+23        android:protectionLevel="signature" />
+23-->[androidx.core:core:1.15.0] /home/ales27pm/.gradle/caches/transforms-4/d0d584d3042dc006194fdf4621c6d8d6/transformed/core-1.15.0/AndroidManifest.xml:24:9-44
+24
+25    <uses-permission android:name="com.daftcitadel.citadel.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+25-->[androidx.core:core:1.15.0] /home/ales27pm/.gradle/caches/transforms-4/d0d584d3042dc006194fdf4621c6d8d6/transformed/core-1.15.0/AndroidManifest.xml:26:5-97
+25-->[androidx.core:core:1.15.0] /home/ales27pm/.gradle/caches/transforms-4/d0d584d3042dc006194fdf4621c6d8d6/transformed/core-1.15.0/AndroidManifest.xml:26:22-94
+26
+27    <application
+27-->/home/ales27pm/Documents/DaftCitadel/android/app/src/main/AndroidManifest.xml:5:5-24:19
+28        android:name="com.daftcitadel.citadel.MainApplication"
+28-->/home/ales27pm/Documents/DaftCitadel/android/app/src/main/AndroidManifest.xml:6:7-38
+29        android:allowBackup="false"
+29-->/home/ales27pm/Documents/DaftCitadel/android/app/src/main/AndroidManifest.xml:10:7-34
+30        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
+30-->[androidx.core:core:1.15.0] /home/ales27pm/.gradle/caches/transforms-4/d0d584d3042dc006194fdf4621c6d8d6/transformed/core-1.15.0/AndroidManifest.xml:28:18-86
+31        android:debuggable="true"
+32        android:extractNativeLibs="false"
+33        android:icon="@mipmap/ic_launcher"
+33-->/home/ales27pm/Documents/DaftCitadel/android/app/src/main/AndroidManifest.xml:8:7-41
+34        android:label="@string/app_name"
+34-->/home/ales27pm/Documents/DaftCitadel/android/app/src/main/AndroidManifest.xml:7:7-39
+35        android:roundIcon="@mipmap/ic_launcher_round"
+35-->/home/ales27pm/Documents/DaftCitadel/android/app/src/main/AndroidManifest.xml:9:7-52
+36        android:theme="@style/AppTheme"
+36-->/home/ales27pm/Documents/DaftCitadel/android/app/src/main/AndroidManifest.xml:11:7-38
+37        android:usesCleartextTraffic="true" >
+37-->/home/ales27pm/Documents/DaftCitadel/android/app/src/debug/AndroidManifest.xml:6:9-44
+38        <activity
+38-->/home/ales27pm/Documents/DaftCitadel/android/app/src/main/AndroidManifest.xml:12:7-23:18
+39            android:name="com.daftcitadel.citadel.MainActivity"
+39-->/home/ales27pm/Documents/DaftCitadel/android/app/src/main/AndroidManifest.xml:13:9-37
+40            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+40-->/home/ales27pm/Documents/DaftCitadel/android/app/src/main/AndroidManifest.xml:15:9-118
+41            android:exported="true"
+41-->/home/ales27pm/Documents/DaftCitadel/android/app/src/main/AndroidManifest.xml:18:9-32
+42            android:label="@string/app_name"
+42-->/home/ales27pm/Documents/DaftCitadel/android/app/src/main/AndroidManifest.xml:14:9-41
+43            android:launchMode="singleTask"
+43-->/home/ales27pm/Documents/DaftCitadel/android/app/src/main/AndroidManifest.xml:16:9-40
+44            android:windowSoftInputMode="adjustResize" >
+44-->/home/ales27pm/Documents/DaftCitadel/android/app/src/main/AndroidManifest.xml:17:9-51
+45            <intent-filter>
+45-->/home/ales27pm/Documents/DaftCitadel/android/app/src/main/AndroidManifest.xml:19:9-22:25
+46                <action android:name="android.intent.action.MAIN" />
+46-->/home/ales27pm/Documents/DaftCitadel/android/app/src/main/AndroidManifest.xml:20:13-65
+46-->/home/ales27pm/Documents/DaftCitadel/android/app/src/main/AndroidManifest.xml:20:21-62
+47
+48                <category android:name="android.intent.category.LAUNCHER" />
+48-->/home/ales27pm/Documents/DaftCitadel/android/app/src/main/AndroidManifest.xml:21:13-73
+48-->/home/ales27pm/Documents/DaftCitadel/android/app/src/main/AndroidManifest.xml:21:23-70
+49            </intent-filter>
+50        </activity>
+51
+52        <service
+52-->[:react-native-webrtc] /home/ales27pm/Documents/DaftCitadel/node_modules/react-native-webrtc/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:9:9-12:19
+53            android:name="com.oney.WebRTCModule.MediaProjectionService"
+53-->[:react-native-webrtc] /home/ales27pm/Documents/DaftCitadel/node_modules/react-native-webrtc/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:10:13-72
+54            android:foregroundServiceType="mediaProjection" >
+54-->[:react-native-webrtc] /home/ales27pm/Documents/DaftCitadel/node_modules/react-native-webrtc/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:11:13-60
+55        </service>
+56
+57        <activity
+57-->[com.facebook.react:react-android:0.73.6] /home/ales27pm/.gradle/caches/transforms-4/4c2315c0b14f91b5b61d6ac80353597e/transformed/jetified-react-android-0.73.6-debug/AndroidManifest.xml:19:9-21:40
+58            android:name="com.facebook.react.devsupport.DevSettingsActivity"
+58-->[com.facebook.react:react-android:0.73.6] /home/ales27pm/.gradle/caches/transforms-4/4c2315c0b14f91b5b61d6ac80353597e/transformed/jetified-react-android-0.73.6-debug/AndroidManifest.xml:20:13-77
+59            android:exported="false" />
+59-->[com.facebook.react:react-android:0.73.6] /home/ales27pm/.gradle/caches/transforms-4/4c2315c0b14f91b5b61d6ac80353597e/transformed/jetified-react-android-0.73.6-debug/AndroidManifest.xml:21:13-37
+60
+61        <provider
+61-->[androidx.emoji2:emoji2:1.2.0] /home/ales27pm/.gradle/caches/transforms-4/277a52e2a24a24d8dc8ee9f7fe9de837/transformed/jetified-emoji2-1.2.0/AndroidManifest.xml:24:9-32:20
+62            android:name="androidx.startup.InitializationProvider"
+62-->[androidx.emoji2:emoji2:1.2.0] /home/ales27pm/.gradle/caches/transforms-4/277a52e2a24a24d8dc8ee9f7fe9de837/transformed/jetified-emoji2-1.2.0/AndroidManifest.xml:25:13-67
+63            android:authorities="com.daftcitadel.citadel.androidx-startup"
+63-->[androidx.emoji2:emoji2:1.2.0] /home/ales27pm/.gradle/caches/transforms-4/277a52e2a24a24d8dc8ee9f7fe9de837/transformed/jetified-emoji2-1.2.0/AndroidManifest.xml:26:13-68
+64            android:exported="false" >
+64-->[androidx.emoji2:emoji2:1.2.0] /home/ales27pm/.gradle/caches/transforms-4/277a52e2a24a24d8dc8ee9f7fe9de837/transformed/jetified-emoji2-1.2.0/AndroidManifest.xml:27:13-37
+65            <meta-data
+65-->[androidx.emoji2:emoji2:1.2.0] /home/ales27pm/.gradle/caches/transforms-4/277a52e2a24a24d8dc8ee9f7fe9de837/transformed/jetified-emoji2-1.2.0/AndroidManifest.xml:29:13-31:52
+66                android:name="androidx.emoji2.text.EmojiCompatInitializer"
+66-->[androidx.emoji2:emoji2:1.2.0] /home/ales27pm/.gradle/caches/transforms-4/277a52e2a24a24d8dc8ee9f7fe9de837/transformed/jetified-emoji2-1.2.0/AndroidManifest.xml:30:17-75
+67                android:value="androidx.startup" />
+67-->[androidx.emoji2:emoji2:1.2.0] /home/ales27pm/.gradle/caches/transforms-4/277a52e2a24a24d8dc8ee9f7fe9de837/transformed/jetified-emoji2-1.2.0/AndroidManifest.xml:31:17-49
+68            <meta-data
+68-->[androidx.lifecycle:lifecycle-process:2.6.2] /home/ales27pm/.gradle/caches/transforms-4/781710997c37ef8510aa5fee6be923a3/transformed/jetified-lifecycle-process-2.6.2/AndroidManifest.xml:29:13-31:52
+69                android:name="androidx.lifecycle.ProcessLifecycleInitializer"
+69-->[androidx.lifecycle:lifecycle-process:2.6.2] /home/ales27pm/.gradle/caches/transforms-4/781710997c37ef8510aa5fee6be923a3/transformed/jetified-lifecycle-process-2.6.2/AndroidManifest.xml:30:17-78
+70                android:value="androidx.startup" />
+70-->[androidx.lifecycle:lifecycle-process:2.6.2] /home/ales27pm/.gradle/caches/transforms-4/781710997c37ef8510aa5fee6be923a3/transformed/jetified-lifecycle-process-2.6.2/AndroidManifest.xml:31:17-49
+71            <meta-data
+71-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/ales27pm/.gradle/caches/transforms-4/2ab3bf5118a690db43bc1c0441787354/transformed/jetified-profileinstaller-1.3.0/AndroidManifest.xml:29:13-31:52
+72                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
+72-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/ales27pm/.gradle/caches/transforms-4/2ab3bf5118a690db43bc1c0441787354/transformed/jetified-profileinstaller-1.3.0/AndroidManifest.xml:30:17-85
+73                android:value="androidx.startup" />
+73-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/ales27pm/.gradle/caches/transforms-4/2ab3bf5118a690db43bc1c0441787354/transformed/jetified-profileinstaller-1.3.0/AndroidManifest.xml:31:17-49
+74        </provider>
+75
+76        <receiver
+76-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/ales27pm/.gradle/caches/transforms-4/2ab3bf5118a690db43bc1c0441787354/transformed/jetified-profileinstaller-1.3.0/AndroidManifest.xml:34:9-52:20
+77            android:name="androidx.profileinstaller.ProfileInstallReceiver"
+77-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/ales27pm/.gradle/caches/transforms-4/2ab3bf5118a690db43bc1c0441787354/transformed/jetified-profileinstaller-1.3.0/AndroidManifest.xml:35:13-76
+78            android:directBootAware="false"
+78-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/ales27pm/.gradle/caches/transforms-4/2ab3bf5118a690db43bc1c0441787354/transformed/jetified-profileinstaller-1.3.0/AndroidManifest.xml:36:13-44
+79            android:enabled="true"
+79-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/ales27pm/.gradle/caches/transforms-4/2ab3bf5118a690db43bc1c0441787354/transformed/jetified-profileinstaller-1.3.0/AndroidManifest.xml:37:13-35
+80            android:exported="true"
+80-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/ales27pm/.gradle/caches/transforms-4/2ab3bf5118a690db43bc1c0441787354/transformed/jetified-profileinstaller-1.3.0/AndroidManifest.xml:38:13-36
+81            android:permission="android.permission.DUMP" >
+81-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/ales27pm/.gradle/caches/transforms-4/2ab3bf5118a690db43bc1c0441787354/transformed/jetified-profileinstaller-1.3.0/AndroidManifest.xml:39:13-57
+82            <intent-filter>
+82-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/ales27pm/.gradle/caches/transforms-4/2ab3bf5118a690db43bc1c0441787354/transformed/jetified-profileinstaller-1.3.0/AndroidManifest.xml:40:13-42:29
+83                <action android:name="androidx.profileinstaller.action.INSTALL_PROFILE" />
+83-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/ales27pm/.gradle/caches/transforms-4/2ab3bf5118a690db43bc1c0441787354/transformed/jetified-profileinstaller-1.3.0/AndroidManifest.xml:41:17-91
+83-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/ales27pm/.gradle/caches/transforms-4/2ab3bf5118a690db43bc1c0441787354/transformed/jetified-profileinstaller-1.3.0/AndroidManifest.xml:41:25-88
+84            </intent-filter>
+85            <intent-filter>
+85-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/ales27pm/.gradle/caches/transforms-4/2ab3bf5118a690db43bc1c0441787354/transformed/jetified-profileinstaller-1.3.0/AndroidManifest.xml:43:13-45:29
+86                <action android:name="androidx.profileinstaller.action.SKIP_FILE" />
+86-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/ales27pm/.gradle/caches/transforms-4/2ab3bf5118a690db43bc1c0441787354/transformed/jetified-profileinstaller-1.3.0/AndroidManifest.xml:44:17-85
+86-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/ales27pm/.gradle/caches/transforms-4/2ab3bf5118a690db43bc1c0441787354/transformed/jetified-profileinstaller-1.3.0/AndroidManifest.xml:44:25-82
+87            </intent-filter>
+88            <intent-filter>
+88-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/ales27pm/.gradle/caches/transforms-4/2ab3bf5118a690db43bc1c0441787354/transformed/jetified-profileinstaller-1.3.0/AndroidManifest.xml:46:13-48:29
+89                <action android:name="androidx.profileinstaller.action.SAVE_PROFILE" />
+89-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/ales27pm/.gradle/caches/transforms-4/2ab3bf5118a690db43bc1c0441787354/transformed/jetified-profileinstaller-1.3.0/AndroidManifest.xml:47:17-88
+89-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/ales27pm/.gradle/caches/transforms-4/2ab3bf5118a690db43bc1c0441787354/transformed/jetified-profileinstaller-1.3.0/AndroidManifest.xml:47:25-85
+90            </intent-filter>
+91            <intent-filter>
+91-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/ales27pm/.gradle/caches/transforms-4/2ab3bf5118a690db43bc1c0441787354/transformed/jetified-profileinstaller-1.3.0/AndroidManifest.xml:49:13-51:29
+92                <action android:name="androidx.profileinstaller.action.BENCHMARK_OPERATION" />
+92-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/ales27pm/.gradle/caches/transforms-4/2ab3bf5118a690db43bc1c0441787354/transformed/jetified-profileinstaller-1.3.0/AndroidManifest.xml:50:17-95
+92-->[androidx.profileinstaller:profileinstaller:1.3.0] /home/ales27pm/.gradle/caches/transforms-4/2ab3bf5118a690db43bc1c0441787354/transformed/jetified-profileinstaller-1.3.0/AndroidManifest.xml:50:25-92
+93            </intent-filter>
+94        </receiver>
+95
+96        <meta-data
+96-->[com.facebook.soloader:soloader:0.10.5] /home/ales27pm/.gradle/caches/transforms-4/b46091d574c1d7ffc1f54bda9b8526be/transformed/jetified-soloader-0.10.5/AndroidManifest.xml:12:9-14:37
+97            android:name="com.facebook.soloader.enabled"
+97-->[com.facebook.soloader:soloader:0.10.5] /home/ales27pm/.gradle/caches/transforms-4/b46091d574c1d7ffc1f54bda9b8526be/transformed/jetified-soloader-0.10.5/AndroidManifest.xml:13:13-57
+98            android:value="false" />
+98-->[com.facebook.soloader:soloader:0.10.5] /home/ales27pm/.gradle/caches/transforms-4/b46091d574c1d7ffc1f54bda9b8526be/transformed/jetified-soloader-0.10.5/AndroidManifest.xml:14:13-34
+99    </application>
+100
+101</manifest>

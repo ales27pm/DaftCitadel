@@ -1,9 +1,9 @@
 #pragma once
 
 #include <algorithm>
-#include <cstdint>
+#include <array>
 #include <functional>
-#include <vector>
+#include <cstdint>
 
 #include "audio_engine/Clock.h"
 
@@ -17,26 +17,28 @@ struct ScheduledEvent {
 template <std::size_t MaxEvents>
 class RealTimeScheduler {
  public:
-  explicit RealTimeScheduler(RenderClock& clock) : clock_(clock) { events_.reserve(MaxEvents); }
+  explicit RealTimeScheduler(RenderClock& clock) : clock_(clock) {}
 
   bool schedule(const ScheduledEvent& event) {
-    if (events_.size() >= MaxEvents) {
+    if (eventCount_ >= MaxEvents) {
       return false;
     }
-    events_.push_back(event);
+    events_[eventCount_] = event;
+    ++eventCount_;
     return true;
   }
 
   void dispatchDueEvents() {
-    if (events_.empty()) {
+    if (eventCount_ == 0U) {
       return;
     }
 
     const auto now = clock_.frameTime();
-    std::sort(events_.begin(), events_.end(),
+    const auto end = events_.begin() + eventCount_;
+    std::sort(events_.begin(), end,
               [](const ScheduledEvent& a, const ScheduledEvent& b) { return a.frame < b.frame; });
 
-    const auto split = std::partition_point(events_.begin(), events_.end(),
+    const auto split = std::partition_point(events_.begin(), end,
                                             [now](const ScheduledEvent& event) {
                                               return event.frame <= now;
                                             });
@@ -52,12 +54,23 @@ class RealTimeScheduler {
       }
     }
 
-    events_.erase(events_.begin(), split);
+    const auto dueCount = static_cast<std::size_t>(split - events_.begin());
+    const auto remainingCount = eventCount_ - dueCount;
+    if (remainingCount > 0U) {
+      if (dueCount > 0U) {
+        std::move(split, end, events_.begin());
+      }
+    }
+    for (std::size_t i = remainingCount; i < eventCount_; ++i) {
+      events_[i] = {};
+    }
+    eventCount_ = remainingCount;
   }
 
  private:
   RenderClock& clock_;
-  std::vector<ScheduledEvent> events_{};
+  std::array<ScheduledEvent, MaxEvents> events_{};
+  std::size_t eventCount_ = 0U;
 };
 
 }  // namespace daft::audio

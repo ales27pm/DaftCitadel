@@ -6,11 +6,11 @@ Daft Citadel is a turnkey Daft Punk–themed digital audio workstation stack for
 
 The unified installer supports three deployment profiles:
 
-| Profile   | Description                                                     | Features Enabled                                               |
-| --------- | --------------------------------------------------------------- | -------------------------------------------------------------- |
-| `apex`    | Streamlined workstation with core DAW tooling and light presets | GUI controller, Surge/Helm synths, lightweight templates       |
-| `hybrid`  | Balanced workstation (successor to `daft_apex_citadel.sh`)      | All apex features + AI trainer, extended synth pack, presets   |
-| `citadel` | Full experience (successor to `daft_citadel_v6_5.sh`)           | Everything in hybrid plus the complete sample/preset libraries |
+| Profile  | Description                                                                 | Features Enabled                                                |
+|----------|-----------------------------------------------------------------------------|-----------------------------------------------------------------|
+| `apex`   | Streamlined workstation with core DAW tooling and light presets             | GUI controller, Surge/Helm synths, lightweight templates        |
+| `hybrid` | Balanced workstation (successor to `daft_apex_citadel.sh`)                  | All apex features + AI trainer, extended synth pack, presets    |
+| `citadel`| Full experience (successor to `daft_citadel_v6_5.sh`)                        | Everything in hybrid plus the complete sample/preset libraries  |
 
 Use the `--profile` flag on `scripts/daftcitadel.sh` (or invoke one of the wrapper scripts) to select the experience that matches your target system.
 
@@ -29,7 +29,7 @@ Additional flags that can be applied to any wrapper or to `scripts/daftcitadel.s
 - Pass `--with-reaper` to include the Reaper evaluation build without prompting.
 - Add `--skip-assets` when you want to omit large sample and preset downloads (useful for constrained environments).
 
-All runs write a timestamped, private log under `~/.local/state/daftcitadel/` (override it with `--log-dir` or `--log-file`) and emit a profile manifest at `~/DaftCitadel/citadel_profile.json` for the GUI to consume. Any failed installation step terminates the installer with a non-zero exit status.
+All runs log to `~/daft_citadel.log` and emit a profile manifest at `~/DaftCitadel/citadel_profile.json` for the GUI to consume.
 
 ## Containerised deployment
 
@@ -95,61 +95,14 @@ All generated assets live under `~/DaftCitadel` on the target system, including 
 - The GUI reads `citadel_profile.json` to determine which buttons/features to enable. Update the manifest if you add new capabilities.
 - Docker builds run the installer during `docker build`; keep the script non-interactive when `--auto` is provided.
 
-## Mobile development
-
-The repository includes an Expo SDK 54 host for iOS and Android plus the local
-`daft-citadel-native` module. The module compiles the audio engine, file loader,
-plugin host, and collaboration bridges into the generated native applications.
-
-```bash
-npm install
-npm run prebuild          # regenerate ios/ and android/ after config changes
-npm run android           # Android development build
-npm run ios               # iOS development build (macOS + Xcode)
-npm run web               # passive-environment browser shell
-```
-
-This app requires a custom development build; Expo Go cannot load its local
-native modules. Run `npm run verify` before pushing to execute the portable
-repository and native-core checks locally; `npm run verify:sanitize` adds the
-AddressSanitizer and UndefinedBehaviorSanitizer pass. Platform builds remain
-explicit local steps on machines with the Android or iOS SDK. See
-[`docs/native-mobile.md`](docs/native-mobile.md) for prerequisites, entitlements,
-and native verification commands.
-
-For the built-in playable synth, see the
-[`Juno-106 instrument guide`](docs/juno106-instrument.md) for its Performance
-workflow, persisted MIDI and automation model, preset/SysEx APIs, realtime
-bounds, shutdown behavior, and validation matrix.
-
 ## React Native session bootstrap
 
 The React Native shell mounts `SessionAppProvider` (`src/ui/session/SessionAppProvider.tsx`) as the root session boundary. The provider selects the correct environment at runtime:
 
-- **Native mobile builds (development and release)** &mdash; Attempt to initialize the native `AudioEngine`, load the persisted session via the platform storage adapter, provision supported plugin hosts, and stream updates through `SessionAudioBridge`.
-- **Passive fallback (Expo Go and web)** &mdash; Uses the in-memory audio bridge so transport and editor flows remain testable when native audio is unavailable.
-- **Native audio fallback** &mdash; Automatically falls back to the passive environment if the native engine or sample loader is unavailable, or if the device cannot initialise the requested audio configuration, while logging the failure for diagnostics.
+- **Production (iOS/Android release builds)** &mdash; Initializes the native `AudioEngine`, loads the persisted session via the platform storage adapter, provisions the plugin host, and streams updates through `SessionAudioBridge`.
+- **Passive fallback (development, simulators, web)** &mdash; Uses the in-memory audio bridge so transport and editor flows remain testable when native audio is unavailable.
+- **Native audio fallback** &mdash; Automatically falls back to the passive environment if the native engine cannot be initialised (e.g., missing entitlements) while logging the failure for diagnostics.
 
-`SessionViewModelProvider` consumes the environment and loads the active session. Persistent environments seed an empty `Untitled Session` on first launch so a clean install never depends on fixture-only WAV paths; the full demo project remains available through the explicit demo environment used by previews and tests. When the React tree unmounts, both the audio bridge and plugin host dispose cleanly so rerenders or fast-refresh cycles do not leak native resources.
-
-### Run the app
-
-The mobile and web shell targets Expo SDK 54 and includes a passive audio environment for development. Install dependencies and start the project with:
-
-```bash
-npm install
-npm start
-```
-
-Use `npm run web` for a browser session, or open the QR code in Expo Go. The custom audio engine, plugin host, and network diagnostics contain native code and therefore require an Expo development build for device integration; Expo Go automatically uses the passive transport so the arrangement, mixer, performance, settings, and persistence flows remain usable.
-
-Useful validation commands:
-
-```bash
-npm run export:web
-npm run doctor
-```
-
-Performance scene buttons now locate the transport to the corresponding clip and can auto-play based on the persisted setting. Settings are stored locally on every supported Expo platform.
+`SessionViewModelProvider` consumes the environment and loads the active session, seeding the demo project on first launch. When the React tree unmounts, both the audio bridge and plugin host dispose cleanly so rerenders or fast-refresh cycles do not leak native resources.
 
 Enjoy the groove!

@@ -8,11 +8,6 @@ export type AutomationRequest = {
   signature: string;
 };
 
-export type AutomationNodeChanges = {
-  removedNodeIds: ReadonlySet<string>;
-  replacedNodeIds: ReadonlySet<string>;
-};
-
 type AutomationRecord = {
   signature: string;
   nodeId: string;
@@ -29,30 +24,14 @@ export class AutomationPublisher {
     private readonly publish: (nodeId: string, lane: AutomationLane) => Promise<void>,
   ) {}
 
-  async applyChanges(
-    requests: Map<AutomationKey, AutomationRequest>,
-    nodeChanges?: AutomationNodeChanges,
-  ): Promise<void> {
-    const operation = this.queue.then(() => this.processRequests(requests, nodeChanges));
-    this.queue = operation.catch(() => undefined);
-    return operation;
+  async applyChanges(requests: Map<AutomationKey, AutomationRequest>): Promise<void> {
+    this.queue = this.queue.then(() => this.processRequests(requests));
+    return this.queue;
   }
 
   private async processRequests(
     requests: Map<AutomationKey, AutomationRequest>,
-    nodeChanges?: AutomationNodeChanges,
   ): Promise<void> {
-    if (nodeChanges) {
-      this.state.forEach((record, key) => {
-        if (
-          nodeChanges.removedNodeIds.has(record.nodeId) ||
-          nodeChanges.replacedNodeIds.has(record.nodeId)
-        ) {
-          this.state.delete(key);
-        }
-      });
-    }
-
     const planned: Array<{
       key: AutomationKey;
       request: AutomationRequest;

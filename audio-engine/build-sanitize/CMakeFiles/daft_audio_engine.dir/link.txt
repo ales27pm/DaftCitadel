@@ -1,0 +1,2 @@
+/usr/bin/ar qc libdaft_audio_engine.a CMakeFiles/daft_audio_engine.dir/src/AudioBuffer.cpp.o CMakeFiles/daft_audio_engine.dir/src/DSPNode.cpp.o CMakeFiles/daft_audio_engine.dir/src/Scheduler.cpp.o CMakeFiles/daft_audio_engine.dir/src/SceneGraph.cpp.o CMakeFiles/daft_audio_engine.dir/src/Automation.cpp.o CMakeFiles/daft_audio_engine.dir/src/Clock.cpp.o CMakeFiles/daft_audio_engine.dir/src/PluginHost.cpp.o CMakeFiles/daft_audio_engine.dir/src/PluginNode.cpp.o CMakeFiles/daft_audio_engine.dir/platform/common/NodeFactory.cpp.o
+/usr/bin/ranlib libdaft_audio_engine.a

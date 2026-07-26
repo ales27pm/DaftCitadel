@@ -24,9 +24,7 @@ The `src/session/` directory provides the following building blocks:
   - `SQLiteSessionStorageAdapter` targets mobile platforms and accepts any
     SQLite bridge that implements the lightweight `SQLiteConnection` interface.
   - `JsonSessionStorageAdapter` persists sessions as atomic JSON documents on
-    desktop systems. JSON, memory, and native AsyncStorage adapters serialize
-    compare-and-swap transactions and validate every revision before publishing
-    a batch.
+    desktop systems.
 - **Cloud sync (`cloud.ts`)** — A pluggable `CloudSyncProvider` abstraction that
   supports no-op local development, device-to-device sync, or hosted
   collaboration back ends.
@@ -35,24 +33,6 @@ The `src/session/` directory provides the following building blocks:
 - **Session manager (`sessionManager.ts`)** — Coordinates transactional storage
   writes, undo/redo, cloud merge, and audio-engine notifications behind a
   single, mutex-guarded façade.
-
-## Failure-atomic updates
-
-`SessionManager` treats a state transition as a staged operation: it validates
-and stages storage mutations, applies the candidate graph to the audio bridge,
-commits persistence, and only then publishes current state, history, and
-subscriber notifications. Audio or persistence rejection restores the previous
-audio graph and leaves undo/redo entries available for a safe retry.
-
-The non-SQLite adapters provide the same externally visible guarantee:
-
-- memory commits swap a fully validated map in one step;
-- JSON and AsyncStorage commits use serialized compare-and-swap operations;
-- multi-record writes keep a rollback snapshot; and
-- durable journals are recovered before reads after an interrupted commit.
-
-This makes application state, history, and stored revisions move together even
-when a process crashes or a storage backend fails partway through a transaction.
 
 ## Storage Migration Guidelines
 
@@ -93,5 +73,5 @@ Follow up with linting and formatting to match repository standards:
 
 ```bash
 npm run lint
-npm run format
+npm run prettier
 ```

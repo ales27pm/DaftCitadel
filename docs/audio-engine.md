@@ -23,28 +23,15 @@ lanes that align to buffer boundaries for deterministic playback.
 1. **JavaScript bootstrap**: `AudioEngine` in `src/audio/AudioEngine.ts` validates that the
    TurboModule is loaded and calls `initialize(sampleRate, framesPerBuffer)`.
 2. **Platform bridge**: Android and iOS both forward initialization to
-   `AudioEngineBridge::initialize`, which allocates a `SceneGraph` configured with the render
-   quantum supplied by React Native. Android then starts its priority `AudioTrack` render thread.
-   iOS defers `AVAudioSession` activation and `AVAudioEngine` construction until the user starts
-   transport, so application launch does not claim an audio route before playback is requested.
-3. **iOS ownership and readiness**: Each iOS TurboModule instance stores the generation returned
-   by [`AudioEngineBridge::initialize`](../audio-engine/platform/ios/AudioEngineBridge.hpp).
-   Shutdown, invalidation, and deallocation only destroy the graph when that generation still
-   owns it, so stale module teardown cannot remove a replacement graph. Every graph mutation and
-   state read repeats that ownership check while holding the bridge mutex, and the iOS render
-   route captures its generation so an obsolete device callback renders silence instead of
-   touching the replacement graph or its metrics. The
-   [iOS module](../native/audio/ios/AudioEngineModule.mm) reports `diagnostics.initialized` only
-   while its configured generation owns a live graph. The
-   [session bridge](../src/audio/SessionAudioBridge.ts) treats an explicit `false` as a bootstrap
-   failure while accepting an omitted field for legacy implementations.
-4. **Scene graph**: The graph primes DSP nodes with `prepare`, sizes stack-backed scratch
+   `AudioEngineBridge::initialize`, which allocates a `SceneGraph` configured with the actual
+   render quantum supplied by React Native.
+3. **Scene graph**: The graph primes DSP nodes with `prepare`, sizes stack-backed scratch
    buffers to the reported buffer length, and constructs a reusable topological ordering of the
    signal graph.
    Initialization rejects buffers larger than the engine's static capacity (1024 frames) so that
    real-time rendering always fits within the pre-allocated scratch space shared by both
    platforms.
-5. **Automation**: When JavaScript publishes automation lanes, the TurboModule forwards each
+4. **Automation**: When JavaScript publishes automation lanes, the TurboModule forwards each
    automation point to `SceneGraph::scheduleAutomation`, which queues callbacks in the bounded
    scheduler so parameter updates execute on the exact frame requested.
 
@@ -53,25 +40,17 @@ lanes that align to buffer boundaries for deterministic playback.
 Before running the React Native shell against the native engine ensure the runtime matches the
 assumptions baked into `createProductionSessionEnvironment`:
 
-- **Sample rate** – The production bridge requests 48 kHz. The iOS driver configures
-  `AVAudioSession`; Android builds a floating-point stereo `AudioTrack` and rejects unsupported
-  device formats instead of silently starting a mismatched engine.
-- **Frames per buffer** – Both mobile platforms target a 256-frame render quantum. Device buffers
-  are bounded by the C++ engine's static capacity and all render scratch storage is allocated
-  before the callback or render loop starts.
+- **Sample rate** – The engine expects a 48 kHz output device. On iOS set
+  `AVAudioSession.sharedInstance().setPreferredSampleRate(48000)` before the TurboModule loads.
+  On Android request a 48 kHz output with `AudioTrack`/`AAudio` attributes or fall back to
+  `AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE`.
+- **Frames per buffer** – Both mobile platforms should target a 256 frame quantum to match the
+  render scratch buffers allocated by the C++ bridge. iOS achieves this through
+  `setPreferredIOBufferDuration(256.0 / 48000.0)` and Android by supplying
+  `AudioTrack.getMinBufferSize(sampleRate, channelConfig, format)` tuned for 256 frames.
 - **Error handling** – If the device cannot satisfy the requested configuration the JavaScript
-  bootstrap shuts down any partially initialized engine and falls back to a passive environment.
-  A missing native engine or sample loader follows the same path. Keep the native logging
-  (`os_log` / Logcat) enabled so configuration mismatches can be diagnosed during bring-up.
-  The iOS bridge catches Objective-C framework exceptions at the Promise boundary and reports the
-  failing AVFoundation phase as a normal rejection; no native exception may escape into React
-  Native's asynchronous TurboModule dispatcher. Promise outcomes are captured first and delivered
-  once outside the operation catch scopes, preventing a callback exception from triggering a
-  second settlement attempt.
-- **First-launch session** – Persistent production and passive environments create an empty
-  `Untitled Session`. The richer demo fixture references development-only sample paths and is
-  intentionally limited to the explicit demo environment, so a clean mobile install never starts
-  with unresolved WAV files.
+  bootstrap falls back to a passive environment. Keep the native logging (`os_log` / Logcat)
+  enabled so configuration mismatches can be diagnosed during bring-up.
 - **Installer metadata** – Run `scripts/daftcitadel.sh` so the runtime emits
   `~/DaftCitadel/citadel_profile.json` and `~/DaftCitadel/plugin_cache_hints.json`. The TypeScript
   session environment reads these files to preload plugin caches and align sample directories with
@@ -87,18 +66,12 @@ assumptions baked into `createProductionSessionEnvironment`:
 
 The render thread attempts to acquire the bridge mutex with `std::try_to_lock`; on contention it
 renders silence for the current quantum, preventing audio drop-outs caused by blocking locks.
-Device teardown always stops and joins/detaches the platform callback before destroying the C++
-graph, including React Native invalidation and fast-refresh lifecycles.
-On iOS, device lifecycle work is serialized on a dedicated audio-control queue; the real-time
-render callback remains owned by `AURemoteIO` and never runs on that control queue.
 
 ## DSP Nodes and Routing
 
 - `SineOscillatorNode` – phase-accurate oscillator with frequency parameter.
 - `GainNode` – multiplicative gain stage, frequently scheduled for automation curves.
 - `MixerNode` – collects upstream buffers into a summing bus.
-- `TrackOutputNode` – applies the track's dB-derived gain, pan, mute, and solo state.
-- `ClipPlayerNode` – resolves registered planar PCM buffers without retaining JavaScript memory.
 
 Connections are stored as ordered `source → destination` pairs. Each render pass walks the
 graph in topological order, accumulating upstream audio into per-node scratch buffers before
@@ -106,12 +79,6 @@ invoking `DSPNode::process`. To emit audio to the hardware output, connect a nod
 special destination `SceneGraph::kOutputBusId` (mirrored in TypeScript as `OUTPUT_BUS`). If no
 explicit output is connected, sink nodes (those without outgoing edges) are mixed into the
 final buffer as a fallback.
-
-Enabled audio routes must be acyclic. Session validation rejects feedback cycles before a
-transition is staged, and `SceneGraph::connect` independently refuses self-cycles or edges that
-would close a longer cycle. A routing connection's optional `gain` defaults to unity; non-unity
-values are realised as stable native `GainNode` stages between the source and destination so the
-persisted routing contract matches rendered output.
 
 ## Automation and Scheduling
 
@@ -123,8 +90,7 @@ persisted routing contract matches rendered output.
   code.
 
 Unit tests in `src/audio/__tests__/automation.test.ts` guarantee buffer-accurate quantization
-and sorted automation points. Scheduled callbacks resolve a node by ID and incarnation at dispatch
-time, so removing or replacing a node cannot leave a dangling pointer in the scheduler.
+and sorted automation points.
 
 ## Clip Buffer Registry
 
@@ -139,10 +105,11 @@ thread never touches React Native memory. The flow is:
    `native/audio/android/src/main/java/com/daftcitadel/audio/AudioEngineModule.kt`) copy the
    channel data into native heap storage and register it with
    `daft::audio::bridge::AudioEngineBridge::registerClipBuffer`.
-   The legacy React Native boundary transports each contiguous channel as base64-encoded
-   Float32 PCM. iOS decodes it into immutable `std::vector<float>` storage; Android normalises it
-   into `FloatArray` slices before crossing the JNI boundary. This explicit wire shape avoids
-   platform-dependent `ArrayBuffer` coercion in legacy module interop.
+   - **iOS** accepts `ArrayBuffer` instances (bridged as `NSData`) and stores them as immutable
+     `std::vector<float>` per channel.
+   - **Android** supports Float32 sample arrays, Node-style `{ type: 'Buffer', data: number[] }`
+     payloads, or base64-encoded Float32 PCM. All forms are normalised into `FloatArray` slices
+     before crossing the JNI boundary.
 3. The bridge exposes `AudioEngineBridge::clipBufferForKey` so future clip playback nodes can
    resolve the metadata and channel spans without re-copying data across language boundaries.
 4. When a clip is removed from the session graph, `ClipBufferCache` decrements its reference count
@@ -159,15 +126,10 @@ tests.
 
 - **Custom DSP nodes**: Derive from `DSPNode`, implement `process`, and register via the
   bridge `addNode` helpers.
-- **Platform services**: Extend the existing Android `AudioTrack` or iOS `AVAudioEngine` drivers
-  to expose route changes, interruptions, and hardware diagnostics.
+- **Platform services**: Extend the JNI/Objective-C++ bridges to expose diagnostics or
+  hardware integration (e.g., Android AAudio or iOS AVAudioEngine backends).
 - **Scheduling**: Use `SceneGraph::scheduleAutomation` to run arbitrary parameter updates at
   known frames; additional helpers can wrap more complex envelopes.
-
-The current graph exposes one main audio bus. MIDI and sidechain routing edges are explicitly
-warned and skipped until dedicated native buses land. AUv3/VST host discovery is wired, but a
-production plugin render callback still needs to be registered with the device path before plugin
-DSP can contribute to that main bus.
 
 ## Build and Testing
 
@@ -181,25 +143,24 @@ DSP can contribute to that main bus.
    cmake --build audio-engine/build
    ```
 
-5. Regenerate the Expo native hosts with `npm run prebuild`; the local module and config plugin
-   register the bridge on both platforms.
+5. Integrate with React Native by registering the `AudioEngineModule` TurboModule on both
+   mobile platforms (see the section below for specifics).
 
 ## React Native TurboModule bridge
 
 - **iOS** – `native/audio/ios/AudioEngineModule.mm` conforms to `RCTBridgeModule` and
   `RCTTurboModule`, forwards every method in `src/audio/NativeAudioEngine.ts` to
   `daft::audio::bridge::AudioEngineBridge`, and surfaces diagnostics via `getRenderDiagnostics`.
-  `DaftCitadelNative.podspec` compiles those sources and the
-  device driver into the generated Xcode workspace.
+  Add the source file plus the `audio-engine` headers to your Xcode target so that
+  `TurboModuleRegistry.getEnforcing('AudioEngineModule')` resolves on-device.
 - **Android** – `native/audio/android/src/main/java/com/daftcitadel/audio/AudioEngineModule.kt`
   implements the TurboModule interface and delegates to JNI helpers located under
   `native/audio/android/src/main/jni/AudioEngineModule.cpp`. The accompanying
   `CMakeLists.txt` builds a shared library named `daft_audio_engine_module` that links the
-  core engine (`audio-engine/`) and exposes the TurboModule through `AudioEnginePackage`, which
-  the Expo config plugin inserts into `MainApplication`.
+  core engine (`audio-engine/`) and exposes the TurboModule through
+  `AudioEnginePackage`.
 - **Unit tests** – `src/audio/__tests__/AudioEngineNative.test.ts` performs a smoke test that
   initializes the native module, adds a node, connects it to `OUTPUT_BUS`, and confirms the
-  diagnostics contract (including `initialized` and the aggregate `clipBufferBytes` field
-  surfaced by `getRenderDiagnostics`). `src/audio/__tests__/IOSAudioBridgeSafety.test.ts` guards
-  the iOS exception boundary and generation-owned teardown contract. The React Native Jest mock
-  (`__mocks__/react-native.ts`) tracks TurboModule state to keep the test suite deterministic.
+  diagnostics contract (including the aggregate `clipBufferBytes` field surfaced by
+  `getRenderDiagnostics`). The React Native Jest mock (`__mocks__/react-native.ts`) has been
+  extended to track TurboModule state to keep the test suite green.

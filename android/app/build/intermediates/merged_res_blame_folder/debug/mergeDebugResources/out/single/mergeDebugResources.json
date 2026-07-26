@@ -1,0 +1,110 @@
+[
+    {
+        "merged": "com.daftcitadel.citadel.app-debug-39:/drawable-hdpi_splashscreen_logo.png.flat",
+        "source": "com.daftcitadel.citadel.app-main-41:/drawable-hdpi/splashscreen_logo.png"
+    },
+    {
+        "merged": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-debug-39:/mipmap-xhdpi_ic_launcher.png.flat",
+        "source": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-main-41:/mipmap-xhdpi/ic_launcher.png"
+    },
+    {
+        "merged": "com.daftcitadel.citadel.app-debug-39:/drawable-xxxhdpi_splashscreen_logo.png.flat",
+        "source": "com.daftcitadel.citadel.app-main-41:/drawable-xxxhdpi/splashscreen_logo.png"
+    },
+    {
+        "merged": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-debug-39:/mipmap-mdpi_ic_launcher_round.png.flat",
+        "source": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-main-41:/mipmap-mdpi/ic_launcher_round.png"
+    },
+    {
+        "merged": "com.daftcitadel.citadel.app-debug-39:/drawable-xxhdpi_splashscreen_logo.png.flat",
+        "source": "com.daftcitadel.citadel.app-main-41:/drawable-xxhdpi/splashscreen_logo.png"
+    },
+    {
+        "merged": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-debug-39:/mipmap-xxxhdpi_ic_launcher_round.png.flat",
+        "source": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-main-41:/mipmap-xxxhdpi/ic_launcher_round.png"
+    },
+    {
+        "merged": "com.daftcitadel.citadel.app-debug-39:/mipmap-xhdpi_ic_launcher.webp.flat",
+        "source": "com.daftcitadel.citadel.app-main-41:/mipmap-xhdpi/ic_launcher.webp"
+    },
+    {
+        "merged": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-debug-39:/mipmap-xxhdpi_ic_launcher.png.flat",
+        "source": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-main-41:/mipmap-xxhdpi/ic_launcher.png"
+    },
+    {
+        "merged": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-debug-39:/mipmap-hdpi_ic_launcher.png.flat",
+        "source": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-main-41:/mipmap-hdpi/ic_launcher.png"
+    },
+    {
+        "merged": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-debug-39:/mipmap-mdpi_ic_launcher.png.flat",
+        "source": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-main-41:/mipmap-mdpi/ic_launcher.png"
+    },
+    {
+        "merged": "com.daftcitadel.citadel.app-debug-39:/mipmap-hdpi_ic_launcher_round.webp.flat",
+        "source": "com.daftcitadel.citadel.app-main-41:/mipmap-hdpi/ic_launcher_round.webp"
+    },
+    {
+        "merged": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-debug-39:/mipmap-xxxhdpi_ic_launcher.png.flat",
+        "source": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-main-41:/mipmap-xxxhdpi/ic_launcher.png"
+    },
+    {
+        "merged": "com.daftcitadel.citadel.app-debug-39:/mipmap-hdpi_ic_launcher.webp.flat",
+        "source": "com.daftcitadel.citadel.app-main-41:/mipmap-hdpi/ic_launcher.webp"
+    },
+    {
+        "merged": "com.daftcitadel.citadel.app-debug-39:/drawable-mdpi_splashscreen_logo.png.flat",
+        "source": "com.daftcitadel.citadel.app-main-41:/drawable-mdpi/splashscreen_logo.png"
+    },
+    {
+        "merged": "com.daftcitadel.citadel.app-debug-39:/mipmap-xxhdpi_ic_launcher.webp.flat",
+        "source": "com.daftcitadel.citadel.app-main-41:/mipmap-xxhdpi/ic_launcher.webp"
+    },
+    {
+        "merged": "com.daftcitadel.citadel.app-debug-39:/mipmap-mdpi_ic_launcher_round.webp.flat",
+        "source": "com.daftcitadel.citadel.app-main-41:/mipmap-mdpi/ic_launcher_round.webp"
+    },
+    {
+        "merged": "com.daftcitadel.citadel.app-debug-39:/drawable-xhdpi_splashscreen_logo.png.flat",
+        "source": "com.daftcitadel.citadel.app-main-41:/drawable-xhdpi/splashscreen_logo.png"
+    },
+    {
+        "merged": "com.daftcitadel.citadel.app-debug-39:/mipmap-xxhdpi_ic_launcher_round.webp.flat",
+        "source": "com.daftcitadel.citadel.app-main-41:/mipmap-xxhdpi/ic_launcher_round.webp"
+    },
+    {
+        "merged": "com.daftcitadel.citadel.app-debug-39:/mipmap-xxxhdpi_ic_launcher.webp.flat",
+        "source": "com.daftcitadel.citadel.app-main-41:/mipmap-xxxhdpi/ic_launcher.webp"
+    },
+    {
+        "merged": "com.daftcitadel.citadel.app-debug-39:/mipmap-mdpi_ic_launcher.webp.flat",
+        "source": "com.daftcitadel.citadel.app-main-41:/mipmap-mdpi/ic_launcher.webp"
+    },
+    {
+        "merged": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-debug-39:/mipmap-hdpi_ic_launcher_round.png.flat",
+        "source": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-main-41:/mipmap-hdpi/ic_launcher_round.png"
+    },
+    {
+        "merged": "com.daftcitadel.citadel.app-debug-39:/drawable_ic_launcher_background.xml.flat",
+        "source": "com.daftcitadel.citadel.app-main-41:/drawable/ic_launcher_background.xml"
+    },
+    {
+        "merged": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-debug-39:/drawable_rn_edit_text_material.xml.flat",
+        "source": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-main-41:/drawable/rn_edit_text_material.xml"
+    },
+    {
+        "merged": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-debug-39:/mipmap-xhdpi_ic_launcher_round.png.flat",
+        "source": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-main-41:/mipmap-xhdpi/ic_launcher_round.png"
+    },
+    {
+        "merged": "com.daftcitadel.citadel.app-debug-39:/mipmap-xhdpi_ic_launcher_round.webp.flat",
+        "source": "com.daftcitadel.citadel.app-main-41:/mipmap-xhdpi/ic_launcher_round.webp"
+    },
+    {
+        "merged": "com.daftcitadel.citadel.app-debug-39:/mipmap-xxxhdpi_ic_launcher_round.webp.flat",
+        "source": "com.daftcitadel.citadel.app-main-41:/mipmap-xxxhdpi/ic_launcher_round.webp"
+    },
+    {
+        "merged": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-debug-39:/mipmap-xxhdpi_ic_launcher_round.png.flat",
+        "source": "/home/ales27pm/.gradle/daemon/8.7/com.daftcitadel.citadel.app-main-41:/mipmap-xxhdpi/ic_launcher_round.png"
+    }
+]

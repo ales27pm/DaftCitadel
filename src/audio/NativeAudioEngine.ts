@@ -1,7 +1,5 @@
 import type { TurboModule } from 'react-native';
-import { TurboModuleRegistry, NativeModules } from 'react-native';
-
-import type { InstrumentParameterEvent, MidiEvent } from './Instruments';
+import { NativeModules, Platform, TurboModuleRegistry } from 'react-native';
 
 type NodeId = string;
 
@@ -36,7 +34,7 @@ export interface AudioEngineSpec extends TurboModule {
     sampleRate: number,
     channels: number,
     frames: number,
-    channelData: string[],
+    channelData: ArrayBuffer[],
   ): Promise<void>;
   unregisterClipBuffer(bufferKey: string): Promise<void>;
   removeNode(nodeId: NodeId): Promise<void>;
@@ -48,31 +46,9 @@ export interface AudioEngineSpec extends TurboModule {
     frame: number,
     value: number,
   ): Promise<void>;
-  sendMidiEvent(
-    nodeId: NodeId,
-    type: number,
-    channel: number,
-    data1: number,
-    data2: number,
-    frameOffset: number,
-  ): Promise<void>;
-  sendMidiEvents(nodeId: NodeId, events: MidiEvent[], replace: boolean): Promise<void>;
-  setInstrumentParameter(
-    nodeId: NodeId,
-    parameterId: number,
-    value: number,
-    frameOffset: number,
-  ): Promise<void>;
-  sendInstrumentParameters(
-    nodeId: NodeId,
-    events: InstrumentParameterEvent[],
-    replace: boolean,
-  ): Promise<void>;
-  allNotesOff(nodeId: NodeId): Promise<void>;
   startTransport(): Promise<void>;
   stopTransport(): Promise<void>;
   locateTransport(frame: number): Promise<void>;
-  setTransportLoop(startFrame: number, endFrame: number, enabled: boolean): Promise<void>;
   getTransportState(): Promise<{
     currentFrame: number;
     isPlaying: boolean;
@@ -82,43 +58,16 @@ export interface AudioEngineSpec extends TurboModule {
 
 const moduleName = 'AudioEngineModule';
 
-const resolveRegisteredModule = (): AudioEngineSpec | null => {
-  const registry = TurboModuleRegistry as typeof TurboModuleRegistry | undefined;
-  const modules = NativeModules as typeof NativeModules | undefined;
-  return (
-    (typeof registry?.get === 'function'
-      ? registry.get<AudioEngineSpec>(moduleName)
-      : null) ??
-    (modules?.[moduleName] as AudioEngineSpec | undefined) ??
-    null
-  );
-};
-
-// Keep imports safe when an embedding target intentionally omits native audio;
-// resolve the binding at access time so fast refresh and test hosts cannot retain
-// a stale module reference across native lifecycle changes.
-export const NativeAudioEngine = new Proxy({} as AudioEngineSpec, {
-  get: (target, property, receiver) => {
-    if (typeof property === 'symbol' || property === 'then') {
-      return undefined;
-    }
-    if (Reflect.has(target, property)) {
-      return Reflect.get(target, property, receiver);
-    }
-    const registeredModule = resolveRegisteredModule();
-    if (!registeredModule) {
-      return () =>
-        Promise.reject(
-          new Error(
-            `${moduleName}.${String(property)} is unavailable because the native module is not linked. Use an Expo development build that includes native audio.`,
-          ),
-        );
-    }
-    const value = Reflect.get(registeredModule as object, property);
-    return typeof value === 'function' ? value.bind(registeredModule) : value;
-  },
+const unavailableModule = new Proxy({} as AudioEngineSpec, {
+  get: () => () =>
+    Promise.reject(new Error(`${moduleName} is not available on this platform`)),
 });
 
+export const NativeAudioEngine: AudioEngineSpec =
+  Platform.OS === 'web'
+    ? unavailableModule
+    : TurboModuleRegistry.getEnforcing<AudioEngineSpec>(moduleName);
+
 export const isNativeModuleAvailable = (): boolean => {
-  return resolveRegisteredModule() != null;
+  return Platform.OS !== 'web' && NativeModules[moduleName] != null;
 };

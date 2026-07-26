@@ -26,7 +26,6 @@ const sourceFiles = [
   'audio-engine/src/DSPNode.cpp',
   'audio-engine/src/Scheduler.cpp',
   'audio-engine/src/SceneGraph.cpp',
-  'audio-engine/src/SceneGraphRealtimeBatch.cpp',
   'audio-engine/src/RealtimeControlPlane.cpp',
   'audio-engine/src/Automation.cpp',
   'audio-engine/src/Clock.cpp',

@@ -60,23 +60,23 @@ This roadmap outlines the GUI-focused development phase for Daft Citadel. It bui
 
 ### 5. Quality, Accessibility, and Release Engineering
 
-- Establish automated snapshot/interaction tests using React Native Testing Library for each screen; mock native modules to keep local runs deterministic.
+- Establish automated snapshot/interaction tests using React Native Testing Library for each screen; mock native modules to keep CI deterministic.
 - Audit accessibility roles/labels, ensuring components like [`NeonButton`](../src/ui/design-system/components.tsx) and transport controls expose VoiceOver/TalkBack hints. Add E2E sanity checks using Detox/Appium where feasible.
 - Integrate continuous profiling hooks (Flipper, custom diagnostics overlays) to monitor frame times and memory usage across device classes.
-- Gate merges through a recorded local `npm run verify` result plus platform builds for native changes.
+- Gate merges on `npm run lint`, `npm run test`, `npm run typecheck`, and `npm run prettier`, and add CI workflow definitions if absent.
 - Run `npm audit --production` during release candidates; document remediation steps for any high-severity advisories encountered.
 
 **Milestone:** GUI passes accessibility audits, automated test suites, and release packaging checklists on both iOS and Android.
 
 ## Timeline Proposal
 
-| Week | Focus        | Exit Criteria                                                                              |
-| ---- | ------------ | ------------------------------------------------------------------------------------------ |
-| 1–2  | Workstream 1 | Live session data flowing into UI, diagnostics polling verified by tests.                  |
-| 3–5  | Workstream 2 | Interactive arrangement editor with undo/redo, persisted updates, and expanded theming.    |
-| 6–7  | Workstream 3 | Mixer controls wired to engine, performance HUD charts, plugin crash recovery UI.          |
-| 8–9  | Workstream 4 | Collaboration + settings UX in place, documentation updated for sideloading and manifests. |
-| 10   | Workstream 5 | Accessibility audit, local verification green, platform release checklist signed off.      |
+| Week | Focus        | Exit Criteria                                                                                |
+| ---- | ------------ | -------------------------------------------------------------------------------------------- |
+| 1–2  | Workstream 1 | Live session data flowing into UI, diagnostics polling verified by tests.                    |
+| 3–5  | Workstream 2 | Interactive arrangement editor with undo/redo, persisted updates, and expanded theming.      |
+| 6–7  | Workstream 3 | Mixer controls wired to engine, performance HUD charts, plugin crash recovery UI.            |
+| 8–9  | Workstream 4 | Collaboration + settings UX in place, documentation updated for sideloading and manifests.   |
+| 10   | Workstream 5 | Accessibility audit, CI green on lint/test/typecheck/prettier, release checklist signed off. |
 
 ## Risks and Mitigations
 

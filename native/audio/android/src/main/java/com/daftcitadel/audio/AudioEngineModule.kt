@@ -14,7 +14,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToLong
-import kotlin.math.roundToInt
 import android.util.Base64
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -28,9 +27,6 @@ class AudioEngineModule(private val reactContext: ReactApplicationContext) :
   }
 
   private val maxFramesPerBuffer: Int by lazy { nativeMaxFramesPerBuffer() }
-  private val deviceDriver = AudioTrackDeviceDriver(::nativeRenderInterleaved)
-  @Volatile private var engineInitialized = false
-  @Volatile private var deviceConfiguration: DeviceConfiguration? = null
 
   /**
  * The module's name as exposed to React Native.
@@ -57,11 +53,6 @@ override fun getName(): String = NAME
       promise.reject("invalid_arguments", "sampleRate must be positive and finite")
       return
     }
-    val deviceSampleRate = sampleRate.roundToInt()
-    if (abs(sampleRate - deviceSampleRate.toDouble()) > 1e-6) {
-      promise.reject("invalid_arguments", "sampleRate must be an integer value")
-      return
-    }
     if (!framesPerBuffer.isFinite() || framesPerBuffer <= 0.0) {
       promise.reject("invalid_arguments", "framesPerBuffer must be positive and finite")
       return
@@ -80,16 +71,9 @@ override fun getName(): String = NAME
       return
     }
     try {
-      deviceDriver.stop()
-      clearConfigurationState()
       nativeInitialize(sampleRate, framesInt)
-      deviceConfiguration = DeviceConfiguration(deviceSampleRate, framesInt)
-      engineInitialized = true
       promise.resolve(null)
     } catch (error: Exception) {
-      clearConfigurationState()
-      deviceDriver.stop()
-      runCatching { nativeShutdown() }
       promise.reject("initialize_failed", error)
     }
   }
@@ -105,28 +89,18 @@ override fun getName(): String = NAME
   @ReactMethod
   fun shutdown(promise: Promise) {
     try {
-      deviceDriver.stop()
       nativeShutdown()
-      clearConfigurationState()
       promise.resolve(null)
     } catch (error: Exception) {
-      clearConfigurationState()
       promise.reject("shutdown_failed", error)
     }
-  }
-
-  override fun invalidate() {
-    clearConfigurationState()
-    deviceDriver.stop()
-    runCatching { nativeShutdown() }
-    super.invalidate()
   }
 
   /**
    * Adds a node to the audio engine graph using the provided identifier, type, and options.
    *
    * The `nodeId` and `nodeType` are trimmed and must be non-empty. The `options` map is sanitized into
-   * a normalized map while preserving string identifiers required by clip and plugin nodes.
+   * a String-to-Double map where numeric, boolean, and parseable-string values are converted to `Double`.
    * On success the provided `promise` is resolved; on failure it is rejected with an error code.
    *
    * @param nodeId Unique identifier for the node (trimmed; required).
@@ -347,7 +321,7 @@ override fun getName(): String = NAME
     promise: Promise
   ) {
     val sanitizedNodeId = nodeId.trim()
-    val sanitizedParameter = parameter.trim().lowercase(Locale.US)
+    val sanitizedParameter = parameter.trim()
     if (sanitizedNodeId.isEmpty() || sanitizedParameter.isEmpty()) {
       promise.reject("invalid_arguments", "nodeId and parameter are required")
       return
@@ -373,263 +347,6 @@ override fun getName(): String = NAME
     }
   }
 
-  @ReactMethod
-  fun sendMidiEvent(
-    nodeId: String,
-    type: Double,
-    channel: Double,
-    data1: Double,
-    data2: Double,
-    frameOffset: Double,
-    promise: Promise
-  ) {
-    val sanitizedNodeId = nodeId.trim()
-    if (sanitizedNodeId.isEmpty()) {
-      promise.reject("invalid_arguments", "nodeId is required")
-      return
-    }
-    try {
-      nativeSendMidiEvent(
-        sanitizedNodeId,
-        requireUnsignedInteger(type, "type", 5).toInt(),
-        requireUnsignedInteger(channel, "channel", 15).toInt(),
-        requireUnsignedInteger(data1, "data1", 127).toInt(),
-        requireUnsignedInteger(data2, "data2", 127).toInt(),
-        requireUnsignedInteger(frameOffset, "frameOffset", MAX_SAFE_JS_INTEGER)
-      )
-      promise.resolve(null)
-    } catch (error: IllegalArgumentException) {
-      promise.reject("invalid_arguments", error)
-    } catch (error: Exception) {
-      promise.reject("midi_event_failed", error)
-    }
-  }
-
-  @ReactMethod
-  fun sendMidiEvents(nodeId: String, events: ReadableArray, replace: Boolean, promise: Promise) {
-    val sanitizedNodeId = nodeId.trim()
-    if (sanitizedNodeId.isEmpty()) {
-      promise.reject("invalid_arguments", "nodeId is required")
-      return
-    }
-    try {
-      val count = events.size()
-      val frames = LongArray(count)
-      val types = IntArray(count)
-      val channels = IntArray(count)
-      val data1 = IntArray(count)
-      val data2 = IntArray(count)
-      for (index in 0 until count) {
-        if (events.getType(index) != ReadableType.Map) {
-          throw IllegalArgumentException("MIDI event at index $index must be an object")
-        }
-        val event = events.getMap(index)
-          ?: throw IllegalArgumentException("MIDI event at index $index is missing")
-        frames[index] = readUnsignedInteger(event, "frame", MAX_SAFE_JS_INTEGER)
-        types[index] = readUnsignedInteger(event, "type", 5).toInt()
-        channels[index] = readUnsignedInteger(event, "channel", 15).toInt()
-        data1[index] = readUnsignedInteger(event, "data1", 127).toInt()
-        data2[index] = readUnsignedInteger(event, "data2", 127).toInt()
-      }
-      nativeSendMidiEvents(sanitizedNodeId, frames, types, channels, data1, data2, replace)
-      promise.resolve(null)
-    } catch (error: IllegalArgumentException) {
-      promise.reject("invalid_arguments", error)
-    } catch (error: Exception) {
-      promise.reject("midi_batch_failed", error)
-    }
-  }
-
-  @ReactMethod
-  fun setInstrumentParameter(
-    nodeId: String,
-    parameterId: Double,
-    value: Double,
-    frameOffset: Double,
-    promise: Promise
-  ) {
-    val sanitizedNodeId = nodeId.trim()
-    if (sanitizedNodeId.isEmpty() || !value.isFinite()) {
-      promise.reject("invalid_arguments", "nodeId and a finite value are required")
-      return
-    }
-    try {
-      val parameter = requireUnsignedInteger(parameterId, "parameterId", 65535)
-      if (parameter == 0L) {
-        throw IllegalArgumentException("parameterId must be greater than zero")
-      }
-      nativeSetInstrumentParameter(
-        sanitizedNodeId,
-        parameter.toInt(),
-        value,
-        requireUnsignedInteger(frameOffset, "frameOffset", MAX_SAFE_JS_INTEGER)
-      )
-      promise.resolve(null)
-    } catch (error: IllegalArgumentException) {
-      promise.reject("invalid_arguments", error)
-    } catch (error: Exception) {
-      promise.reject("instrument_parameter_failed", error)
-    }
-  }
-
-  @ReactMethod
-  fun sendInstrumentParameters(
-    nodeId: String,
-    events: ReadableArray,
-    replace: Boolean,
-    promise: Promise
-  ) {
-    val sanitizedNodeId = nodeId.trim()
-    if (sanitizedNodeId.isEmpty()) {
-      promise.reject("invalid_arguments", "nodeId is required")
-      return
-    }
-    try {
-      val count = events.size()
-      val frames = LongArray(count)
-      val parameterIds = IntArray(count)
-      val values = DoubleArray(count)
-      for (index in 0 until count) {
-        if (events.getType(index) != ReadableType.Map) {
-          throw IllegalArgumentException(
-            "Instrument parameter event at index $index must be an object"
-          )
-        }
-        val event = events.getMap(index)
-          ?: throw IllegalArgumentException(
-            "Instrument parameter event at index $index is missing"
-          )
-        frames[index] = readUnsignedInteger(event, "frame", MAX_SAFE_JS_INTEGER)
-        parameterIds[index] = readUnsignedInteger(event, "parameterId", 65535).toInt()
-        if (parameterIds[index] == 0) {
-          throw IllegalArgumentException("parameterId must be greater than zero")
-        }
-        values[index] = readFiniteNumber(event, "value")
-      }
-      nativeSendInstrumentParameters(
-        sanitizedNodeId,
-        frames,
-        parameterIds,
-        values,
-        replace
-      )
-      promise.resolve(null)
-    } catch (error: IllegalArgumentException) {
-      promise.reject("invalid_arguments", error)
-    } catch (error: Exception) {
-      promise.reject("instrument_parameter_batch_failed", error)
-    }
-  }
-
-  @ReactMethod
-  fun allNotesOff(nodeId: String, promise: Promise) {
-    val sanitizedNodeId = nodeId.trim()
-    if (sanitizedNodeId.isEmpty()) {
-      promise.reject("invalid_arguments", "nodeId is required")
-      return
-    }
-    try {
-      nativeAllNotesOff(sanitizedNodeId)
-      promise.resolve(null)
-    } catch (error: Exception) {
-      promise.reject("all_notes_off_failed", error)
-    }
-  }
-
-  @ReactMethod
-  fun startTransport(promise: Promise) {
-    var startedDeviceForRequest = false
-    try {
-      val configuration = deviceConfiguration
-      check(engineInitialized && configuration != null) { "Audio engine is not initialized" }
-      if (!deviceDriver.isRunning()) {
-        deviceDriver.start(configuration.sampleRate, configuration.framesPerBuffer)
-        startedDeviceForRequest = true
-      }
-      check(deviceDriver.isRunning()) { "AudioTrack render driver failed to start" }
-      nativeStartTransport()
-      promise.resolve(null)
-    } catch (error: Exception) {
-      if (startedDeviceForRequest) {
-        deviceDriver.stop()
-      }
-      promise.reject("transport_start_failed", error)
-    }
-  }
-
-  @ReactMethod
-  fun stopTransport(promise: Promise) {
-    try {
-      nativeStopTransport()
-      deviceDriver.stop()
-      promise.resolve(null)
-    } catch (error: Exception) {
-      deviceDriver.stop()
-      promise.reject("transport_stop_failed", error)
-    }
-  }
-
-  @ReactMethod
-  fun locateTransport(frame: Double, promise: Promise) {
-    if (!frame.isFinite() || frame < 0.0) {
-      promise.reject("invalid_arguments", "frame must be a non-negative integer")
-      return
-    }
-    val frameTicks = frame.roundToLong()
-    if (abs(frame - frameTicks.toDouble()) > 1e-6) {
-      promise.reject("invalid_arguments", "frame must be a non-negative integer")
-      return
-    }
-    try {
-      nativeLocateTransport(frameTicks)
-      promise.resolve(null)
-    } catch (error: Exception) {
-      promise.reject("transport_locate_failed", error)
-    }
-  }
-
-  @ReactMethod
-  fun setTransportLoop(
-    startFrame: Double,
-    endFrame: Double,
-    enabled: Boolean,
-    promise: Promise
-  ) {
-    try {
-      val startTicks = requireUnsignedInteger(
-        startFrame,
-        "startFrame",
-        MAX_SAFE_JS_INTEGER
-      )
-      val endTicks = requireUnsignedInteger(endFrame, "endFrame", MAX_SAFE_JS_INTEGER)
-      if (enabled && startTicks >= endTicks) {
-        throw IllegalArgumentException(
-          "Enabled transport loop requires startFrame < endFrame"
-        )
-      }
-      nativeSetTransportLoop(startTicks, endTicks, enabled)
-      promise.resolve(null)
-    } catch (error: IllegalArgumentException) {
-      promise.reject("invalid_arguments", error)
-    } catch (error: Exception) {
-      promise.reject("transport_loop_failed", error)
-    }
-  }
-
-  @ReactMethod
-  fun getTransportState(promise: Promise) {
-    try {
-      val state = nativeGetTransportState()
-      val payload = Arguments.createMap().apply {
-        putDouble("currentFrame", state[0])
-        putBoolean("isPlaying", state[1] != 0.0)
-      }
-      promise.resolve(payload)
-    } catch (error: Exception) {
-      promise.reject("transport_state_failed", error)
-    }
-  }
-
   /**
    * Fetches runtime render diagnostics from the native audio engine and delivers them to JavaScript.
    *
@@ -649,7 +366,39 @@ override fun getName(): String = NAME
         if (payload.size >= 3) {
           putDouble("clipBufferBytes", payload[2])
         }
-        putBoolean("initialized", engineInitialized)
+        if (payload.size >= 4) {
+          putDouble("activeVoices", payload[3])
+        }
+        if (payload.size >= 5) {
+          putDouble("pendingInstrumentEvents", payload[4])
+        }
+        if (payload.size >= 6) {
+          putDouble("realtimeQueueDepth", payload[5])
+        }
+        if (payload.size >= 7) {
+          putDouble("realtimeQueueOverflows", payload[6])
+        }
+        if (payload.size >= 8) {
+          putDouble("realtimeCommandFailures", payload[7])
+        }
+        if (payload.size >= 9) {
+          putDouble("renderCount", payload[8])
+        }
+        if (payload.size >= 10) {
+          putDouble("averageRenderDurationMicros", payload[9])
+        }
+        if (payload.size >= 11) {
+          putDouble("maximumRenderDurationMicros", payload[10])
+        }
+        if (payload.size >= 12) {
+          putDouble("p50RenderDurationMicros", payload[11])
+        }
+        if (payload.size >= 13) {
+          putDouble("p95RenderDurationMicros", payload[12])
+        }
+        if (payload.size >= 14) {
+          putDouble("p99RenderDurationMicros", payload[13])
+        }
       }
       promise.resolve(diagnostics)
     } catch (error: Exception) {
@@ -674,13 +423,13 @@ private external fun nativeInitialize(sampleRate: Double, framesPerBuffer: Int)
  */
 private external fun nativeShutdown()
   /**
- * Adds a new node to the native audio engine graph with the specified identifier, type, and options.
+ * Adds a new node to the native audio engine graph with the specified identifier, type, and numeric options.
  *
  * @param nodeId The node's unique identifier (expected to be a trimmed, non-empty string).
  * @param nodeType The node's type name (expected to be a trimmed, non-empty string).
- * @param options A map of normalized option names to numeric or string values.
+ * @param options A map of option names to numeric values to configure the node; keys should be normalized lowercase strings.
  */
-private external fun nativeAddNode(nodeId: String, nodeType: String, options: Map<String, Any>)
+private external fun nativeAddNode(nodeId: String, nodeType: String, options: Map<String, Double>)
   /**
  * Removes the audio graph node identified by `nodeId` from the native audio engine.
  *
@@ -710,47 +459,6 @@ private external fun nativeDisconnectNodes(source: String, destination: String)
  * @param value The value to apply to the parameter at the specified frame.
  */
 private external fun nativeScheduleAutomation(nodeId: String, parameter: String, frame: Long, value: Double)
-private external fun nativeSendMidiEvent(
-  nodeId: String,
-  type: Int,
-  channel: Int,
-  data1: Int,
-  data2: Int,
-  frameOffset: Long
-)
-private external fun nativeSendMidiEvents(
-  nodeId: String,
-  frames: LongArray,
-  types: IntArray,
-  channels: IntArray,
-  data1: IntArray,
-  data2: IntArray,
-  replace: Boolean
-)
-private external fun nativeSetInstrumentParameter(
-  nodeId: String,
-  parameterId: Int,
-  value: Double,
-  frameOffset: Long
-)
-private external fun nativeSendInstrumentParameters(
-  nodeId: String,
-  frames: LongArray,
-  parameterIds: IntArray,
-  values: DoubleArray,
-  replace: Boolean
-)
-private external fun nativeAllNotesOff(nodeId: String)
-private external fun nativeStartTransport()
-private external fun nativeStopTransport()
-private external fun nativeLocateTransport(frame: Long)
-private external fun nativeSetTransportLoop(
-  startFrame: Long,
-  endFrame: Long,
-  enabled: Boolean
-)
-private external fun nativeGetTransportState(): DoubleArray
-private external fun nativeRenderInterleaved(output: FloatArray, channels: Int, frames: Int)
   /**
    * Registers a multi-channel Float32 clip buffer with the native audio engine.
    *
@@ -771,10 +479,21 @@ private external fun nativeRenderInterleaved(output: FloatArray, channels: Int, 
   /**
  * Fetches render diagnostics from the native audio engine.
  *
- * @return A DoubleArray with three elements:
+ * @return A DoubleArray with 14 elements when available:
  *         - index 0 — the number of xruns (underruns),
  *         - index 1 — the last render duration in microseconds,
- *         - index 2 — total clip buffer bytes currently registered.
+ *         - index 2 — total clip buffer bytes currently registered,
+ *         - index 3 — active voices,
+ *         - index 4 — pending instrument events,
+ *         - index 5 — realtime command queue depth,
+ *         - index 6 — realtime queue overflows,
+ *         - index 7 — realtime command failures,
+ *         - index 8 — render count,
+ *         - index 9 — average render duration in microseconds,
+ *         - index 10 — maximum render duration in microseconds,
+ *         - index 11 — p50 render duration in microseconds,
+ *         - index 12 — p95 render duration in microseconds,
+ *         - index 13 — p99 render duration in microseconds.
  */
 private external fun nativeGetDiagnostics(): DoubleArray
   /**
@@ -784,50 +503,17 @@ private external fun nativeGetDiagnostics(): DoubleArray
  */
 private external fun nativeMaxFramesPerBuffer(): Int
 
-  private fun requireUnsignedInteger(value: Double, field: String, maximum: Long): Long {
-    if (!value.isFinite() || value < 0.0 || value > maximum.toDouble()) {
-      throw IllegalArgumentException("$field must be a non-negative integer within range")
-    }
-    val integer = value.toLong()
-    if (value != integer.toDouble()) {
-      throw IllegalArgumentException("$field must be a non-negative integer within range")
-    }
-    return integer
-  }
-
-  private fun readFiniteNumber(map: ReadableMap, key: String): Double {
-    if (!map.hasKey(key) || map.isNull(key) || map.getType(key) != ReadableType.Number) {
-      throw IllegalArgumentException("$key must be a number")
-    }
-    val value = map.getDouble(key)
-    if (!value.isFinite()) {
-      throw IllegalArgumentException("$key must be finite")
-    }
-    return value
-  }
-
-  private fun readUnsignedInteger(map: ReadableMap, key: String, maximum: Long): Long =
-    requireUnsignedInteger(readFiniteNumber(map, key), key, maximum)
-
-  private fun clearConfigurationState() {
-    engineInitialized = false
-    deviceConfiguration = null
-  }
-
   /**
-   * Convert and normalize option entries while retaining native node identifiers.
+   * Convert and normalize option entries into numeric values keyed by normalized names.
    *
    * @param options A map of option entries whose values may be numbers, booleans, strings, or null.
-   * @return A map whose keys are trimmed and lowercased. Numbers and booleans
-   * are represented as `Double`; non-empty strings are preserved so JNI can
-   * retain values such as `bufferKey` and `hostInstanceId` while also parsing
-   * numeric/boolean string tokens where appropriate.
+   * @return A map whose keys are trimmed and lowercased, and whose values are `Double`. Numbers are converted to `Double`, booleans map to `1.0` (true) or `0.0` (false), and strings are interpreted as boolean tokens (`"true"|"yes"|"on"` → `1.0`, `"false"|"no"|"off"` → `0.0`) or parsed as numeric values. Entries with empty keys, empty strings, nulls, or unparseable string values are omitted.
    */
-  private fun sanitizeOptions(options: Map<String, Any?>): Map<String, Any> {
+  private fun sanitizeOptions(options: Map<String, Any?>): Map<String, Double> {
     if (options.isEmpty()) {
       return emptyMap()
     }
-    val sanitized = HashMap<String, Any>(options.size)
+    val sanitized = HashMap<String, Double>(options.size)
     options.forEach { (rawKey, rawValue) ->
       val key = rawKey.trim().lowercase(Locale.US)
       if (key.isEmpty()) {
@@ -841,7 +527,18 @@ private external fun nativeMaxFramesPerBuffer(): Int
           if (trimmed.isEmpty()) {
             return@forEach
           }
-          sanitized[key] = trimmed
+          val lowered = trimmed.lowercase(Locale.US)
+          when (lowered) {
+            "true", "yes", "on" -> {
+              sanitized[key] = 1.0
+              return@forEach
+            }
+            "false", "no", "off" -> {
+              sanitized[key] = 0.0
+              return@forEach
+            }
+          }
+          trimmed.toDoubleOrNull()?.let { sanitized[key] = it }
         }
       }
     }
@@ -959,7 +656,6 @@ private external fun nativeMaxFramesPerBuffer(): Int
 
   companion object {
     const val NAME = "AudioEngineModule"
-    private const val MAX_SAFE_JS_INTEGER = 9_007_199_254_740_991L
 
     private val libraryLoaded = AtomicBoolean(false)
 
@@ -974,9 +670,4 @@ private external fun nativeMaxFramesPerBuffer(): Int
       }
     }
   }
-
-  private data class DeviceConfiguration(
-    val sampleRate: Int,
-    val framesPerBuffer: Int
-  )
 }

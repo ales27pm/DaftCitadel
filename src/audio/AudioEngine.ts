@@ -1,13 +1,5 @@
-import { Buffer } from 'buffer';
-
 import { NativeAudioEngine, isNativeModuleAvailable } from './NativeAudioEngine';
 import { AutomationLane, publishAutomationLane, ClockSyncService } from './Automation';
-import type {
-  InstrumentParameterChange,
-  InstrumentParameterEvent,
-  LiveMidiEvent,
-  MidiEvent,
-} from './Instruments';
 
 type ChannelPayload =
   | ArrayBuffer
@@ -71,21 +63,10 @@ const normalizeChannelPayload = (payload: ChannelPayload): NormalizedChannel => 
     if (!(payload instanceof Float32Array)) {
       throw new Error('channelData typed views must be Float32Array (Float32 PCM)');
     }
-    if (isArrayBufferPayload(payload.buffer)) {
-      return {
-        buffer: payload.buffer,
-        byteOffset: payload.byteOffset,
-        byteLength: payload.byteLength,
-      };
-    }
-    // RN 0.81 types ArrayBufferView buffers as ArrayBufferLike, which can be a
-    // SharedArrayBuffer. Native bridge payloads require an owned ArrayBuffer.
-    const owned = new Uint8Array(payload.byteLength);
-    owned.set(new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength));
     return {
-      buffer: owned.buffer,
-      byteOffset: 0,
-      byteLength: owned.byteLength,
+      buffer: payload.buffer,
+      byteOffset: payload.byteOffset,
+      byteLength: payload.byteLength,
     };
   }
   if (isNodeBufferLike(payload)) {
@@ -111,38 +92,6 @@ const normalizeChannelPayload = (payload: ChannelPayload): NormalizedChannel => 
   );
 };
 
-const validateNodeId = (nodeId: string): string => {
-  const normalized = nodeId.trim();
-  if (normalized.length === 0) {
-    throw new Error('nodeId must be a non-empty string');
-  }
-  return normalized;
-};
-
-const validateFrame = (frame: number, field: string): number => {
-  if (!Number.isSafeInteger(frame) || frame < 0) {
-    throw new Error(`${field} must be a non-negative safe integer`);
-  }
-  return frame;
-};
-
-const validateMidiData = (
-  event: Pick<MidiEvent, 'type' | 'channel' | 'data1' | 'data2'>,
-): void => {
-  if (!Number.isInteger(event.type) || event.type < 0 || event.type > 5) {
-    throw new Error('MIDI event type is unsupported');
-  }
-  if (!Number.isInteger(event.channel) || event.channel < 0 || event.channel > 15) {
-    throw new Error('MIDI channel must be an integer between 0 and 15');
-  }
-  if (!Number.isInteger(event.data1) || event.data1 < 0 || event.data1 > 127) {
-    throw new Error('MIDI data1 must be an integer between 0 and 127');
-  }
-  if (!Number.isInteger(event.data2) || event.data2 < 0 || event.data2 > 127) {
-    throw new Error('MIDI data2 must be an integer between 0 and 127');
-  }
-};
-
 export type NodeConfiguration = {
   id: string;
   type: string;
@@ -159,14 +108,34 @@ export type RenderDiagnostics = {
   lastRenderDurationMicros: number;
   clipBufferBytes: number;
   initialized?: boolean;
+  activeVoices?: number;
+  pendingInstrumentEvents?: number;
+  realtimeQueueDepth?: number;
+  realtimeQueueOverflows?: number;
+  realtimeCommandFailures?: number;
+  renderCount?: number;
+  averageRenderDurationMicros?: number;
+  maximumRenderDurationMicros?: number;
+  p50RenderDurationMicros?: number;
+  p95RenderDurationMicros?: number;
+  p99RenderDurationMicros?: number;
 };
+
+export type AutomationPublisher = (
+  nodeId: string,
+  lane: AutomationLane,
+) => Promise<void>;
 
 export class AudioEngine {
   private readonly sampleRate: number;
   private readonly framesPerBuffer: number;
   private readonly clock: ClockSyncService;
+  private readonly publishAutomationLane: AutomationPublisher;
 
-  constructor(params: { sampleRate: number; framesPerBuffer: number; bpm: number }) {
+  constructor(
+    params: { sampleRate: number; framesPerBuffer: number; bpm: number },
+    options: { publishAutomation?: AutomationPublisher } = {},
+  ) {
     if (!isNativeModuleAvailable()) {
       throw new Error('AudioEngine native module is unavailable');
     }
@@ -183,6 +152,7 @@ export class AudioEngine {
       params.framesPerBuffer,
       params.bpm,
     );
+    this.publishAutomationLane = options.publishAutomation ?? publishAutomationLane;
   }
 
   public getClock(): ClockSyncService {
@@ -202,20 +172,11 @@ export class AudioEngine {
       return;
     }
 
-    const addedNodeIds: string[] = [];
-    try {
-      // Native graph mutation is ordered so a failed batch can be rolled back
-      // deterministically instead of leaving an unknown Promise.all prefix.
-      for (const node of nodes) {
-        await NativeAudioEngine.addNode(node.id, node.type, node.options ?? {});
-        addedNodeIds.push(node.id);
-      }
-    } catch (error) {
-      await Promise.allSettled(
-        addedNodeIds.reverse().map((nodeId) => NativeAudioEngine.removeNode(nodeId)),
-      );
-      throw error;
-    }
+    await Promise.all(
+      nodes.map((node) =>
+        NativeAudioEngine.addNode(node.id, node.type, node.options ?? {}),
+      ),
+    );
   }
 
   public async connect(source: string, destination: string): Promise<void> {
@@ -227,106 +188,7 @@ export class AudioEngine {
   }
 
   public async publishAutomation(nodeId: string, lane: AutomationLane): Promise<void> {
-    await publishAutomationLane(nodeId, lane);
-  }
-
-  public async sendMidiEvent(nodeId: string, event: LiveMidiEvent): Promise<void> {
-    const normalizedNodeId = validateNodeId(nodeId);
-    validateMidiData(event);
-    const frameOffset = validateFrame(event.frameOffset ?? 0, 'frameOffset');
-    await NativeAudioEngine.sendMidiEvent(
-      normalizedNodeId,
-      event.type,
-      event.channel,
-      event.data1,
-      event.data2,
-      frameOffset,
-    );
-  }
-
-  public async sendMidiEvents(
-    nodeId: string,
-    events: ReadonlyArray<MidiEvent>,
-    options: { replace?: boolean } = {},
-  ): Promise<void> {
-    const normalizedNodeId = validateNodeId(nodeId);
-    if (!Array.isArray(events)) {
-      throw new Error('events must be an array');
-    }
-    const normalizedEvents = events.map((event) => {
-      validateMidiData(event);
-      return {
-        ...event,
-        frame: validateFrame(event.frame, 'event frame'),
-      };
-    });
-    normalizedEvents.sort((left, right) => left.frame - right.frame);
-    await NativeAudioEngine.sendMidiEvents(
-      normalizedNodeId,
-      normalizedEvents,
-      options.replace ?? false,
-    );
-  }
-
-  public async setInstrumentParameter(
-    nodeId: string,
-    change: InstrumentParameterChange,
-  ): Promise<void> {
-    const normalizedNodeId = validateNodeId(nodeId);
-    if (
-      !Number.isInteger(change.parameterId) ||
-      change.parameterId <= 0 ||
-      change.parameterId > 0xffff
-    ) {
-      throw new Error('parameterId must be an unsigned 16-bit integer');
-    }
-    if (!Number.isFinite(change.value)) {
-      throw new Error('instrument parameter value must be finite');
-    }
-    const frameOffset = validateFrame(change.frameOffset ?? 0, 'frameOffset');
-    await NativeAudioEngine.setInstrumentParameter(
-      normalizedNodeId,
-      change.parameterId,
-      change.value,
-      frameOffset,
-    );
-  }
-
-  public async sendInstrumentParameters(
-    nodeId: string,
-    events: ReadonlyArray<InstrumentParameterEvent>,
-    options: { replace?: boolean } = {},
-  ): Promise<void> {
-    const normalizedNodeId = validateNodeId(nodeId);
-    if (!Array.isArray(events)) {
-      throw new Error('events must be an array');
-    }
-    const normalizedEvents = events.map((event) => {
-      if (
-        !Number.isInteger(event.parameterId) ||
-        event.parameterId <= 0 ||
-        event.parameterId > 0xffff
-      ) {
-        throw new Error('parameterId must be an unsigned 16-bit integer');
-      }
-      if (!Number.isFinite(event.value)) {
-        throw new Error('instrument parameter value must be finite');
-      }
-      return {
-        ...event,
-        frame: validateFrame(event.frame, 'event frame'),
-      };
-    });
-    normalizedEvents.sort((left, right) => left.frame - right.frame);
-    await NativeAudioEngine.sendInstrumentParameters(
-      normalizedNodeId,
-      normalizedEvents,
-      options.replace ?? false,
-    );
-  }
-
-  public async allNotesOff(nodeId: string): Promise<void> {
-    await NativeAudioEngine.allNotesOff(validateNodeId(nodeId));
+    await this.publishAutomationLane(nodeId, lane);
   }
 
   public async startTransport(): Promise<void> {
@@ -345,27 +207,6 @@ export class AudioEngine {
       throw new Error('frame must be non-negative');
     }
     await NativeAudioEngine.locateTransport(Math.floor(frame));
-  }
-
-  public async setTransportLoop(
-    startFrame: number,
-    endFrame: number,
-    enabled: boolean,
-  ): Promise<void> {
-    const normalizedStart = validateFrame(startFrame, 'startFrame');
-    const normalizedEnd = validateFrame(endFrame, 'endFrame');
-    if (enabled && normalizedStart >= normalizedEnd) {
-      throw new Error(
-        'Enabled transport loop requires startFrame to be less than endFrame',
-      );
-    }
-    const setNativeLoop = NativeAudioEngine.setTransportLoop;
-    if (typeof setNativeLoop !== 'function') {
-      throw new Error(
-        'Native transport loops are unavailable; install a development build that includes the current native audio module',
-      );
-    }
-    await setNativeLoop(normalizedStart, normalizedEnd, enabled);
   }
 
   public async getTransportState(): Promise<TransportState> {
@@ -397,7 +238,28 @@ export class AudioEngine {
       !Number.isFinite(diagnostics.lastRenderDurationMicros) ||
       !Number.isFinite(diagnostics.clipBufferBytes) ||
       (diagnostics.initialized !== undefined &&
-        typeof diagnostics.initialized !== 'boolean')
+        typeof diagnostics.initialized !== 'boolean') ||
+      (diagnostics.activeVoices !== undefined &&
+        !Number.isFinite(diagnostics.activeVoices)) ||
+      (diagnostics.pendingInstrumentEvents !== undefined &&
+        !Number.isFinite(diagnostics.pendingInstrumentEvents)) ||
+      (diagnostics.realtimeQueueDepth !== undefined &&
+        !Number.isFinite(diagnostics.realtimeQueueDepth)) ||
+      (diagnostics.realtimeQueueOverflows !== undefined &&
+        !Number.isFinite(diagnostics.realtimeQueueOverflows)) ||
+      (diagnostics.realtimeCommandFailures !== undefined &&
+        !Number.isFinite(diagnostics.realtimeCommandFailures)) ||
+      (diagnostics.renderCount !== undefined && !Number.isFinite(diagnostics.renderCount)) ||
+      (diagnostics.averageRenderDurationMicros !== undefined &&
+        !Number.isFinite(diagnostics.averageRenderDurationMicros)) ||
+      (diagnostics.maximumRenderDurationMicros !== undefined &&
+        !Number.isFinite(diagnostics.maximumRenderDurationMicros)) ||
+      (diagnostics.p50RenderDurationMicros !== undefined &&
+        !Number.isFinite(diagnostics.p50RenderDurationMicros)) ||
+      (diagnostics.p95RenderDurationMicros !== undefined &&
+        !Number.isFinite(diagnostics.p95RenderDurationMicros)) ||
+      (diagnostics.p99RenderDurationMicros !== undefined &&
+        !Number.isFinite(diagnostics.p99RenderDurationMicros))
     ) {
       throw new Error('AudioEngine returned invalid diagnostics payload');
     }
@@ -459,7 +321,7 @@ export class AudioEngine {
           `channelData[${index}] byteLength ${contiguousBuffer.byteLength} is insufficient for ${frames} frames`,
         );
       }
-      return Buffer.from(new Uint8Array(contiguousBuffer)).toString('base64');
+      return contiguousBuffer;
     });
     await NativeAudioEngine.registerClipBuffer(
       bufferKey,
@@ -482,9 +344,7 @@ export class AudioEngine {
       return;
     }
 
-    for (const nodeId of nodeIds) {
-      await NativeAudioEngine.removeNode(nodeId);
-    }
+    await Promise.all(nodeIds.map((nodeId) => NativeAudioEngine.removeNode(nodeId)));
   }
 }
 

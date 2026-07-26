@@ -5,7 +5,6 @@ import {
   Session,
   SessionMetadata,
   Track,
-  type InstrumentRoutingNode,
 } from '../../session';
 import {
   SessionDiagnosticsView,
@@ -33,9 +32,9 @@ const hashString = (input: string): number => {
 };
 
 const parseTimeSignature = (
-  timeSignature: string,
+  timeSignature: string | undefined,
 ): { numerator: number; denominator: number } => {
-  const [rawNumerator, rawDenominator] = timeSignature.split('/');
+  const [rawNumerator, rawDenominator] = (timeSignature ?? '4/4').split('/');
   const numerator = Number.parseInt(rawNumerator ?? '4', 10);
   const denominator = Number.parseInt(rawDenominator ?? '4', 10);
   return {
@@ -210,10 +209,6 @@ const buildTrackViewModel = (
       ? 0
       : clamp(dbToLinear(track.volume) * peakAutomation * renderAttenuation, 0, 1);
   const plugins = buildPluginChain(track.routing.graph, pluginCrashes);
-  const instrumentNode = track.routing.graph?.nodes.find(
-    (node): node is InstrumentRoutingNode =>
-      node.type === 'instrument' && node.instrumentType === 'juno106',
-  );
   return {
     id: track.id,
     name: track.name,
@@ -228,15 +223,6 @@ const buildTrackViewModel = (
     midiNotes,
     meterLevel,
     plugins,
-    instrument: instrumentNode
-      ? {
-          nodeId: instrumentNode.id,
-          instrumentType: instrumentNode.instrumentType,
-          label: instrumentNode.label,
-          parameters: { ...instrumentNode.parameters },
-          preset: instrumentNode.preset ? { ...instrumentNode.preset } : undefined,
-        }
-      : undefined,
   };
 };
 
@@ -542,7 +528,7 @@ export const buildTransport = (
 
   return {
     bpm: session.metadata.bpm,
-    timeSignature: session.metadata.timeSignature,
+    timeSignature: session.metadata.timeSignature ?? '4/4',
     lengthBeats: totalBeats,
     totalBars,
     playheadBeats,

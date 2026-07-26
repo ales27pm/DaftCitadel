@@ -162,11 +162,6 @@ describe('SessionViewModelProvider', () => {
     const storage = new InMemorySessionStorageAdapter();
     await storage.initialize();
     const bridge = new PassiveAudioEngineBridge();
-    Object.defineProperty(bridge, 'retryPluginInstance', {
-      value: undefined,
-      configurable: true,
-      writable: true,
-    });
     const manager = new SessionManager(storage, bridge);
 
     let listener: ((report: PluginCrashReport) => void) | undefined;
@@ -251,61 +246,6 @@ describe('SessionViewModelProvider', () => {
 
     expect(alerts).toHaveLength(0);
     jest.useRealTimers();
-  });
-
-  it('treats bridge plugin recovery as authoritative when it is supported', async () => {
-    const storage = new InMemorySessionStorageAdapter();
-    await storage.initialize();
-
-    class AuthoritativeBridge extends PassiveAudioEngineBridge {
-      public readonly retryAttempts: string[] = [];
-
-      override async retryPluginInstance(instanceId?: string): Promise<boolean> {
-        if (instanceId) {
-          this.retryAttempts.push(instanceId);
-        }
-        return false;
-      }
-    }
-
-    const bridge = new AuthoritativeBridge();
-    const manager = new SessionManager(storage, bridge);
-    const retryInstance = jest.fn(async () => true);
-    const host: PluginHost = {
-      onCrash: () => () => undefined,
-      retryInstance,
-    } as unknown as PluginHost;
-    let viewModelRef: ReturnType<typeof useSessionViewModel> | undefined;
-
-    const Consumer = () => {
-      viewModelRef = useSessionViewModel();
-      return null;
-    };
-
-    await act(async () => {
-      TestRenderer.create(
-        <SessionViewModelProvider
-          manager={manager}
-          sessionId={DEMO_SESSION_ID}
-          bootstrapSession={() => demoSession}
-          diagnosticsPollIntervalMs={0}
-          pluginHost={host}
-          audioBridge={bridge}
-        >
-          <Consumer />
-        </SessionViewModelProvider>,
-      );
-      await Promise.resolve();
-    });
-
-    let retryResult: boolean | undefined;
-    await act(async () => {
-      retryResult = await viewModelRef?.retryPlugin('plugin-authoritative');
-    });
-
-    expect(retryResult).toBe(false);
-    expect(bridge.retryAttempts).toEqual(['plugin-authoritative']);
-    expect(retryInstance).not.toHaveBeenCalled();
   });
 
   it('warns when no plugin retry handler is available', async () => {

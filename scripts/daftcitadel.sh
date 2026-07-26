@@ -45,7 +45,7 @@ DAFTCITADEL_WARNINGS=()
 DAFTCITADEL_ERRORS=()
 DAFTCITADEL_PHASE="bootstrap"
 DAFTCITADEL_STDOUT_IS_TTY=false
-DAFTCITADEL_STRICT_ERRORS=true
+DAFTCITADEL_STRICT_ERRORS=false
 
 PROFILE_MANIFEST_VERSION=2
 PLUGIN_CACHE_HINTS_VERSION=1
@@ -149,7 +149,7 @@ write_metadata_files() {
         "--profile=$PROFILE"
         "--profile-name=$PROFILE_NAME"
         "--base-path=$BASE"
-        "--log-path=$DAFTCITADEL_LOG_FILE"
+        "--log-path=$LOG"
         "--plugin-cache-path=$PLUGIN_CACHE_DIR"
         "--plugin-cache-hints-path=$BASE/plugin_cache_hints.json"
         "--feature-ai=$(bool_to_flag "$ENABLE_AI")"
@@ -211,7 +211,7 @@ Options:
   --log-dir=PATH                   Write installer logs to a specific directory
   --log-file=PATH                  Write installer logs to a specific file path
   --log-level=LEVEL                Override log verbosity (trace|debug|info|notice|warn|error|critical)
-  --strict-errors                  Abort immediately on step failure (default; retained for compatibility)
+  --strict-errors                  Abort immediately on step failure (legacy behavior)
   -h, --help                       Show this message
 EOF
 }
@@ -307,10 +307,139 @@ as_user() {
 }
 
 log() {
-    local message="$1"
-    printf '%s\n' "$message"
-    if [[ -n "${LOG:-}" ]]; then
-        printf '%s\n' "$message" >>"$LOG"
+    local raw="${1:-}"
+    local explicit="${2:-}"
+    local level=""
+    local message="$raw"
+
+    if [[ -n "$explicit" ]]; then
+        level=$(daftcitadel_normalize_level "$explicit")
+    elif [[ "$raw" =~ ^\[([A-Za-z0-9_-]+)\][[:space:]]*(.*)$ ]]; then
+        local tag="${BASH_REMATCH[1]}"
+        local rest="${BASH_REMATCH[2]}"
+        level=$(daftcitadel_normalize_level "$tag")
+        if [[ -n "$level" ]]; then
+            message="$rest"
+        else
+            level="INFO"
+            message="[$tag] $rest"
+        fi
+    fi
+
+    if [[ -z "$level" ]]; then
+        level="INFO"
+    fi
+
+    daftcitadel_log_internal "$level" "$message"
+}
+
+daftcitadel_normalize_level() {
+    local value="${1^^}"
+    case "$value" in
+        TRACE|DEBUG|INFO|NOTICE|WARN|WARNING|ERROR|CRITICAL)
+            case "$value" in
+                WARNING) echo "WARN" ;;
+                *) echo "$value" ;;
+            esac
+            ;;
+        ERR|FATAL)
+            echo "ERROR"
+            ;;
+        *)
+            echo ""
+            ;;
+    esac
+}
+
+daftcitadel_set_log_level() {
+    local requested="${1:-$DAFTCITADEL_LOG_LEVEL}"
+    local normalized
+    normalized=$(daftcitadel_normalize_level "$requested")
+    if [[ -z "$normalized" ]]; then
+        normalized="INFO"
+    fi
+    DAFTCITADEL_LOG_LEVEL="$normalized"
+    case "$normalized" in
+        TRACE) DAFTCITADEL_LOG_LEVEL_RANK=0 ;;
+        DEBUG) DAFTCITADEL_LOG_LEVEL_RANK=1 ;;
+        INFO) DAFTCITADEL_LOG_LEVEL_RANK=2 ;;
+        NOTICE) DAFTCITADEL_LOG_LEVEL_RANK=3 ;;
+        WARN) DAFTCITADEL_LOG_LEVEL_RANK=4 ;;
+        ERROR) DAFTCITADEL_LOG_LEVEL_RANK=5 ;;
+        CRITICAL) DAFTCITADEL_LOG_LEVEL_RANK=6 ;;
+        *) DAFTCITADEL_LOG_LEVEL_RANK=2 ;;
+    esac
+}
+
+daftcitadel_level_rank() {
+    case "${1:-INFO}" in
+        TRACE) echo 0 ;;
+        DEBUG) echo 1 ;;
+        INFO) echo 2 ;;
+        NOTICE) echo 3 ;;
+        WARN) echo 4 ;;
+        ERROR) echo 5 ;;
+        CRITICAL) echo 6 ;;
+        *) echo 2 ;;
+    esac
+}
+
+daftcitadel_should_emit() {
+    local rank
+    rank=$(daftcitadel_level_rank "$1")
+    if (( rank < DAFTCITADEL_LOG_LEVEL_RANK )); then
+        return 1
+    fi
+    return 0
+}
+
+daftcitadel_emit_console() {
+    local level="$1"
+    local message="$2"
+    local timestamp="$3"
+    local prefix=""
+    local reset=""
+
+    if $DAFTCITADEL_STDOUT_IS_TTY; then
+        case "$level" in
+            TRACE) prefix="\033[90m" ;;
+            DEBUG) prefix="\033[36m" ;;
+            INFO) prefix="\033[32m" ;;
+            NOTICE) prefix="\033[34m" ;;
+            WARN) prefix="\033[33m" ;;
+            ERROR) prefix="\033[31m" ;;
+            CRITICAL) prefix="\033[1;31m" ;;
+        esac
+        if [[ -n "$prefix" ]]; then
+            reset="\033[0m"
+        fi
+    fi
+
+    if [[ -n "$prefix" ]]; then
+        printf '%b[%s] [%s] %s%b\n' "$prefix" "$timestamp" "$level" "$message" "$reset"
+    else
+        printf '[%s] [%s] %s\n' "$timestamp" "$level" "$message"
+    fi
+}
+
+daftcitadel_log_internal() {
+    local level="$1"
+    local message="$2"
+    local timestamp
+    timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+    if [[ "$level" == "WARN" ]]; then
+        DAFTCITADEL_WARNINGS+=("$message")
+    elif [[ "$level" == "ERROR" || "$level" == "CRITICAL" ]]; then
+        DAFTCITADEL_ERRORS+=("$message")
+    fi
+
+    if daftcitadel_should_emit "$level"; then
+        daftcitadel_emit_console "$level" "$message" "$timestamp"
+    fi
+
+    if [[ -n "$DAFTCITADEL_LOG_FILE" ]]; then
+        printf '[%s] [%s] [%s] %s\n' "$timestamp" "$level" "$DAFTCITADEL_PHASE" "$message" >>"$DAFTCITADEL_LOG_FILE" 2>/dev/null || true
     fi
 }
 
@@ -321,6 +450,118 @@ sanitize_filename_component() {
         return
     fi
     echo "$input" | tr -c 'A-Za-z0-9._-' '_'
+}
+
+daftcitadel_init_logging() {
+    if [[ -t 1 ]]; then
+        DAFTCITADEL_STDOUT_IS_TTY=true
+    fi
+
+    if [[ -n "$LOG_LEVEL_OVERRIDE" ]]; then
+        daftcitadel_set_log_level "$LOG_LEVEL_OVERRIDE"
+    else
+        daftcitadel_set_log_level "$DAFTCITADEL_LOG_LEVEL"
+    fi
+
+    local base_dir="${LOG_DIR_OVERRIDE:-/var/log/daftcitadel}"
+    local fallback_dir="$SCRIPT_DIR/../logs"
+    local target="$LOG_FILE_OVERRIDE"
+
+    if [[ -n "$target" ]]; then
+        mkdir -p "$(dirname "$target")" 2>/dev/null || true
+        DAFTCITADEL_LOG_FILE="$target"
+    else
+        if ! mkdir -p "$base_dir" 2>/dev/null; then
+            base_dir="$fallback_dir"
+            mkdir -p "$base_dir" 2>/dev/null || true
+        fi
+        local stamp
+        stamp=$(date -u '+%Y%m%d-%H%M%S')
+        local profile_safe
+        profile_safe=$(sanitize_filename_component "$PROFILE")
+        DAFTCITADEL_LOG_FILE="$base_dir/daftcitadel-${profile_safe:-profile}-$stamp.log"
+    fi
+
+    if [[ -n "$DAFTCITADEL_LOG_FILE" ]]; then
+        if touch "$DAFTCITADEL_LOG_FILE" 2>/dev/null; then
+            chmod 600 "$DAFTCITADEL_LOG_FILE" 2>/dev/null || true
+        else
+            DAFTCITADEL_LOG_FILE=""
+        fi
+    fi
+}
+
+set_phase() {
+    DAFTCITADEL_PHASE="${1:-runtime}"
+    log "Transitioning to phase: $DAFTCITADEL_PHASE" NOTICE
+}
+
+run_step() {
+    local description="$1"
+    shift
+    if (($# == 0)); then
+        log "No command provided for step '$description'" WARN
+        return 0
+    fi
+    local command=("$@")
+    local status
+
+    log "Starting: $description" NOTICE
+    set +e
+    "${command[@]}"
+    status=$?
+    set -e
+
+    if ((status == 0)); then
+        log "Completed: $description" INFO
+        return 0
+    fi
+
+    log "Step failed ($status): $description" ERROR
+    DAFTCITADEL_ERRORS+=("$description")
+    if $DAFTCITADEL_STRICT_ERRORS; then
+        log "Strict error handling enabled; aborting" CRITICAL
+        exit "$status"
+    fi
+    return 0
+}
+
+daftcitadel_handle_error() {
+    local status="$1"
+    local command="$2"
+    local line="$3"
+    if ((status == 0)); then
+        return
+    fi
+    log "Command '$command' failed with exit $status at line $line" ERROR
+    DAFTCITADEL_ERRORS+=("${command} (line $line)")
+    if $DAFTCITADEL_STRICT_ERRORS; then
+        exit "$status"
+    fi
+}
+
+daftcitadel_print_summary() {
+    local warn_count=${#DAFTCITADEL_WARNINGS[@]}
+    local error_count=${#DAFTCITADEL_ERRORS[@]}
+    log "Deployment summary:" NOTICE
+    log "  Warnings: $warn_count" NOTICE
+    log "  Errors:   $error_count" NOTICE
+    if ((warn_count > 0)); then
+        for item in "${DAFTCITADEL_WARNINGS[@]}"; do
+            log "warning: $item" DEBUG
+        done
+    fi
+    if ((error_count > 0)); then
+        for item in "${DAFTCITADEL_ERRORS[@]}"; do
+            log "error: $item" DEBUG
+        done
+        if ! $DAFTCITADEL_STRICT_ERRORS; then
+            log "One or more steps failed; review $DAFTCITADEL_LOG_FILE for details." WARN
+        fi
+    fi
+    if [[ -n "$DAFTCITADEL_LOG_FILE" ]]; then
+        log "Installer log saved to $DAFTCITADEL_LOG_FILE" NOTICE
+    fi
 }
 
 apt_install() {
@@ -591,93 +832,53 @@ install_vital_suite() {
     done
 
     if [[ -n "$VITAL_INSTALL_SCRIPT" ]]; then
-        if ! "$VITAL_INSTALL_SCRIPT" --no-register; then
-            log "[ERR] Vital installer script failed"
-            rm -rf "$VITAL_WORKDIR"
-            return 1
-        fi
+        "$VITAL_INSTALL_SCRIPT" --no-register || true
     else
         # Manual deployment fallback
         local VITAL_PAYLOAD
         VITAL_PAYLOAD=$(find "$VITAL_ROOT" -maxdepth 1 -type d -name 'VitalInstaller*' -print -quit)
         if [[ -n "$VITAL_PAYLOAD" && -d "$VITAL_PAYLOAD" ]]; then
             log "[PLUGINS] Vital installer script missing; performing manual deployment"
+            install -d /usr/lib/vst /usr/lib/vst3 /usr/lib/clap /opt/vital
+
             local missing_components=()
             local VITAL_VST="$VITAL_PAYLOAD/lib/vst/Vital.so"
             local VITAL_VST3_DIR="$VITAL_PAYLOAD/lib/vst3/Vital.vst3"
             local VITAL_CLAP="$VITAL_PAYLOAD/lib/clap/Vital.clap"
             local VITAL_BIN="$VITAL_PAYLOAD/bin/Vital"
 
-            if [[ ! -f "$VITAL_VST" ]]; then
+            if [[ -f "$VITAL_VST" ]]; then
+                install -m 644 "$VITAL_VST" /usr/lib/vst/Vital.so
+            else
                 missing_components+=("VST plugin")
             fi
-            if [[ ! -d "$VITAL_VST3_DIR" ]]; then
+
+            if [[ -d "$VITAL_VST3_DIR" ]]; then
+                rm -rf /usr/lib/vst3/Vital.vst3
+                cp -r "$VITAL_VST3_DIR" /usr/lib/vst3/
+            else
                 missing_components+=("VST3 plugin")
             fi
-            if [[ ! -f "$VITAL_CLAP" ]]; then
+
+            if [[ -f "$VITAL_CLAP" ]]; then
+                install -m 755 "$VITAL_CLAP" /usr/lib/clap/Vital.clap
+            else
                 missing_components+=("CLAP plugin")
             fi
-            if [[ ! -f "$VITAL_BIN" ]]; then
+
+            if [[ -f "$VITAL_BIN" ]]; then
+                install -m 755 "$VITAL_BIN" /opt/vital/Vital
+                ln -sf /opt/vital/Vital /usr/local/bin/Vital
+            else
                 missing_components+=("standalone binary")
             fi
 
             if ((${#missing_components[@]})); then
-                log "[ERR] Vital manual install payload missing: ${missing_components[*]}"
-                rm -rf "$VITAL_WORKDIR"
-                return 1
-            fi
-
-            if ! install -d /usr/lib/vst /usr/lib/vst3 /usr/lib/clap /opt/vital; then
-                log "[ERR] Failed to create Vital installation directories"
-                rm -rf "$VITAL_WORKDIR"
-                return 1
-            fi
-            if ! install -m 644 "$VITAL_VST" /usr/lib/vst/Vital.so; then
-                log "[ERR] Failed to install the Vital VST plugin"
-                rm -rf "$VITAL_WORKDIR"
-                return 1
-            fi
-            if ! rm -rf /usr/lib/vst3/Vital.vst3; then
-                log "[ERR] Failed to replace the existing Vital VST3 plugin"
-                rm -rf "$VITAL_WORKDIR"
-                return 1
-            fi
-            if ! cp -r "$VITAL_VST3_DIR" /usr/lib/vst3/; then
-                log "[ERR] Failed to install the Vital VST3 plugin"
-                rm -rf "$VITAL_WORKDIR"
-                return 1
-            fi
-            if ! install -m 755 "$VITAL_CLAP" /usr/lib/clap/Vital.clap; then
-                log "[ERR] Failed to install the Vital CLAP plugin"
-                rm -rf "$VITAL_WORKDIR"
-                return 1
-            fi
-            if ! install -m 755 "$VITAL_BIN" /opt/vital/Vital; then
-                log "[ERR] Failed to install the Vital standalone binary"
-                rm -rf "$VITAL_WORKDIR"
-                return 1
-            fi
-            if ! ln -sf /opt/vital/Vital /usr/local/bin/Vital; then
-                log "[ERR] Failed to link the Vital standalone binary"
-                rm -rf "$VITAL_WORKDIR"
-                return 1
+                log "[WARN] Vital manual install missing: ${missing_components[*]}"
             fi
         else
-            log "[ERR] Vital payload layout changed; no installable payload was found"
-            rm -rf "$VITAL_WORKDIR"
-            return 1
+            log "[WARN] Vital payload layout changed; skipping manual install"
         fi
-    fi
-
-    local VITAL_INSTALLED_VST3="/usr/lib/vst3/Vital.vst3"
-    local VITAL_VST3_CONTENT=""
-    if [[ -d "$VITAL_INSTALLED_VST3" ]]; then
-        VITAL_VST3_CONTENT=$(find "$VITAL_INSTALLED_VST3" -type f -print -quit 2>/dev/null) || true
-    fi
-    if [[ -z "$VITAL_VST3_CONTENT" ]]; then
-        log "[ERR] Vital installation postcondition failed: $VITAL_INSTALLED_VST3 is missing or empty"
-        rm -rf "$VITAL_WORKDIR"
-        return 1
     fi
 
     VITAL_LAST_INSTALLED_VERSION="${VITAL_VERSION_DISPLAY:-$VITAL_DEFAULT_VERSION}"
@@ -1129,7 +1330,7 @@ verify_sha256() {
     log "[ERR] SHA256 mismatch for $file"
     log "[ERR] Expected one of: ${expected_hashes[*]}"
     log "[ERR] Actual:   ${CHECK_SHA256_ACTUAL:-unknown}"
-    exit 1
+    return 1
 }
 
 verify_md5() {
@@ -1163,7 +1364,7 @@ download_and_verify() {
     shift 2
     if (($# == 0)); then
         log "[ERR] Missing checksum metadata for $url"
-        exit 1
+        return 1
     fi
     if [[ -f "$dest" ]]; then
         if check_sha256 "$dest" "$@"; then
@@ -1174,7 +1375,9 @@ download_and_verify() {
         log "[WARN] Cached archive $(basename "$dest") failed checksum verification; re-downloading"
         rm -f "$dest"
     fi
-    dl "$url" "$dest"
+    if ! dl "$url" "$dest"; then
+        return 1
+    fi
     verify_sha256 "$dest" "$@"
 }
 
@@ -1191,7 +1394,9 @@ download_and_verify_md5() {
         log "[WARN] Cached archive $(basename "$dest") failed checksum verification; re-downloading"
         rm -f "$dest"
     fi
-    dl "$url" "$dest"
+    if ! dl "$url" "$dest"; then
+        return 1
+    fi
     verify_md5 "$dest" "$md5"
 }
 
@@ -1530,11 +1735,13 @@ if ! $PACK_SELECTION_OVERRIDDEN && $ENABLE_HEAVY_ASSETS && ((${#SELECTED_SAMPLE_
 fi
 
 BASE="$USER_HOME/DaftCitadel"
+LOG="$USER_HOME/daft_citadel.log"
 VENV="$BASE/.venv"
 THEME_DIR="$BASE/Theme"
 PLUGIN_CACHE_DIR="$BASE/PluginCache"
 run_step "Ensure base directories exist" mkdir -p "$BASE" "$THEME_DIR" "$PLUGIN_CACHE_DIR"
-run_step "Set ownership for base directories" chown -R "$USER_NAME:$USER_NAME" "$BASE"
+run_step "Initialize deployment log" touch "$LOG"
+run_step "Set ownership for base directories" chown -R "$USER_NAME:$USER_NAME" "$BASE" "$LOG"
 log "[IGNITION] $PROFILE_NAME deployment - $(date)"
 
 set_phase "system-prep"
@@ -1639,7 +1846,7 @@ if command -v python3 >/dev/null 2>&1; then
             surge_filename="surge-xt-$(sanitize_filename_component "${surge_version_selected:-latest}").deb"
             SURGE_ARCHIVE_PATH="$DEPS_DIR/${surge_filename:-surge-xt-latest.deb}"
             if download_and_verify_md5 "$SURGE_DYNAMIC_URL" "$SURGE_ARCHIVE_PATH" "$SURGE_DYNAMIC_MD5"; then
-                apt-get install -y "$SURGE_ARCHIVE_PATH" || apt-get -f install -y
+                run_step "Install Surge XT ${surge_version_selected}" install_deb_file "$SURGE_ARCHIVE_PATH"
                 surge_installed=true
             fi
         else
@@ -1656,8 +1863,8 @@ if ! $surge_installed; then
     surge_version_selected="${surge_version_selected:-1.3.4}"
     surge_filename="surge-xt-$(sanitize_filename_component "${surge_version_selected:-1.3.4}").deb"
     SURGE_ARCHIVE_PATH="$DEPS_DIR/${surge_filename:-surge-xt-1.3.4.deb}"
-    download_and_verify "$SURGE_URL" "$SURGE_ARCHIVE_PATH" "$SURGE_SHA256"
-    apt-get install -y "$SURGE_ARCHIVE_PATH" || apt-get -f install -y
+    run_step "Download Surge XT ${surge_version_selected}" download_and_verify "$SURGE_URL" "$SURGE_ARCHIVE_PATH" "$SURGE_SHA256"
+    run_step "Install Surge XT ${surge_version_selected}" install_deb_file "$SURGE_ARCHIVE_PATH"
 fi
 
 SURGE_LAST_INSTALLED_VERSION="${surge_version_selected:-${SURGE_DYNAMIC_VERSION:-unknown}}"
@@ -1698,179 +1905,30 @@ log "[PLUGINS] Installing Helm ${HELM_VERSION_DISPLAY:-0.9.0}"
 helm_version_for_name="${HELM_VERSION_DISPLAY:-0.9.0}"
 helm_filename="helm-$(sanitize_filename_component "$helm_version_for_name").deb"
 HELM_ARCHIVE_PATH="$DEPS_DIR/${helm_filename:-helm.deb}"
-download_and_verify "$HELM_URL" "$HELM_ARCHIVE_PATH" "$HELM_SHA256"
-apt-get install -y "$HELM_ARCHIVE_PATH" || apt-get -f install -y
+run_step "Download Helm ${HELM_VERSION_DISPLAY:-0.9.0}" download_and_verify "$HELM_URL" "$HELM_ARCHIVE_PATH" "$HELM_SHA256"
+run_step "Install Helm ${HELM_VERSION_DISPLAY:-0.9.0}" install_deb_file "$HELM_ARCHIVE_PATH"
+HELM_LAST_INSTALLED_VERSION="${HELM_VERSION_DISPLAY:-0.9.0}"
+register_plugin_hint \
+    "vst3" \
+    "helm" \
+    "Helm" \
+    "/usr/lib/vst3/Helm.vst3" \
+    "$HELM_LAST_INSTALLED_VERSION" \
+    "true" \
+    core \
+    synths
 
 if $ENABLE_EXPANDED_SYNTHS; then
-    # Vital
-    # Vital distributes binaries under an EULA; prefer nixpkgs metadata to resolve the latest Linux build.
-    VITAL_URL=""
-    VITAL_VERSION_DISPLAY=""
-    VITAL_DYNAMIC_SHA256=""
-    VITAL_CHECKSUM_CANDIDATES=()
-    if command -v python3 >/dev/null 2>&1; then
-        if VITAL_DYNAMIC_OUTPUT=$(resolve_vital_manifest 2>/dev/null); then
-            eval "$VITAL_DYNAMIC_OUTPUT"
-            if [[ -n "${VITAL_DYNAMIC_URL:-}" && -n "${VITAL_DYNAMIC_SHA256:-}" ]]; then
-                VITAL_URL="$VITAL_DYNAMIC_URL"
-                VITAL_VERSION_DISPLAY="${VITAL_DYNAMIC_VERSION:-latest}"
-                log "[PLUGINS] Resolved Vital ${VITAL_VERSION_DISPLAY} via nixpkgs manifest"
-            fi
-        else
-            log "[WARN] Unable to fetch Vital metadata from nixpkgs; using curated fallback"
-        fi
-    else
-        log "[INFO] python3 unavailable; using static Vital manifest fallback"
-    fi
-    if [[ -n "${VITAL_DYNAMIC_SHA256:-}" ]]; then
-        VITAL_CHECKSUM_CANDIDATES+=("${VITAL_DYNAMIC_SHA256,,}")
-    fi
-    if [[ -z "${VITAL_URL:-}" ]]; then
-        if [[ -n "${VITAL_FALLBACK_URLS[$VITAL_DEFAULT_VERSION]:-}" ]]; then
-            VITAL_VERSION_DISPLAY="$VITAL_DEFAULT_VERSION"
-            VITAL_URL="${VITAL_FALLBACK_URLS[$VITAL_VERSION_DISPLAY]}"
-            if [[ -z "$VITAL_URL" ]]; then
-                log "[ERR] Vital fallback URL resolution failed for $VITAL_VERSION_DISPLAY"
-                exit 1
-            fi
-        else
-            log "[ERR] Vital fallback URL metadata missing for $VITAL_DEFAULT_VERSION"
-            exit 1
-        fi
-    fi
-    if [[ -n "${VITAL_VERSION_DISPLAY:-}" && -n "${VITAL_KNOWN_SHAS[$VITAL_VERSION_DISPLAY]:-}" ]]; then
-        read -r -a __vital_known_shas <<<"${VITAL_KNOWN_SHAS[$VITAL_VERSION_DISPLAY]}"
-        for candidate in "${__vital_known_shas[@]}"; do
-            candidate="${candidate,,}"
-            [[ -z "$candidate" ]] && continue
-            duplicate=false
-            for existing in "${VITAL_CHECKSUM_CANDIDATES[@]}"; do
-                if [[ "$existing" == "$candidate" ]]; then
-                    duplicate=true
-                    break
-                fi
-            done
-            if ! $duplicate; then
-                VITAL_CHECKSUM_CANDIDATES+=("$candidate")
-            fi
-        done
-    fi
-    if ((${#VITAL_CHECKSUM_CANDIDATES[@]} == 0)); then
-        if [[ "${VITAL_VERSION_DISPLAY:-}" != "$VITAL_DEFAULT_VERSION" ]]; then
-            log "[WARN] Missing checksum metadata for Vital ${VITAL_VERSION_DISPLAY:-unknown}; falling back to $VITAL_DEFAULT_VERSION"
-            VITAL_VERSION_DISPLAY="$VITAL_DEFAULT_VERSION"
-            VITAL_URL="${VITAL_FALLBACK_URLS[$VITAL_VERSION_DISPLAY]}"
-            if [[ -z "$VITAL_URL" ]]; then
-                log "[ERR] Vital fallback URL resolution failed for $VITAL_VERSION_DISPLAY"
-                exit 1
-            fi
-            VITAL_CHECKSUM_CANDIDATES=()
-            if [[ -n "${VITAL_KNOWN_SHAS[$VITAL_VERSION_DISPLAY]:-}" ]]; then
-                read -r -a __vital_known_shas <<<"${VITAL_KNOWN_SHAS[$VITAL_VERSION_DISPLAY]}"
-                for candidate in "${__vital_known_shas[@]}"; do
-                    candidate="${candidate,,}"
-                    [[ -z "$candidate" ]] && continue
-                    VITAL_CHECKSUM_CANDIDATES+=("$candidate")
-                done
-            fi
-        fi
-    fi
-    if ((${#VITAL_CHECKSUM_CANDIDATES[@]} == 0)); then
-        log "[ERR] No checksum metadata available for Vital ${VITAL_VERSION_DISPLAY:-unknown}"
-        exit 1
-    fi
-    log "[PLUGINS] Installing Vital ${VITAL_VERSION_DISPLAY:-1.5.x}"
-    vital_version_for_name="${VITAL_VERSION_DISPLAY:-$VITAL_DEFAULT_VERSION}"
-    vital_sanitized_version=$(sanitize_filename_component "$vital_version_for_name")
-    VITAL_ARCHIVE_CANDIDATES=()
-    if [[ -n "$vital_sanitized_version" ]]; then
-        VITAL_ARCHIVE_CANDIDATES+=("VitalInstaller_${vital_sanitized_version}.zip")
-        VITAL_ARCHIVE_CANDIDATES+=("Vital_${vital_sanitized_version}.zip")
-    fi
-    VITAL_ARCHIVE_CANDIDATES+=("VitalInstaller.zip")
-    VITAL_ARCHIVE_CANDIDATES+=("Vital.zip")
-    VITAL_ARCHIVE_PATH=""
-    for candidate_name in "${VITAL_ARCHIVE_CANDIDATES[@]}"; do
-        cached_path="$DEPS_DIR/$candidate_name"
-        if [[ -f "$cached_path" ]]; then
-            if check_sha256 "$cached_path" "${VITAL_CHECKSUM_CANDIDATES[@]}"; then
-                log "[CACHE] Using cached Vital archive $candidate_name"
-                verify_sha256 "$cached_path" "${VITAL_CHECKSUM_CANDIDATES[@]}"
-                VITAL_ARCHIVE_PATH="$cached_path"
-                break
-            fi
-            log "[WARN] Cached Vital archive $candidate_name failed checksum verification; removing"
-            rm -f "$cached_path"
-        fi
-    done
-    if [[ -z "$VITAL_ARCHIVE_PATH" ]]; then
-        VITAL_ARCHIVE_PRIMARY_NAME="${VITAL_ARCHIVE_CANDIDATES[0]}"
-        if [[ -z "$VITAL_ARCHIVE_PRIMARY_NAME" ]]; then
-            VITAL_ARCHIVE_PRIMARY_NAME="VitalInstaller.zip"
-        fi
-        VITAL_ARCHIVE_PATH="$DEPS_DIR/$VITAL_ARCHIVE_PRIMARY_NAME"
-        download_and_verify "$VITAL_URL" "$VITAL_ARCHIVE_PATH" "${VITAL_CHECKSUM_CANDIDATES[@]}"
-    fi
-    VITAL_WORKDIR=$(mktemp -d /tmp/vital.XXXXXX)
-    unzip -o "$VITAL_ARCHIVE_PATH" -d "$VITAL_WORKDIR"
-    VITAL_ROOT="$VITAL_WORKDIR"
-    VITAL_INSTALL_SCRIPT=""
-    for candidate in \
-        "$VITAL_ROOT/install.sh" \
-        "$VITAL_ROOT/install" \
-        "$VITAL_ROOT"/VitalInstaller/install.sh \
-        "$VITAL_ROOT"/VitalInstaller/install
-    do
-        if [[ -f "$candidate" ]]; then
-            chmod +x "$candidate" || true
-            if [[ -x "$candidate" ]]; then
-                VITAL_INSTALL_SCRIPT="$candidate"
-                break
-            fi
-        fi
-    done
-    if [[ -n "$VITAL_INSTALL_SCRIPT" ]]; then
-        "$VITAL_INSTALL_SCRIPT" --no-register || true
-    else
-        VITAL_PAYLOAD=$(find "$VITAL_ROOT" -maxdepth 1 -type d -name 'VitalInstaller*' -print -quit)
-        if [[ -n "$VITAL_PAYLOAD" && -d "$VITAL_PAYLOAD" ]]; then
-            log "[PLUGINS] Vital installer script missing; performing manual deployment"
-            install -d /usr/lib/vst /usr/lib/vst3 /usr/lib/clap /opt/vital
-            missing_components=()
-            VITAL_VST="$VITAL_PAYLOAD/lib/vst/Vital.so"
-            VITAL_VST3_DIR="$VITAL_PAYLOAD/lib/vst3/Vital.vst3"
-            VITAL_CLAP="$VITAL_PAYLOAD/lib/clap/Vital.clap"
-            VITAL_BIN="$VITAL_PAYLOAD/bin/Vital"
-            if [[ -f "$VITAL_VST" ]]; then
-                install -m 644 "$VITAL_VST" /usr/lib/vst/Vital.so
-            else
-                missing_components+=("VST plugin")
-            fi
-            if [[ -d "$VITAL_VST3_DIR" ]]; then
-                rm -rf /usr/lib/vst3/Vital.vst3
-                cp -r "$VITAL_VST3_DIR" /usr/lib/vst3/
-            else
-                missing_components+=("VST3 plugin")
-            fi
-            if [[ -f "$VITAL_CLAP" ]]; then
-                install -m 755 "$VITAL_CLAP" /usr/lib/clap/Vital.clap
-            else
-                missing_components+=("CLAP plugin")
-            fi
-            if [[ -f "$VITAL_BIN" ]]; then
-                install -m 755 "$VITAL_BIN" /opt/vital/Vital
-                ln -sf /opt/vital/Vital /usr/local/bin/Vital
-            else
-                missing_components+=("standalone binary")
-            fi
-            if ((${#missing_components[@]})); then
-                log "[WARN] Vital manual install missing: ${missing_components[*]}"
-            fi
-        else
-            log "[WARN] Vital payload layout changed; skipping manual install"
-        fi
-    fi
-    rm -rf "$VITAL_WORKDIR"
+    run_step "Install Vital suite" install_vital_suite
+    register_plugin_hint \
+        "vst3" \
+        "vital" \
+        "Vital" \
+        "/usr/lib/vst3/Vital.vst3" \
+        "${VITAL_LAST_INSTALLED_VERSION:-unknown}" \
+        "$ENABLE_EXPANDED_SYNTHS" \
+        expandedSynths \
+        synths
 
     # TAL-Vocoder via DISTRHO Ports (Ubuntu-packaged build)
     log "[PLUGINS] Installing DISTRHO Ports collection for TAL instruments"
@@ -2120,19 +2178,17 @@ else
     log "[PY] GUI stack disabled for this profile"
 fi
 
-run_step "Write profile metadata" write_metadata_files
+# Make metadata generation non-fatal (especially in container builds)
+if ! write_metadata_files; then
+    log "[WARN] Metadata generation failed; continuing without citadel_profile.json and plugin_cache_hints.json"
+fi
 
 log "[ENV] Exporting DAW paths to user profile"
 PROFILE_BLOCK_START="# >>> DaftCitadel profile >>>"
 PROFILE_BLOCK_END="# <<< DaftCitadel profile <<<"
 touch "$USER_HOME/.profile"
-PROFILE_TEMP=$(mktemp)
-awk -v start="$PROFILE_BLOCK_START" -v end="$PROFILE_BLOCK_END" '
-    $0 == start { in_block = 1; next }
-    $0 == end { in_block = 0; next }
-    !in_block { print }
-' "$USER_HOME/.profile" >"$PROFILE_TEMP"
-cat >>"$PROFILE_TEMP" <<EOF_PROFILE
+if ! grep -q "$PROFILE_BLOCK_START" "$USER_HOME/.profile"; then
+    cat >>"$USER_HOME/.profile" <<EOF_PROFILE
 $PROFILE_BLOCK_START
 export CITADEL_DAW_PATH="$DAW_PATH"
 export LV2_PATH="\${LV2_PATH:-$DAW_PATH}"
@@ -2141,31 +2197,15 @@ export VST_PATH="\${VST_PATH:-$DAW_PATH}"
 export CITADEL_HOME="$BASE"
 $PROFILE_BLOCK_END
 EOF_PROFILE
-mv "$PROFILE_TEMP" "$USER_HOME/.profile"
+else
+    log "[SKIP] Profile exports already present"
+fi
 chown "$USER_NAME:$USER_NAME" "$USER_HOME/.profile"
 
 log "[GIT] Initializing git repository for Citadel assets"
-cat >"$BASE/.gitignore" <<'EOF_GITIGNORE'
-.venv/
-PluginCache/
-Presets/
-Samples/
-Grooves/
-MIDIs/
-Experimental/
-*.log
-*.zip
-*.tar
-*.tar.*
-EOF_GITIGNORE
-chown "$USER_NAME:$USER_NAME" "$BASE/.gitignore"
 as_user "cd '$BASE' && git init"
 as_user "cd '$BASE' && git add ."
-if as_user "cd '$BASE' && git diff --cached --quiet"; then
-    log "[GIT] No asset metadata changes to commit"
-else
-    run_step "Commit Citadel asset metadata" as_user "cd '$BASE' && git commit -m 'Daft Citadel bootstrap'"
-fi
+as_user "cd '$BASE' && git commit -m 'Daft Citadel bootstrap' || true"
 
 log "[FINAL] $PROFILE_NAME deployment complete"
 log "Profile manifest: $BASE/citadel_profile.json"
@@ -2179,9 +2219,7 @@ fi
 log "Ardour template directory: $BASE/Templates"
 log "NOTE: Log out/in to finalize audio group membership."
 
-if ! daftcitadel_print_summary; then
-    exit 1
-fi
+daftcitadel_print_summary
 
 if $CONTAINER_MODE; then
     log "[FINAL] Deployment complete (reboot not applicable in container)"

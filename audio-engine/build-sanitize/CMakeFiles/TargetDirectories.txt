@@ -1,0 +1,5 @@
+/home/ales27pm/Documents/DaftCitadel/audio-engine/build-sanitize/CMakeFiles/daft_audio_engine.dir
+/home/ales27pm/Documents/DaftCitadel/audio-engine/build-sanitize/CMakeFiles/daft_audio_engine_tests.dir
+/home/ales27pm/Documents/DaftCitadel/audio-engine/build-sanitize/CMakeFiles/test.dir
+/home/ales27pm/Documents/DaftCitadel/audio-engine/build-sanitize/CMakeFiles/edit_cache.dir
+/home/ales27pm/Documents/DaftCitadel/audio-engine/build-sanitize/CMakeFiles/rebuild_cache.dir

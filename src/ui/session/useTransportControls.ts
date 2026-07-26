@@ -11,20 +11,13 @@ export interface TransportControlsHandle {
   locateFrame: (frame: number) => Promise<void>;
   locateBeats: (beats: number) => Promise<void>;
   locateStart: () => Promise<void>;
-  setLoopFrames: (
-    startFrame: number,
-    endFrame: number,
-    enabled: boolean,
-  ) => Promise<void>;
-  setLoopBeats: (startBeats: number, endBeats: number, enabled: boolean) => Promise<void>;
   isAvailable: boolean;
-  isLoopAvailable: boolean;
   isPlaying: boolean;
   transportRuntime: ReturnType<typeof useSessionViewModel>['transportRuntime'];
   transport: ReturnType<typeof useSessionViewModel>['transport'];
 }
 
-type TransportOperation = 'start' | 'stop' | 'locate' | 'loop';
+type TransportOperation = 'start' | 'stop' | 'locate';
 
 type NativeLogger = {
   logWithLevel?: (
@@ -215,78 +208,22 @@ export const useTransportControls = (): TransportControlsHandle => {
       if (!Number.isFinite(beats)) {
         throw new Error('beats must be a finite number');
       }
-      const sanitizedBeats = Math.max(0, beats);
-      if (sanitizedBeats === 0) {
-        await locateFrame(0);
-        return;
-      }
       const baseline = resolveBaselineRuntime();
       const bpm = baseline?.bpm ?? transport?.bpm ?? DEFAULT_BPM;
       const sampleRate = baseline?.sampleRate ?? transportRuntime?.sampleRate;
       if (!sampleRate || sampleRate <= 0) {
-        throw new Error(
-          'Transport sample rate is unavailable; cannot locate to a nonzero position.',
-        );
+        console.warn('Transport runtime missing sample rate; rewinding to start.');
+        await controller.locateFrame(0);
+        return;
       }
       const framesPerBeat = (sampleRate * 60) / bpm;
-      const frameTarget = Math.floor(sanitizedBeats * framesPerBeat);
+      const frameTarget = Math.max(0, Math.floor(beats * framesPerBeat));
       await locateFrame(frameTarget);
     },
-    [locateFrame, resolveBaselineRuntime, transport?.bpm, transportRuntime],
+    [controller, locateFrame, resolveBaselineRuntime, transport?.bpm, transportRuntime],
   );
 
   const locateStart = useCallback(() => locateBeats(0), [locateBeats]);
-
-  const setLoopFrames = useCallback(
-    async (startFrame: number, endFrame: number, enabled: boolean) => {
-      const sanitizedStart = Number.isFinite(startFrame)
-        ? Math.max(0, Math.floor(startFrame))
-        : 0;
-      const sanitizedEnd = Number.isFinite(endFrame)
-        ? Math.max(0, Math.floor(endFrame))
-        : 0;
-      if (enabled && sanitizedEnd <= sanitizedStart) {
-        throw new Error('Loop end must be after loop start.');
-      }
-      try {
-        await controller.setLoop(sanitizedStart, sanitizedEnd, enabled);
-      } catch (error) {
-        logTransportError('loop', error);
-        throw error;
-      }
-    },
-    [controller],
-  );
-
-  const setLoopBeats = useCallback(
-    async (startBeats: number, endBeats: number, enabled: boolean) => {
-      if (!Number.isFinite(startBeats) || !Number.isFinite(endBeats)) {
-        throw new Error('Loop positions must be finite beat values.');
-      }
-      if (!enabled) {
-        await setLoopFrames(0, 0, false);
-        return;
-      }
-      if (startBeats < 0 || endBeats <= startBeats) {
-        throw new Error('Loop end must be after loop start.');
-      }
-      const baseline = resolveBaselineRuntime();
-      const bpm = baseline?.bpm ?? transport?.bpm ?? DEFAULT_BPM;
-      const sampleRate = baseline?.sampleRate ?? transportRuntime?.sampleRate;
-      if (!sampleRate || sampleRate <= 0) {
-        throw new Error(
-          'Transport sample rate is unavailable; cannot configure a loop range.',
-        );
-      }
-      const framesPerBeat = (sampleRate * 60) / bpm;
-      await setLoopFrames(
-        Math.floor(startBeats * framesPerBeat),
-        Math.floor(endBeats * framesPerBeat),
-        true,
-      );
-    },
-    [resolveBaselineRuntime, setLoopFrames, transport?.bpm, transportRuntime?.sampleRate],
-  );
 
   const resolvedRuntime =
     optimisticRuntime ?? transportRuntime ?? runtimeSnapshotRef.current;
@@ -320,23 +257,17 @@ export const useTransportControls = (): TransportControlsHandle => {
       locateFrame,
       locateBeats,
       locateStart,
-      setLoopFrames,
-      setLoopBeats,
       isAvailable: controller.isAvailable,
-      isLoopAvailable: controller.isLoopAvailable,
       isPlaying: resolvedTransport?.isPlaying ?? transport?.isPlaying ?? false,
       transportRuntime: resolvedRuntime ?? null,
       transport: resolvedTransport ?? transport,
     }),
     [
       controller.isAvailable,
-      controller.isLoopAvailable,
       locateBeats,
       locateFrame,
       locateStart,
       play,
-      setLoopBeats,
-      setLoopFrames,
       stop,
       resolvedRuntime,
       resolvedTransport,

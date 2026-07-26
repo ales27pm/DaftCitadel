@@ -128,8 +128,8 @@ const styles = StyleSheet.create({
 const clamp = (value: number, minimum: number, maximum: number): number =>
   Math.max(minimum, Math.min(maximum, value));
 
-const parseBeatsPerBar = (timeSignature: string): number => {
-  const [numeratorText, denominatorText] = timeSignature.split('/');
+const parseBeatsPerBar = (timeSignature: string | undefined): number => {
+  const [numeratorText, denominatorText] = (timeSignature ?? '4/4').split('/');
   const numerator = Number.parseInt(numeratorText ?? '', 10);
   const denominator = Number.parseInt(denominatorText ?? '', 10);
   if (!Number.isFinite(numerator) || numerator <= 0) {

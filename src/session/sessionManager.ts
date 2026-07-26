@@ -11,7 +11,6 @@ import {
   RevisionConflictError,
   SessionStorageAdapter,
   SessionStorageError,
-  SessionStorageTransaction,
 } from './storage';
 import { AsyncMutex, deepClone } from './util';
 
@@ -35,31 +34,11 @@ export type AudioDiagnosticsSnapshot = {
   updatedAt?: number;
 };
 
-export interface InstrumentMidiEvent {
-  type: number;
-  channel: number;
-  data1: number;
-  data2: number;
-  frameOffset?: number;
-}
-
-export interface InstrumentParameterChange {
-  parameterId: number;
-  value: number;
-  frameOffset?: number;
-}
-
 export interface AudioEngineBridge {
   applySessionUpdate(session: Session): Promise<void>;
-  resetSession(): Promise<void>;
   startTransport?(): Promise<void>;
   stopTransport?(): Promise<void>;
   locateTransport?(frame: number): Promise<void>;
-  setTransportLoop?(
-    startFrame: number,
-    endFrame: number,
-    enabled: boolean,
-  ): Promise<void>;
   getTransportState?(): AudioTransportSnapshot | null;
   subscribeTransport?(listener: (snapshot: AudioTransportSnapshot) => void): () => void;
   getDiagnosticsState?(): AudioDiagnosticsSnapshot | null;
@@ -67,37 +46,11 @@ export interface AudioEngineBridge {
     listener: (snapshot: AudioDiagnosticsSnapshot) => void,
   ): () => void;
   retryPluginInstance?(instanceId: string): Promise<boolean>;
-  sendInstrumentMidi?(nodeId: string, event: InstrumentMidiEvent): Promise<void>;
-  setInstrumentParameter?(
-    nodeId: string,
-    change: InstrumentParameterChange,
-  ): Promise<void>;
-  allNotesOff?(nodeId: string): Promise<void>;
-  setInstrumentInputEnabled?(enabled: boolean): void;
 }
 
 export interface SessionManagerOptions {
   cloudSyncProvider?: CloudSyncProvider;
   historyCapacity?: number;
-}
-
-type SessionRollbackFailure = {
-  phase: 'storage' | 'audio-reset' | 'audio-restore';
-  error: unknown;
-};
-
-class SessionRollbackError extends Error {
-  constructor(public readonly failures: ReadonlyArray<SessionRollbackFailure>) {
-    super(
-      `Session transition rollback failed: ${failures
-        .map(
-          ({ phase, error }) =>
-            `${phase}: ${error instanceof Error ? error.message : String(error)}`,
-        )
-        .join('; ')}`,
-    );
-    this.name = 'SessionRollbackError';
-  }
 }
 
 export class SessionManager {
@@ -133,115 +86,16 @@ export class SessionManager {
   }
 
   private setCurrentSession(session: Session | null, notify = true) {
-    this.currentSession = session ? deepClone(session) : null;
+    this.currentSession = session;
     if (notify) {
+      const snapshot = this.getSession();
       this.listeners.forEach((listener) => {
         try {
-          listener(this.getSession());
+          listener(snapshot);
         } catch (error) {
           console.error('SessionManager listener failed', error);
         }
       });
-    }
-  }
-
-  private async rollbackTransaction(
-    transaction: SessionStorageTransaction | null,
-  ): Promise<SessionRollbackFailure[]> {
-    if (!transaction) {
-      return [];
-    }
-    try {
-      await transaction.rollback();
-      return [];
-    } catch (error) {
-      return [{ phase: 'storage', error }];
-    }
-  }
-
-  private async restoreAudioSession(
-    previous: Session | null,
-  ): Promise<SessionRollbackFailure[]> {
-    const failures: SessionRollbackFailure[] = [];
-    try {
-      await this.audioEngine.resetSession();
-    } catch (error) {
-      failures.push({ phase: 'audio-reset', error });
-    }
-    if (previous) {
-      try {
-        await this.audioEngine.applySessionUpdate(deepClone(previous));
-      } catch (error) {
-        failures.push({ phase: 'audio-restore', error });
-      }
-    }
-    return failures;
-  }
-
-  private attachRollbackContext(
-    operationError: unknown,
-    rollbackFailures: SessionRollbackFailure[],
-    sessionId: string,
-  ): void {
-    if (rollbackFailures.length === 0) {
-      return;
-    }
-    const rollbackError = new SessionRollbackError(rollbackFailures);
-    console.error('SessionManager transition rollback was incomplete', {
-      sessionId,
-      operationError,
-      rollbackError,
-    });
-    if (!(operationError instanceof Error)) {
-      return;
-    }
-    try {
-      const contextualError = operationError as Error & {
-        cause?: unknown;
-        rollbackError?: SessionRollbackError;
-      };
-      if (contextualError.cause === undefined) {
-        contextualError.cause = rollbackError;
-      }
-      contextualError.rollbackError = rollbackError;
-    } catch (contextError) {
-      console.error('SessionManager could not attach rollback context', {
-        sessionId,
-        contextError,
-      });
-    }
-  }
-
-  /**
-   * Applies a transition without publishing it until both external boundaries agree.
-   * Storage remains staged while audio is updated, so an audio failure can be rolled
-   * back without changing persisted, in-memory, subscriber, or history state.
-   */
-  private async applyTransition(
-    next: Session,
-    previous: Session | null,
-    persistence?: { expectedRevision: number },
-  ): Promise<void> {
-    let transaction: SessionStorageTransaction | null = null;
-    let audioAttempted = false;
-    try {
-      if (persistence) {
-        transaction = await this.storage.beginTransaction();
-        await transaction.write(next, {
-          expectedRevision: persistence.expectedRevision,
-        });
-      }
-
-      audioAttempted = true;
-      await this.audioEngine.applySessionUpdate(deepClone(next));
-      await transaction?.commit();
-    } catch (error) {
-      const rollbackFailures = await this.rollbackTransaction(transaction);
-      if (audioAttempted) {
-        rollbackFailures.push(...(await this.restoreAudioSession(previous)));
-      }
-      this.attachRollbackContext(error, rollbackFailures, next.id);
-      throw error;
     }
   }
 
@@ -251,29 +105,25 @@ export class SessionManager {
       await this.initialize();
       const local = await this.storage.read(sessionId);
       let resolved = local;
-      let expectedRevision: number | null = null;
       const remote = await this.cloud.pull(sessionId);
       if (remote.session && local) {
         const base = local.revision <= remote.session.revision ? local : remote.session;
         resolved = await this.resolveConflict(base, local, remote.session);
         if (resolved.revision !== local.revision) {
-          expectedRevision = local.revision;
+          await this.storage.write(resolved, { expectedRevision: local.revision });
         }
       } else if (remote.session && !local) {
         resolved = remote.session;
-        expectedRevision = 0;
+        await this.storage.write(resolved, { expectedRevision: 0 });
       }
       if (!resolved) {
         throw new SessionStorageError(`Session ${sessionId} not found`);
       }
       const normalized = normalizeSession(resolved);
       validateSession(normalized);
-      await this.applyTransition(
-        normalized,
-        this.currentSession,
-        expectedRevision === null ? undefined : { expectedRevision },
-      );
+      this.setCurrentSession(normalized, false);
       this.history.clear();
+      await this.audioEngine.applySessionUpdate(normalized);
       this.setCurrentSession(normalized);
       return deepClone(normalized);
     } finally {
@@ -287,12 +137,12 @@ export class SessionManager {
       const normalized = normalizeSession(session);
       const finalSession = updateSessionTimestamp(normalized);
       validateSession(finalSession);
-      await this.applyTransition(finalSession, this.currentSession, {
-        expectedRevision: 0,
-      });
+      await this.storage.write(finalSession, { expectedRevision: 0 });
+      this.setCurrentSession(finalSession, false);
       this.history.clear();
+      await this.audioEngine.applySessionUpdate(finalSession);
       this.setCurrentSession(finalSession);
-      await this.pushToCloud(finalSession);
+      await this.cloud.push(finalSession);
       return deepClone(finalSession);
     } finally {
       release();
@@ -305,8 +155,8 @@ export class SessionManager {
       if (!this.currentSession) {
         throw new SessionStorageError('No active session to update');
       }
-      const previous = deepClone(this.currentSession);
-      const workingCopy = deepClone(this.currentSession);
+      const previous = JSON.parse(JSON.stringify(this.currentSession)) as Session;
+      const workingCopy = JSON.parse(JSON.stringify(this.currentSession)) as Session;
       const mutated = (mutator(workingCopy) as Session | void) ?? workingCopy;
       const requestedRevision =
         typeof mutated.revision === 'number' ? mutated.revision : previous.revision;
@@ -318,10 +168,17 @@ export class SessionManager {
       });
       const finalSession = updateSessionTimestamp(normalized);
       validateSession(finalSession);
-      await this.applyTransition(finalSession, previous, {
-        expectedRevision: previous.revision,
-      });
+      const tx = await this.storage.beginTransaction();
+      try {
+        await tx.write(finalSession, { expectedRevision: previous.revision });
+        await tx.commit();
+      } catch (error) {
+        await tx.rollback().catch(() => undefined);
+        throw error;
+      }
       this.history.record(previous);
+      this.setCurrentSession(finalSession, false);
+      await this.audioEngine.applySessionUpdate(finalSession);
       this.setCurrentSession(finalSession);
       await this.pushToCloud(finalSession);
       return deepClone(finalSession);
@@ -336,21 +193,26 @@ export class SessionManager {
       if (!this.currentSession) {
         return null;
       }
-      const current = deepClone(this.currentSession);
-      const previous = this.history.peekUndo();
+      const previous = this.history.undo(this.currentSession);
       if (!previous) {
         return null;
       }
       const normalized = normalizeSession({
         ...previous,
-        revision: current.revision + 1,
+        revision: this.currentSession.revision + 1,
       });
       const finalSession = updateSessionTimestamp(normalized);
       validateSession(finalSession);
-      await this.applyTransition(finalSession, current, {
-        expectedRevision: current.revision,
-      });
-      this.history.commitUndo(current);
+      const tx = await this.storage.beginTransaction();
+      try {
+        await tx.write(finalSession, { expectedRevision: this.currentSession.revision });
+        await tx.commit();
+      } catch (error) {
+        await tx.rollback().catch(() => undefined);
+        throw error;
+      }
+      this.setCurrentSession(finalSession, false);
+      await this.audioEngine.applySessionUpdate(finalSession);
       this.setCurrentSession(finalSession);
       await this.pushToCloud(finalSession);
       return deepClone(finalSession);
@@ -365,21 +227,26 @@ export class SessionManager {
       if (!this.currentSession) {
         return null;
       }
-      const current = deepClone(this.currentSession);
-      const next = this.history.peekRedo();
+      const next = this.history.redo(this.currentSession);
       if (!next) {
         return null;
       }
       const normalized = normalizeSession({
         ...next,
-        revision: current.revision + 1,
+        revision: this.currentSession.revision + 1,
       });
       const finalSession = updateSessionTimestamp(normalized);
       validateSession(finalSession);
-      await this.applyTransition(finalSession, current, {
-        expectedRevision: current.revision,
-      });
-      this.history.commitRedo(current);
+      const tx = await this.storage.beginTransaction();
+      try {
+        await tx.write(finalSession, { expectedRevision: this.currentSession.revision });
+        await tx.commit();
+      } catch (error) {
+        await tx.rollback().catch(() => undefined);
+        throw error;
+      }
+      this.setCurrentSession(finalSession, false);
+      await this.audioEngine.applySessionUpdate(finalSession);
       this.setCurrentSession(finalSession);
       await this.pushToCloud(finalSession);
       return deepClone(finalSession);
@@ -411,23 +278,25 @@ export class SessionManager {
         remote.session,
       );
       if (merged.revision === this.currentSession.revision) {
-        return deepClone(this.currentSession);
+        return JSON.parse(JSON.stringify(this.currentSession));
       }
-      const previous = deepClone(this.currentSession);
       const normalized = normalizeSession(merged);
       const finalSession = updateSessionTimestamp(normalized);
       validateSession(finalSession);
+      const tx = await this.storage.beginTransaction();
       try {
-        await this.applyTransition(finalSession, previous, {
-          expectedRevision: previous.revision,
-        });
+        await tx.write(finalSession, { expectedRevision: this.currentSession.revision });
+        await tx.commit();
       } catch (error) {
+        await tx.rollback().catch(() => undefined);
         if (error instanceof RevisionConflictError) {
           return null;
         }
         throw error;
       }
-      this.history.record(previous);
+      this.history.record(this.currentSession);
+      this.setCurrentSession(finalSession, false);
+      await this.audioEngine.applySessionUpdate(finalSession);
       this.setCurrentSession(finalSession);
       await this.pushToCloud(finalSession);
       return deepClone(finalSession);

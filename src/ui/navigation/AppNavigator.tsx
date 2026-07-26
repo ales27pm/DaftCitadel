@@ -6,9 +6,9 @@ import {
 } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Platform } from 'react-native';
 
-import { StudioIcon, ThemeProvider, useTheme } from '../design-system';
+import { ThemeProvider, useTheme } from '../design-system';
 import {
   ArrangementScreen,
   MixerScreen,
@@ -17,36 +17,26 @@ import {
 } from '../screens';
 import { useAdaptiveLayout } from '../layout';
 import { SessionAppProvider } from '../session';
-import { APP_TABS, type AppTabParamList } from './tab-spec';
+import {
+  APP_TAB_SEQUENCE as APP_TAB_SEQUENCE_SPEC,
+  type AppTabName,
+} from './tab-spec';
 
 export type ArrangementStackParamList = {
   ArrangementHome: undefined;
 };
 
+export type AppTabParamList = {
+  Arrangement: undefined;
+  Mixer: undefined;
+  Performance: undefined;
+  Settings: undefined;
+};
+
+export const APP_TAB_SEQUENCE = APP_TAB_SEQUENCE_SPEC;
+
 const ArrangementStack = createNativeStackNavigator<ArrangementStackParamList>();
 const Tab = createBottomTabNavigator<AppTabParamList>();
-
-interface TabIconProps {
-  color: string;
-  focused: boolean;
-  size: number;
-}
-
-const ArrangementTabIcon = ({ color, size }: TabIconProps): React.ReactElement => (
-  <StudioIcon color={color} name={APP_TABS[0].icon} size={size} />
-);
-
-const MixerTabIcon = ({ color, size }: TabIconProps): React.ReactElement => (
-  <StudioIcon color={color} name={APP_TABS[1].icon} size={size} />
-);
-
-const PerformanceTabIcon = ({ color, size }: TabIconProps): React.ReactElement => (
-  <StudioIcon color={color} name={APP_TABS[2].icon} size={size} />
-);
-
-const SettingsTabIcon = ({ color, size }: TabIconProps): React.ReactElement => (
-  <StudioIcon color={color} name={APP_TABS[3].icon} size={size} />
-);
 
 const ArrangementStackNavigator = () => (
   <ArrangementStack.Navigator>
@@ -58,10 +48,16 @@ const ArrangementStackNavigator = () => (
   </ArrangementStack.Navigator>
 );
 
+const TAB_SCREEN_BY_NAME: Record<AppTabName, React.ComponentType> = {
+  Arrangement: ArrangementStackNavigator,
+  Mixer: MixerScreen,
+  Performance: PerformanceScreen,
+  Settings: SettingsScreen,
+};
+
 const TabBarThemeProvider: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
   const theme = useTheme();
   const adaptive = useAdaptiveLayout();
-  const insets = useSafeAreaInsets();
   const navigationTheme: NavigationTheme = {
     ...DefaultTheme,
     colors: {
@@ -75,13 +71,10 @@ const TabBarThemeProvider: React.FC<{ children?: React.ReactNode }> = ({ childre
   };
 
   const tabBarStyle = {
-    backgroundColor: theme.colors.surface,
-    borderTopColor: theme.colors.border,
-    borderTopWidth: 1,
-    height: 58 + insets.bottom,
-    paddingBottom: Math.max(insets.bottom, 6),
-    paddingHorizontal: adaptive.contentPadding,
-    paddingTop: 6,
+    backgroundColor: theme.colors.surfaceVariant,
+    borderTopColor: theme.colors.surfaceVariant,
+    height: adaptive.breakpoint === 'phone' ? 64 : 72,
+    paddingBottom: Platform.OS === 'ios' ? 16 : 10,
   };
 
   return (
@@ -91,56 +84,13 @@ const TabBarThemeProvider: React.FC<{ children?: React.ReactNode }> = ({ childre
           headerShown: false,
           tabBarStyle,
           tabBarActiveTintColor: theme.colors.accentPrimary,
-          tabBarInactiveTintColor: theme.colors.textTertiary,
-          tabBarItemStyle: {
-            minWidth: 0,
-          },
-          tabBarLabelStyle: {
-            fontFamily: 'Inter_700Bold',
-            fontSize: 9,
-            letterSpacing: 1,
-          },
-          tabBarIconStyle: { marginBottom: -2 },
-          tabBarHideOnKeyboard: true,
+          tabBarInactiveTintColor: theme.colors.textSecondary,
           lazy: true,
         }}
       >
-        <Tab.Screen
-          name="Arrangement"
-          component={ArrangementStackNavigator}
-          options={{
-            tabBarAccessibilityLabel: APP_TABS[0].accessibilityLabel,
-            tabBarIcon: ArrangementTabIcon,
-            tabBarLabel: APP_TABS[0].label,
-          }}
-        />
-        <Tab.Screen
-          name="Mixer"
-          component={MixerScreen}
-          options={{
-            tabBarAccessibilityLabel: APP_TABS[1].accessibilityLabel,
-            tabBarIcon: MixerTabIcon,
-            tabBarLabel: APP_TABS[1].label,
-          }}
-        />
-        <Tab.Screen
-          name="Performance"
-          component={PerformanceScreen}
-          options={{
-            tabBarAccessibilityLabel: APP_TABS[2].accessibilityLabel,
-            tabBarIcon: PerformanceTabIcon,
-            tabBarLabel: APP_TABS[2].label,
-          }}
-        />
-        <Tab.Screen
-          name="Settings"
-          component={SettingsScreen}
-          options={{
-            tabBarAccessibilityLabel: APP_TABS[3].accessibilityLabel,
-            tabBarIcon: SettingsTabIcon,
-            tabBarLabel: APP_TABS[3].label,
-          }}
-        />
+        {APP_TAB_SEQUENCE.map((name) => (
+          <Tab.Screen key={name} name={name} component={TAB_SCREEN_BY_NAME[name]} />
+        ))}
       </Tab.Navigator>
       {children}
     </NavigationContainer>

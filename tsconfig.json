@@ -1,13 +1,13 @@
 {
   "compilerOptions": {
-    "target": "ESNext",
-    "module": "preserve",
-    "moduleResolution": "bundler",
+    "target": "ES2019",
+    "module": "commonjs",
+    "moduleResolution": "node",
     "esModuleInterop": true,
     "allowJs": false,
     "strict": true,
     "baseUrl": ".",
-    "rootDir": ".",
+    "rootDir": "src",
     "outDir": "lib",
     "jsx": "react-native",
     "types": ["jest", "node", "react-test-renderer"],
@@ -19,7 +19,6 @@
     "resolveJsonModule": true,
     "skipLibCheck": true
   },
-  "include": ["App.tsx", "src/**/*"],
-  "exclude": ["node_modules", "lib"],
-  "extends": "expo/tsconfig.base"
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "lib"]
 }

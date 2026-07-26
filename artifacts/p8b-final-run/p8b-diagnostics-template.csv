@@ -1,0 +1,6 @@
+scenario,start_utc,end_utc,xruns,p50RenderDurationMicros,p95RenderDurationMicros,p99RenderDurationMicros,activeVoices,realtimeQueueDepth,realtimeQueueOverflows,realtimeCommandFailures,clipBufferBytes,notes
+baseline,,,,,,,,,,,, 
+route_change,,,,,,,,,,,, 
+interruption,,,,,,,,,,,, 
+background,,,,,,,,,,,, 
+return_to_baseline,,,,,,,,,,,, 

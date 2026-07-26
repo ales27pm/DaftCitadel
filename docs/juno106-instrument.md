@@ -191,15 +191,20 @@ Compile the checked-in platform hosts only on machines with the documented SDKs:
 ## P8b physical-device validation
 
 Portable tests, sanitizers, simulator compilation, and web export do **not**
-prove physical-device realtime behavior. P8b remains separate and must record:
+prove physical-device behavior. P8b is the proof stage and must record each claim:
 
-- Instruments Allocations/Time Profiler traces, route changes, interruptions,
-  background/foreground, peripheral changes, xruns, memory, and p50/p95/p99 on a
-  physical iPhone;
-- equivalent Perfetto/Simpleperf traces and lifecycle scenarios on physical
-  Android hardware;
-- the exact device, OS, sample rate, buffer size, route, build configuration, and
-  sustained test duration for every claim.
+- Real traces on physical iPhone and Android hardware (Instrumentations / Time Profiler
+  for iOS; Perfetto and/or Simpleperf for Android).
+- Dedicated lifecycle scenarios (route switch, interruption, background/foreground,
+  peripheral changes) in a controlled, repeated sequence.
+- `xruns` and render duration percentiles (`p50`/`p95`/`p99`) from on-device
+  diagnostics in sustained playback.
+- Exact device metadata: OS/build, package/app name, sample rate, buffer size,
+  transport BPM/sleep state, route, duration, and battery/thermal conditions.
 
-Do not infer P8b evidence from a portable test, simulator build, or passive web
-transport.
+Use the dedicated protocol and evidence checklist here:
+
+- [P8b physical-device validation](./p8b-physical-device-validation.md)
+
+When reporting completion, attach command transcripts and logs for every scenario
+and device so future readers can reproduce the same checks.

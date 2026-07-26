@@ -1,298 +1,132 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, View, type ViewStyle } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import React, { useEffect, useMemo, useState } from 'react';
+import { SafeAreaView, ScrollView, View } from 'react-native';
+import Animated, {
+  runOnJS,
+  useAnimatedReaction,
+  useAnimatedStyle,
+  useDerivedValue,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 
-import {
-  StatusBadge,
-  StudioButton,
-  StudioHeader,
-  StudioIcon,
-  StudioPanel,
-  StudioText,
-  TransportBar,
-  useTheme,
-  type StudioTone,
-} from '../design-system';
+import { NeonButton, NeonSurface, NeonText, NeonToolbar } from '../design-system';
 import { useAdaptiveLayout } from '../layout';
-import {
-  useProjectedTransport,
-  useSessionViewModel,
-  useTransportControls,
-} from '../session';
-import { useUserPreferences } from '../settings';
-import { JunoMidiLooperPanel } from './JunoMidiLooperPanel';
-
-const styles = StyleSheet.create({
-  safeArea: { flex: 1 },
-  scrollContent: { flexGrow: 1, paddingBottom: 28 },
-  content: {
-    alignSelf: 'center',
-    gap: 16,
-    width: '100%',
-  },
-  statePanel: {
-    alignItems: 'center',
-    alignSelf: 'stretch',
-    gap: 6,
-  },
-  stateCopy: { maxWidth: 440, textAlign: 'center' },
-  diagnostics: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  diagnosticsCopy: { flex: 1, minWidth: 180 },
-  errorPanel: { gap: 4 },
-});
-
-const errorMessage = (error: unknown, fallback: string): string =>
-  error instanceof Error && error.message ? error.message : fallback;
+import { useSessionViewModel, useProjectedTransport } from '../session';
 
 export const PerformanceScreen: React.FC = () => {
-  const theme = useTheme();
   const adaptive = useAdaptiveLayout();
-  const {
-    status,
-    sessionName,
-    transport,
-    tracks,
-    diagnostics,
-    refresh,
-    error: sessionError,
-  } = useSessionViewModel();
-  const transportControls = useTransportControls();
-  const activeTransport = transportControls.transport ?? transport;
-  const { projectedBeats } = useProjectedTransport(activeTransport);
-  const { preferences } = useUserPreferences();
-  const [actionError, setActionError] = useState<string>();
-  const [isRetryingSession, setIsRetryingSession] = useState(false);
-  const sessionRetryInFlightRef = useRef(false);
+  const { status, transport, tracks, diagnostics, refresh } = useSessionViewModel();
+  const { projectedBeats } = useProjectedTransport(transport);
+  const bpm = useSharedValue(transport?.bpm ?? 0);
+  const renderLoad = useSharedValue(diagnostics.renderLoad);
+  const bpmDisplay = useDerivedValue(() => bpm.value);
+  const [displayBpm, setDisplayBpm] = useState(transport?.bpm ?? 0);
+  const safeAreaStyle = useMemo(() => ({ flex: 1 }), []);
+  const contentStyle = useMemo(
+    () => ({ padding: adaptive.breakpoint === 'phone' ? 12 : 32 }),
+    [adaptive.breakpoint],
+  );
+  const statusCardStyle = useMemo(() => ({ marginBottom: 24 }), []);
+  const bpmContainerStyle = useMemo(() => ({ marginTop: 16 }), []);
+  const statusTextStyle = useMemo(() => ({ marginTop: 8 }), []);
+  const sceneRowStyle = useMemo(
+    () => ({ flexDirection: 'row' as const, flexWrap: 'wrap' as const, marginTop: 12 }),
+    [],
+  );
+  const sceneButtonStyle = useMemo(() => ({ margin: 6, minWidth: 120 }), []);
+  const scenes = useMemo(() => {
+    const names = new Set<string>();
+    tracks.forEach((track) => {
+      track.clips.forEach((clip) => names.add(clip.name));
+    });
+    return Array.from(names);
+  }, [tracks]);
 
-  const contentStyle = useMemo<ViewStyle>(
-    () => ({
-      maxWidth: Math.min(adaptive.maxContentWidth, 960),
-      padding: adaptive.contentPadding,
-    }),
-    [adaptive.contentPadding, adaptive.maxContentWidth],
+  useEffect(() => {
+    if (transport) {
+      bpm.value = withTiming(transport.bpm, { duration: 300 });
+    }
+  }, [bpm, transport]);
+
+  useEffect(() => {
+    renderLoad.value = withTiming(diagnostics.renderLoad, { duration: 220 });
+  }, [diagnostics.renderLoad, renderLoad]);
+
+  useAnimatedReaction(
+    () => bpmDisplay.value,
+    (value) => {
+      runOnJS(setDisplayBpm)(Math.round(value));
+    },
+    [bpmDisplay],
   );
 
-  const readiness = useMemo<{ label: string; tone: StudioTone }>(() => {
-    if (status !== 'ready') {
-      return { label: 'Connecting', tone: 'secondary' };
-    }
-    if (!transportControls.isAvailable) {
-      return { label: 'Audio unavailable', tone: 'warning' };
-    }
-    if (!transportControls.isLoopAvailable) {
-      return { label: 'Update dev build', tone: 'warning' };
-    }
-    if (transportControls.isPlaying) {
-      return { label: 'Looping', tone: 'mint' };
-    }
-    return { label: 'Ready', tone: 'cyan' };
-  }, [
-    status,
-    transportControls.isAvailable,
-    transportControls.isLoopAvailable,
-    transportControls.isPlaying,
-  ]);
+  const bpmStyle = useAnimatedStyle(() => ({
+    transform: [
+      {
+        scale: withTiming(
+          adaptive.prefersReducedMotion ? 1 : 1 + (1 - renderLoad.value) * 0.2,
+          { duration: 150 },
+        ),
+      },
+    ],
+  }));
 
-  const handlePlay = useCallback(() => {
-    setActionError(undefined);
-    transportControls.play().catch((error) => {
-      setActionError(errorMessage(error, 'Unable to start transport.'));
-    });
-  }, [transportControls]);
-
-  const handleStop = useCallback(() => {
-    setActionError(undefined);
-    transportControls.stop().catch((error) => {
-      setActionError(errorMessage(error, 'Unable to stop transport.'));
-    });
-  }, [transportControls]);
-
-  const handleRewind = useCallback(() => {
-    setActionError(undefined);
-    transportControls.locateStart().catch((error) => {
-      setActionError(errorMessage(error, 'Unable to rewind transport.'));
-    });
-  }, [transportControls]);
-
-  const handleSessionRetry = useCallback(async () => {
-    if (sessionRetryInFlightRef.current) {
-      return;
-    }
-    sessionRetryInFlightRef.current = true;
-    setIsRetryingSession(true);
-    try {
-      await refresh();
-    } catch {
-      // The session view model exposes the refreshed load error.
-    } finally {
-      sessionRetryInFlightRef.current = false;
-      setIsRetryingSession(false);
-    }
-  }, [refresh]);
-
-  const diagnosticsSummary = useMemo(() => {
-    if (diagnostics.status === 'error') {
-      return diagnostics.error?.message
-        ? `Diagnostics error: ${diagnostics.error.message}`
-        : 'Diagnostics unavailable due to an error.';
-    }
-    if (diagnostics.status === 'unavailable') {
-      return 'Audio diagnostics unavailable.';
-    }
-    if (diagnostics.status !== 'ready') {
-      return 'Gathering audio diagnostics…';
-    }
-    const renderLoad = Number.isFinite(diagnostics.renderLoad)
-      ? Math.round(Math.max(0, Math.min(1, diagnostics.renderLoad)) * 100)
-      : 0;
-    return `${diagnostics.xruns} XRuns · ${renderLoad}% engine load`;
-  }, [diagnostics]);
-
-  const diagnosticsTone: StudioTone =
-    diagnostics.status === 'error'
-      ? 'critical'
-      : diagnostics.status === 'unavailable'
-        ? 'warning'
-        : 'secondary';
-
-  const renderSessionState = () => {
-    if (status === 'error') {
-      return (
-        <StudioPanel
-          accessibilityLabel="Performance unavailable"
-          accessibilityRole="alert"
-          padding={14}
-          style={styles.statePanel}
-          variant="subtle"
-        >
-          <StudioIcon color={theme.colors.statusCritical} name="diagnostics" size={24} />
-          <StudioText variant="body" tone="critical" weight="bold">
-            Performance session unavailable
-          </StudioText>
-          <StudioText
-            selectable
-            variant="caption"
-            tone="critical"
-            style={styles.stateCopy}
-          >
-            {sessionError?.message ?? 'The current session could not be loaded.'}
-          </StudioText>
-          <StudioButton
-            accessibilityHint="Attempts to load the current session again"
-            compact
-            label="Retry"
-            loading={isRetryingSession}
-            onPress={() => {
-              handleSessionRetry().catch(() => undefined);
-            }}
-          />
-        </StudioPanel>
-      );
-    }
-
-    if (status !== 'ready') {
-      return (
-        <StudioPanel
-          accessibilityLabel="Performance loading"
-          accessibilityRole="progressbar"
-          padding={14}
-          style={styles.statePanel}
-          variant="subtle"
-        >
-          <StudioIcon color={theme.colors.accentTertiary} name="engine" size={24} />
-          <StudioText variant="body" weight="bold">
-            Preparing the scene launcher
-          </StudioText>
-          <StudioText variant="caption" tone="secondary" style={styles.stateCopy}>
-            Restoring the shared session and native audio transport…
-          </StudioText>
-        </StudioPanel>
-      );
-    }
-
-    return (
-      <JunoMidiLooperPanel
-        autoPlayScenes={preferences.autoPlayScenes}
-        bpm={activeTransport?.bpm ?? 120}
-        status={status}
-        timeSignature={activeTransport?.timeSignature ?? '4/4'}
-        tracks={tracks}
-      />
-    );
+  const handleRefresh = () => {
+    refresh().catch(() => undefined);
   };
 
   return (
-    <SafeAreaView
-      edges={['top', 'left', 'right']}
-      style={[styles.safeArea, { backgroundColor: theme.colors.background }]}
-    >
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        contentInsetAdjustmentBehavior="automatic"
-      >
-        <View style={[styles.content, contentStyle]}>
-          <StudioHeader
-            compact={adaptive.isLandscape}
-            eyebrow={sessionName ?? 'Live session'}
-            title="Perform"
-            detail="Layer Juno parts, record takes, and launch synchronized scene variations."
-            actions={
-              <StatusBadge icon="engine" label={readiness.label} tone={readiness.tone} />
-            }
-          />
-
-          <TransportBar
-            bpm={activeTransport?.bpm ?? 0}
-            compact={adaptive.breakpoint === 'phone'}
-            isAvailable={transportControls.isAvailable}
-            isPlaying={transportControls.isPlaying}
-            onPlay={handlePlay}
-            onRewind={handleRewind}
-            onStop={handleStop}
-            positionBeats={projectedBeats}
-            sessionName={sessionName}
-            timeSignature={activeTransport?.timeSignature ?? '4/4'}
-          />
-
-          {renderSessionState()}
-
-          {preferences.showDiagnostics ? (
-            <StudioPanel padding={12} variant="subtle">
-              <View accessibilityLabel="Audio diagnostics" style={styles.diagnostics}>
-                <StatusBadge icon="diagnostics" label="Engine" tone={diagnosticsTone} />
-                <StudioText
-                  selectable
-                  variant="caption"
-                  tone={diagnosticsTone}
-                  style={styles.diagnosticsCopy}
-                >
-                  {diagnosticsSummary} · {projectedBeats.toFixed(2)} beats
-                </StudioText>
-              </View>
-            </StudioPanel>
-          ) : null}
-
-          {actionError ? (
-            <StudioPanel
-              accessibilityLabel="Transport error"
-              accessibilityRole="alert"
-              padding={12}
-              style={styles.errorPanel}
-              variant="subtle"
-            >
-              <StudioText variant="label" tone="critical" weight="bold">
-                Transport action failed
-              </StudioText>
-              <StudioText selectable variant="caption" tone="critical">
-                {actionError}
-              </StudioText>
-            </StudioPanel>
-          ) : null}
+    <SafeAreaView style={safeAreaStyle}>
+      <ScrollView contentInsetAdjustmentBehavior="automatic">
+        <NeonToolbar
+          title="Performance"
+          actions={[
+            { label: 'Record', onPress: () => undefined, intent: 'critical' },
+            { label: 'Refresh', onPress: handleRefresh, intent: 'secondary' },
+          ]}
+        />
+        <View style={contentStyle}>
+          <NeonSurface style={statusCardStyle}>
+            <NeonText variant="headline" weight="bold">
+              Live Status
+            </NeonText>
+            <Animated.View style={[bpmContainerStyle, bpmStyle]}>
+              <NeonText variant="title" weight="medium" intent="tertiary">
+                {displayBpm} BPM
+              </NeonText>
+            </Animated.View>
+            <NeonText variant="body" style={statusTextStyle}>
+              {status === 'ready'
+                ? `Time Signature ${transport?.timeSignature ?? '4/4'} • Playhead ${
+                    transport ? projectedBeats.toFixed(2) : '0.00'
+                  } beats`
+                : 'Connecting to transport controller...'}
+            </NeonText>
+            <NeonText variant="body" intent="secondary" style={statusTextStyle}>
+              XRuns: {diagnostics.xruns} • Engine load{' '}
+              {(diagnostics.renderLoad * 100).toFixed(0)}%
+            </NeonText>
+          </NeonSurface>
+          <NeonSurface>
+            <NeonText variant="title" weight="medium">
+              Scene Launcher
+            </NeonText>
+            <View style={sceneRowStyle}>
+              {scenes.length === 0 ? (
+                <NeonText variant="body">No scenes detected in current session.</NeonText>
+              ) : (
+                scenes.map((scene) => (
+                  <View key={scene} style={sceneButtonStyle}>
+                    <NeonButton
+                      label={scene}
+                      onPress={() => undefined}
+                      intent="secondary"
+                    />
+                  </View>
+                ))
+              )}
+            </View>
+          </NeonSurface>
         </View>
       </ScrollView>
     </SafeAreaView>
