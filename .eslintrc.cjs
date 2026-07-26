@@ -1,6 +1,6 @@
 module.exports = {
   root: true,
-  ignorePatterns: ['__mocks__/**'],
+  ignorePatterns: ['__mocks__/**', 'audio-engine/build/**'],
   env: {
     es2021: true,
     node: true,
