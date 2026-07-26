@@ -130,6 +130,88 @@ During each scenario, record:
 EOF
 }
 
+write_ios_capture_commands() {
+  local out_file=$1
+  local output_dir=$2
+  local ios_device_udid=$3
+  local ios_bundle_id=$4
+  local duration=$5
+
+  cat <<'EOF' >"$out_file"
+#!/usr/bin/env bash
+set -euo pipefail
+
+PCAP_OUT="${output_dir}/ios-traffic.pcap"
+TRACE_OUT_PREFIX="${output_dir}/ios"
+
+scripts/rvictl-capture.sh -u "${ios_device_udid}" -o "$PCAP_OUT" -d "${duration}"
+
+xcrun xctrace record \
+  --template "Time Profiler" \
+  --device "${ios_device_udid}" \
+  --target "${ios_bundle_id}" \
+  --launch \
+  --output "${TRACE_OUT_PREFIX}-time-profiler.trace"
+
+xcrun xctrace record \
+  --template "Allocations" \
+  --device "${ios_device_udid}" \
+  --target "${ios_bundle_id}" \
+  --launch \
+  --output "${TRACE_OUT_PREFIX}-allocations.trace"
+EOF
+}
+
+write_android_capture_commands() {
+  local out_file=$1
+  local output_dir=$2
+  local device_id=$3
+  local android_package=$4
+  local duration=$5
+
+  cat <<'EOF' >"$out_file"
+#!/usr/bin/env bash
+set -euo pipefail
+
+PERFETTO_LOCAL_DIR="/data/misc/perfetto-traces"
+PERFETTO_REMOTE_TRACE="$PERFETTO_LOCAL_DIR/p8b-physical.trace"
+PERFETTO_REMOTE_CONFIG="$PERFETTO_LOCAL_DIR/p8b-config.pbtxt"
+PERFETTO_REMOTE_LOG="/data/local/tmp/perfetto.log"
+SIMPLEPERF_REMOTE_OUT="/data/local/tmp/p8b-simpleperf.data"
+PERFETTO_CONFIG="${output_dir}/perfetto-config.pbtxt"
+PERFETTO_TRACE="${output_dir}/p8b-physical.trace"
+SIMPLEPERF_OUT="${output_dir}/p8b-simpleperf.perf.data"
+MEMINFO_OUT="${output_dir}/android-meminfo.log"
+
+cat <<'CFG' > "$PERFETTO_CONFIG"
+buffers {
+  size_kb: 8192
+  fill_policy: RING_BUFFER
+}
+data_sources {
+  config {
+    name: "track_event"
+  }
+}
+CFG
+
+adb -s "${device_id}" shell mkdir -p "$PERFETTO_LOCAL_DIR"
+adb -s "${device_id}" push "$PERFETTO_CONFIG" "$PERFETTO_LOCAL_DIR/p8b-config.pbtxt"
+
+adb -s "${device_id}" shell nohup "perfetto -c $PERFETTO_LOCAL_DIR/p8b-config.pbtxt -o $PERFETTO_LOCAL_DIR/p8b-physical.trace > /data/local/tmp/perfetto.log 2>&1" >/dev/null 2>&1
+sleep 2
+
+adb -s "${device_id}" shell simpleperf record --app "${android_package}" --duration "${duration}" -g -o "$SIMPLEPERF_REMOTE_OUT"
+echo "Perfetto command running in background: remote trace will be at $PERFETTO_REMOTE_TRACE"
+echo "Simpleperf output remote path: $SIMPLEPERF_REMOTE_OUT"
+
+adb -s "${device_id}" pull "$PERFETTO_LOCAL_DIR/p8b-physical.trace" "$PERFETTO_TRACE"
+adb -s "${device_id}" pull "/data/local/tmp/p8b-simpleperf.data" "$SIMPLEPERF_OUT"
+
+adb -s "${device_id}" shell "rm $PERFETTO_LOCAL_DIR/p8b-config.pbtxt $PERFETTO_LOCAL_DIR/p8b-physical.trace /data/local/tmp/p8b-simpleperf.data $PERFETTO_REMOTE_LOG 2>/dev/null || true"
+EOF
+}
+
 write_diagnostics_sheet() {
   local output_dir=$1
   cat <<'EOF' > "$output_dir/p8b-diagnostics-template.csv"
@@ -243,12 +325,19 @@ main() {
     if [[ ! -x scripts/rvictl-capture.sh ]]; then
       echo "warning: scripts/rvictl-capture.sh is not executable; install permissions or run manually" >&2
     fi
+    write_ios_capture_commands \
+      "$output_dir/capture-commands.sh" \
+      "$output_dir" \
+      "$ios_device_udid" \
+      "$ios_bundle_id" \
+      "$duration"
   cat <<MSG > "$output_dir/platform-commands.md"
 Run iOS capture manually:
 - scripts/rvictl-capture.sh -u $ios_device_udid -o "$output_dir/ios-traffic.pcap" -d $duration
 - Instruments: Time Profiler + Allocations during scenarios in docs/p8b-physical-device-validation.md
 Optional: --ios-bundle-id=$ios_bundle_id
 Fill diagnostics from each scenario in: $output_dir/p8b-diagnostics-template.csv
+Run `bash \"$output_dir/capture-commands.sh\"` to launch the default capture sequence.
 MSG
     echo "Prepared iOS validation command templates in $output_dir."
     exit 0
@@ -279,20 +368,28 @@ Run Android lifecycle scenarios from docs/p8b-physical-device-validation.md with
 - package: $android_package
 - duration_seconds: $duration
 - diagnostics_sheet: $output_dir/p8b-diagnostics-template.csv
+- capture script: $output_dir/capture-commands.sh
 
 Manual trace commands saved in this folder:
 - manual-commands.md
 MSG
 
+  write_android_capture_commands \
+    "$output_dir/capture-commands.sh" \
+    "$output_dir" \
+    "$device_id" \
+    "$android_package" \
+    "$duration"
+
   local logcat_pid=""
   local mem_pid_file=""
 
   cleanup() {
-    if [[ -n "$logcat_pid" ]]; then
+    if [[ -n "${logcat_pid:-}" ]]; then
       kill "$logcat_pid" >/dev/null 2>&1 || true
       wait "$logcat_pid" 2>/dev/null || true
     fi
-    if [[ -n "$mem_pid_file" ]]; then
+    if [[ -n "${mem_pid_file:-}" ]]; then
       local pid
       pid=$(cat "$mem_pid_file")
       if [[ -n "$pid" ]]; then
