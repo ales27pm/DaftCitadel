@@ -11,6 +11,7 @@ Options:
   --android-package <package>        Android app package (android only).
   --android-device <adb-id>          Android device id for adb target (android only).
   --ios-device-udid <udid>          iOS device udid (ios only).
+  --ios-bundle-id <bundle-id>        Optional iOS bundle identifier for trace labels.
   --duration <seconds>              Capture duration for automated collectors (default: 120).
   --output-dir <path>               Output folder for traces and command scripts.
   --collect-memory                  Include periodic Android meminfo sampling (android only).
@@ -129,6 +130,18 @@ During each scenario, record:
 EOF
 }
 
+write_diagnostics_sheet() {
+  local output_dir=$1
+  cat <<'EOF' > "$output_dir/p8b-diagnostics-template.csv"
+scenario,start_utc,end_utc,xruns,p50RenderDurationMicros,p95RenderDurationMicros,p99RenderDurationMicros,activeVoices,realtimeQueueDepth,realtimeQueueOverflows,realtimeCommandFailures,clipBufferBytes,notes
+baseline,,,,,,,,,,,, 
+route_change,,,,,,,,,,,, 
+interruption,,,,,,,,,,,, 
+background,,,,,,,,,,,, 
+return_to_baseline,,,,,,,,,,,, 
+EOF
+}
+
 collect_android_memory() {
   local device_id=$1
   local package_id=$2
@@ -155,6 +168,7 @@ main() {
   local android_package=""
   local android_device=""
   local ios_device_udid=""
+  local ios_bundle_id="com.daftcitadel"
   local duration=120
   local output_dir="artifacts/p8b-physical-device-validation-$(date -u +%Y%m%d-%H%M%S)"
   local collect_memory=0
@@ -176,6 +190,10 @@ main() {
         ;;
       --ios-device-udid)
         ios_device_udid=$2
+        shift 2
+        ;;
+      --ios-bundle-id)
+        ios_bundle_id=$2
         shift 2
         ;;
       --duration)
@@ -213,6 +231,7 @@ main() {
   fi
 
   mkdir -p "$output_dir"
+  write_diagnostics_sheet "$output_dir"
   write_manual_trace_commands "$output_dir/manual-commands.md" "$platform"
 
   if [[ "$platform" == "ios" ]]; then
@@ -223,10 +242,12 @@ main() {
     if [[ ! -x scripts/rvictl-capture.sh ]]; then
       echo "warning: scripts/rvictl-capture.sh is not executable; install permissions or run manually" >&2
     fi
-    cat <<MSG > "$output_dir/platform-commands.md"
+  cat <<MSG > "$output_dir/platform-commands.md"
 Run iOS capture manually:
 - scripts/rvictl-capture.sh -u $ios_device_udid -o "$output_dir/ios-traffic.pcap" -d $duration
 - Instruments: Time Profiler + Allocations during scenarios in docs/p8b-physical-device-validation.md
+Optional: --ios-bundle-id=$ios_bundle_id
+Fill diagnostics from each scenario in: $output_dir/p8b-diagnostics-template.csv
 MSG
     echo "Prepared iOS validation command templates in $output_dir."
     exit 0
@@ -251,11 +272,12 @@ MSG
     exit 1
   fi
 
-  cat <<MSG > "$output_dir/platform-commands.md"
+cat <<MSG > "$output_dir/platform-commands.md"
 Run Android lifecycle scenarios from docs/p8b-physical-device-validation.md with:
 - device: $device_id
 - package: $android_package
 - duration_seconds: $duration
+- diagnostics_sheet: $output_dir/p8b-diagnostics-template.csv
 
 Manual trace commands saved in this folder:
 - manual-commands.md
