@@ -1,0 +1,20 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.daftcitadel.citadel.app-mergeDebugResources-37:/values-v16/values-v16.xml",
+            "map": [
+                {
+                    "source": "/home/ales27pm/.gradle/caches/transforms-4/8515f45c6da29253807cdfb28d856ccf/transformed/appcompat-1.6.1/res/values-v16/values-v16.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endLines": "5",
+                        "endColumns": "12",
+                        "endOffsets": "223"
+                    }
+                }
+            ]
+        }
+    ]
+}
