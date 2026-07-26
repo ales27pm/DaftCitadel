@@ -1,13 +1,11 @@
 #include "AudioEngineBridge.h"
 
 #include <android/log.h>
-
-#include <array>
+#include <chrono>
 #include <cmath>
-#include <limits>
-#include <mutex>
-#include <stdexcept>
-#include <vector>
+#include <exception>
+
+#include "audio_engine/DSPNode.h"
 
 namespace daft::audio::bridge {
 
@@ -17,322 +15,158 @@ constexpr const char* kTag = "DaftAudioEngine";
 
 std::unique_ptr<SceneGraph> AudioEngineBridge::graph_;
 std::mutex AudioEngineBridge::mutex_;
-RealtimeControlPlane AudioEngineBridge::realtimePlane_;
-std::atomic<std::uint64_t> AudioEngineBridge::publicationToken_{0U};
-std::unordered_map<std::string, AudioEngineBridge::ClipBufferEntry>
-    AudioEngineBridge::clipBuffers_;
+std::atomic<std::uint64_t> AudioEngineBridge::xruns_{0};
+std::atomic<double> AudioEngineBridge::lastRenderDurationMicros_{0.0};
+std::unordered_map<std::string, AudioEngineBridge::ClipBufferEntry> AudioEngineBridge::clipBuffers_;
 
-void AudioEngineBridge::initialize(JNIEnv*, double sampleRate,
-                                   std::uint32_t framesPerBuffer) {
+/**
+ * @brief Initializes the audio engine and creates a new scene graph.
+ *
+ * Sets up the internal SceneGraph using the provided sample rate and frames-per-buffer, and resets render diagnostics (xruns and last render duration) to zero.
+ *
+ * @param sampleRate Sample rate in Hertz for the audio engine.
+ * @param framesPerBuffer Number of frames per audio buffer.
+ */
+void AudioEngineBridge::initialize(JNIEnv*, double sampleRate, std::uint32_t framesPerBuffer) {
   std::lock_guard<std::mutex> lock(mutex_);
-  stopRealtimePlaneLocked();
-  realtimePlane_.publishGraph(nullptr, 0U);
-
-  auto preparedGraph =
-      std::make_unique<SceneGraph>(sampleRate, framesPerBuffer);
-  auto publication = publicationToken_.load(std::memory_order_relaxed) + 1U;
-  if (publication == 0U) {
-    publication = 1U;
-  }
-
-  graph_ = std::move(preparedGraph);
-  clipBuffers_.clear();
-  realtimePlane_.resetQuiescent();
-  realtimePlane_.publishGraph(graph_.get(), publication);
-  publicationToken_.store(publication, std::memory_order_release);
-  __android_log_print(ANDROID_LOG_INFO, kTag,
-                      "Audio engine initialized at %.2f Hz", sampleRate);
+  graph_ = std::make_unique<SceneGraph>(sampleRate, framesPerBuffer);
+  xruns_.store(0);
+  lastRenderDurationMicros_.store(0.0);
+  __android_log_print(ANDROID_LOG_INFO, kTag, "Audio engine initialized at %.2f Hz", sampleRate);
 }
 
+/**
+ * @brief Shuts down the audio engine and clears internal state.
+ *
+ * Destroys the internal SceneGraph, resets the xrun counter and last render
+ * duration to zero, and releases resources held by the bridge.
+ */
 void AudioEngineBridge::shutdown() {
   std::lock_guard<std::mutex> lock(mutex_);
-  stopRealtimePlaneLocked();
-  realtimePlane_.publishGraph(nullptr, 0U);
   graph_.reset();
+  xruns_.store(0);
+  lastRenderDurationMicros_.store(0.0);
   clipBuffers_.clear();
-  realtimePlane_.resetQuiescent();
   __android_log_print(ANDROID_LOG_INFO, kTag, "Audio engine shutdown");
 }
 
-void AudioEngineBridge::requireInitializedLocked() {
-  if (!graph_) {
-    throw std::runtime_error("Audio engine is not initialized");
-  }
-}
-
-void AudioEngineBridge::requireTransportStoppedLocked() {
-  if (realtimePlane_.isPlaying()) {
-    throw std::runtime_error(
-        "Audio graph structure cannot change while transport is playing");
-  }
-}
-
-void AudioEngineBridge::stopRealtimePlaneLocked() noexcept {
-  if (realtimePlane_.isPlaying()) {
-    RealtimeControlCommand panic{};
-    panic.type = RealtimeCommandType::kPanicAllInstruments;
-    (void)realtimePlane_.enqueue(panic);
-  }
-  realtimePlane_.setPlaying(false);
-  realtimePlane_.waitUntilRenderIdle();
-  if (graph_) {
-    graph_->panicInstruments();
-  }
-  realtimePlane_.discardCommandsQuiescent();
-}
-
-RealtimeNodeId AudioEngineBridge::requireRealtimeNodeLocked(
-    const std::string& nodeId) {
-  requireInitializedLocked();
-  const auto resolved = graph_->resolveRealtimeNodeId(nodeId);
-  if (resolved == kInvalidRealtimeNodeId) {
-    throw std::runtime_error("Node not found");
-  }
-  return resolved;
-}
-
-bool AudioEngineBridge::enqueueLocked(
-    const RealtimeControlCommand& command) noexcept {
-  return realtimePlane_.enqueue(command);
-}
-
-void AudioEngineBridge::render(float** outputs, std::size_t channelCount,
-                               std::size_t frameCount) noexcept {
+/**
+ * @brief Renders audio into the provided output buffers and updates render diagnostics.
+ *
+ * Attempts a non-blocking render of the internal audio graph into the provided channel buffers.
+ * If the graph is unavailable, the render lock cannot be obtained, or an exception occurs during
+ * rendering, the output buffers are filled with zeros, the xrun counter is incremented, and the
+ * last render duration is reset to 0. On successful render the elapsed time in microseconds is
+ * stored in the diagnostics state.
+ *
+ * @param outputs Array of pointers to per-channel float sample buffers (length == channelCount).
+ *                Each buffer must be able to hold frameCount samples.
+ * @param channelCount Number of channels (size of the outputs array).
+ * @param frameCount Number of frames to render per channel.
+ */
+void AudioEngineBridge::render(float** outputs, std::size_t channelCount, std::size_t frameCount) {
   AudioBufferView view(outputs, channelCount, frameCount);
-  const auto publication =
-      publicationToken_.load(std::memory_order_acquire);
-  realtimePlane_.render(view, publication);
-}
-
-void AudioEngineBridge::startTransport() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  requireInitializedLocked();
-  const auto publication =
-      publicationToken_.load(std::memory_order_acquire);
-  realtimePlane_.publishGraph(graph_.get(), publication);
-  realtimePlane_.setPlaying(true);
-}
-
-void AudioEngineBridge::stopTransport() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  requireInitializedLocked();
-  stopRealtimePlaneLocked();
-}
-
-void AudioEngineBridge::locateTransport(std::uint64_t frame) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  requireInitializedLocked();
-  if (realtimePlane_.isPlaying()) {
-    RealtimeControlCommand command{};
-    command.type = RealtimeCommandType::kLocateTransport;
-    command.frame = frame;
-    if (!enqueueLocked(command)) {
-      throw std::runtime_error("Realtime command queue is full");
-    }
+  std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+  if (!lock.owns_lock()) {
+    view.fill(0.0F);
+    xruns_.fetch_add(1);
+    lastRenderDurationMicros_.store(0.0);
     return;
   }
-  graph_->locate(frame);
-}
-
-void AudioEngineBridge::setTransportLoop(std::uint64_t startFrame,
-                                         std::uint64_t endFrame,
-                                         bool enabled) {
-  if (enabled && startFrame >= endFrame) {
-    throw std::invalid_argument(
-        "Enabled transport loop requires startFrame < endFrame");
-  }
-
-  std::lock_guard<std::mutex> lock(mutex_);
-  requireInitializedLocked();
-  if (realtimePlane_.isPlaying()) {
-    RealtimeControlCommand command{};
-    command.type = RealtimeCommandType::kSetTransportLoop;
-    command.frame = startFrame;
-    command.endFrame = endFrame;
-    command.enabled = enabled;
-    if (!enqueueLocked(command)) {
-      throw std::runtime_error("Realtime command queue is full");
-    }
+  if (!graph_) {
+    view.fill(0.0F);
+    lastRenderDurationMicros_.store(0.0);
     return;
   }
-  graph_->setTransportLoop(startFrame, endFrame, enabled);
+  const auto start = std::chrono::steady_clock::now();
+  try {
+    graph_->render(view);
+  } catch (const std::exception& ex) {
+    view.fill(0.0F);
+    xruns_.fetch_add(1);
+    lastRenderDurationMicros_.store(0.0);
+    __android_log_print(ANDROID_LOG_ERROR, kTag, "Render failed: %s", ex.what());
+    return;
+  } catch (...) {
+    view.fill(0.0F);
+    xruns_.fetch_add(1);
+    lastRenderDurationMicros_.store(0.0);
+    __android_log_print(ANDROID_LOG_ERROR, kTag, "Render failed with unknown error");
+    return;
+  }
+  const auto end = std::chrono::steady_clock::now();
+  const auto micros = std::chrono::duration<double, std::micro>(end - start).count();
+  lastRenderDurationMicros_.store(micros);
 }
 
-AudioEngineBridge::TransportState AudioEngineBridge::getTransportState() {
+/**
+ * @brief Adds a DSP node to the active scene graph.
+ *
+ * @param id Identifier for the node within the graph.
+ * @param node Unique pointer to the DSP node; ownership is transferred to the graph on success.
+ * @return true if the node was added to the graph, false if there is no active graph or the add failed.
+ */
+bool AudioEngineBridge::addNode(const std::string& id, std::unique_ptr<DSPNode> node) {
   std::lock_guard<std::mutex> lock(mutex_);
-  return {graph_ ? graph_->currentFrame() : 0U,
-          graph_ != nullptr && realtimePlane_.isPlaying()};
-}
-
-bool AudioEngineBridge::addNode(const std::string& id,
-                                std::unique_ptr<DSPNode> node) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  requireInitializedLocked();
-  requireTransportStoppedLocked();
+  if (!graph_) {
+    return false;
+  }
   return graph_->addNode(id, std::move(node));
 }
 
 void AudioEngineBridge::removeNode(const std::string& id) {
   std::lock_guard<std::mutex> lock(mutex_);
-  requireInitializedLocked();
-  requireTransportStoppedLocked();
-  graph_->removeNode(id);
+  if (graph_) {
+    graph_->removeNode(id);
+  }
 }
 
-bool AudioEngineBridge::connect(const std::string& source,
-                                const std::string& destination) {
+bool AudioEngineBridge::connect(const std::string& source, const std::string& destination) {
   std::lock_guard<std::mutex> lock(mutex_);
-  requireInitializedLocked();
-  requireTransportStoppedLocked();
+  if (!graph_) {
+    return false;
+  }
   return graph_->connect(source, destination);
 }
 
-void AudioEngineBridge::disconnect(const std::string& source,
-                                   const std::string& destination) {
+void AudioEngineBridge::disconnect(const std::string& source, const std::string& destination) {
   std::lock_guard<std::mutex> lock(mutex_);
-  requireInitializedLocked();
-  requireTransportStoppedLocked();
-  graph_->disconnect(source, destination);
+  if (graph_) {
+    graph_->disconnect(source, destination);
+  }
 }
 
-void AudioEngineBridge::scheduleParameterAutomation(
-    const std::string& nodeId, const std::string& parameter,
-    std::uint64_t frame, double value) {
+/**
+ * @brief Schedules a parameter change for a node to take effect at a specific future frame.
+ *
+ * If the internal scene graph is not available, the call is a no-op. Exceptions derived from
+ * `std::exception` thrown while scheduling are caught and logged; other exception types are not caught.
+ *
+ * @param nodeId Identifier of the target node.
+ * @param parameter Name of the parameter to set on the node.
+ * @param frame Frame index at which the parameter change should be applied.
+ * @param value Value to assign to the parameter at the scheduled frame.
+ */
+void AudioEngineBridge::scheduleParameterAutomation(const std::string& nodeId, const std::string& parameter,
+                                                    std::uint64_t frame, double value) {
   std::lock_guard<std::mutex> lock(mutex_);
-  requireInitializedLocked();
-  const auto resolvedNode = requireRealtimeNodeLocked(nodeId);
-  const auto resolvedParameter =
-      graph_->resolveNodeParameterId(resolvedNode, parameter);
-  if (!resolvedParameter) {
-    throw std::runtime_error("Node parameter is invalid");
-  }
-
-  if (realtimePlane_.isPlaying()) {
-    RealtimeControlCommand command{};
-    command.type = RealtimeCommandType::kScheduleNodeParameter;
-    command.nodeId = resolvedNode;
-    command.parameterId = *resolvedParameter;
-    command.frame = frame;
-    command.parameterValue = value;
-    if (!enqueueLocked(command)) {
-      throw std::runtime_error("Realtime command queue is full");
-    }
+  if (!graph_) {
     return;
   }
-
-  if (!graph_->scheduleParameterAutomation(resolvedNode, *resolvedParameter,
-                                           frame, value)) {
-    throw std::runtime_error(
-        "Parameter automation queue is full or contains an invalid event");
+  try {
+    graph_->scheduleAutomation(nodeId,
+                               [parameter, value](DSPNode& node) { node.setParameter(parameter, value); }, frame);
+  } catch (const std::exception& ex) {
+    __android_log_print(ANDROID_LOG_ERROR, kTag, "Failed to schedule automation: %s", ex.what());
   }
 }
 
-void AudioEngineBridge::scheduleInstrumentEventFromNow(
-    const std::string& nodeId, InstrumentEvent event,
-    std::uint64_t frameOffset) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  requireInitializedLocked();
-  const auto resolvedNode = requireRealtimeNodeLocked(nodeId);
-  event.retainAcrossPanic = false;
-  if (!graph_->validateInstrumentEvent(resolvedNode, event)) {
-    throw std::invalid_argument("Instrument event is invalid");
+bool AudioEngineBridge::registerClipBuffer(const std::string& key, double sampleRate, std::size_t channelCount,
+                                           std::size_t frameCount, std::vector<std::vector<float>> channelData) {
+  if (key.empty() || !std::isfinite(sampleRate) || sampleRate <= 0.0 || channelCount == 0 || frameCount == 0) {
+    return false;
   }
-
-  if (realtimePlane_.isPlaying()) {
-    RealtimeControlCommand command{};
-    command.type = RealtimeCommandType::kScheduleInstrumentEvent;
-    command.nodeId = resolvedNode;
-    command.frame = frameOffset;
-    command.frameIsRelative = true;
-    command.instrumentEvent = event;
-    if (!enqueueLocked(command)) {
-      throw std::runtime_error("Realtime command queue is full");
-    }
-    return;
-  }
-
-  const auto currentFrame = graph_->currentFrame();
-  if (frameOffset >
-      std::numeric_limits<std::uint64_t>::max() - currentFrame) {
-    throw std::out_of_range("Instrument event frame overflow");
-  }
-  event.frame = currentFrame + frameOffset;
-  if (!graph_->scheduleInstrumentEvent(resolvedNode, event)) {
-    throw std::runtime_error(
-        "Instrument event queue is full or contains an invalid event");
-  }
-}
-
-void AudioEngineBridge::scheduleInstrumentEvents(
-    const std::string& nodeId, std::span<const InstrumentEvent> events,
-    bool replace) {
-  if (events.size() > InstrumentNode::kEventCapacity) {
-    throw std::out_of_range("Instrument event batch exceeds fixed capacity");
-  }
-
-  std::lock_guard<std::mutex> lock(mutex_);
-  requireInitializedLocked();
-  const auto resolvedNode = requireRealtimeNodeLocked(nodeId);
-  for (const auto& event : events) {
-    if (!graph_->validateInstrumentEvent(resolvedNode, event)) {
-      throw std::invalid_argument("Instrument event batch is invalid");
-    }
-  }
-
-  if (!realtimePlane_.isPlaying()) {
-    graph_->scheduleInstrumentEvents(nodeId, events, replace);
-    return;
-  }
-
-  std::array<RealtimeControlCommand,
-             InstrumentNode::kEventCapacity + 1U>
-      commands{};
-  std::size_t commandCount = 0U;
-  if (replace) {
-    commands[commandCount].type =
-        RealtimeCommandType::kClearInstrumentEvents;
-    commands[commandCount].nodeId = resolvedNode;
-    ++commandCount;
-  }
-  for (const auto& event : events) {
-    auto& command = commands[commandCount++];
-    command.type = RealtimeCommandType::kScheduleInstrumentEvent;
-    command.nodeId = resolvedNode;
-    command.frame = event.frame;
-    command.instrumentEvent = event;
-  }
-  if (!realtimePlane_.enqueueBatch(
-          std::span<const RealtimeControlCommand>(commands.data(),
-                                                  commandCount))) {
-    throw std::runtime_error("Realtime command queue is full");
-  }
-}
-
-void AudioEngineBridge::allNotesOff(const std::string& nodeId) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  requireInitializedLocked();
-  const auto resolvedNode = requireRealtimeNodeLocked(nodeId);
-  if (realtimePlane_.isPlaying()) {
-    RealtimeControlCommand command{};
-    command.type = RealtimeCommandType::kAllNotesOff;
-    command.nodeId = resolvedNode;
-    if (!enqueueLocked(command)) {
-      throw std::runtime_error("Realtime command queue is full");
-    }
-    return;
-  }
-  if (!graph_->allNotesOff(resolvedNode)) {
-    throw std::runtime_error("Node is not an instrument");
-  }
-}
-
-bool AudioEngineBridge::registerClipBuffer(
-    const std::string& key, double sampleRate, std::size_t channelCount,
-    std::size_t frameCount,
-    std::vector<std::vector<float>> channelData) {
-  if (key.empty() || !std::isfinite(sampleRate) || sampleRate <= 0.0 ||
-      channelCount == 0U || frameCount == 0U ||
-      channelData.size() != channelCount) {
+  if (channelData.size() != channelCount) {
     return false;
   }
   for (const auto& channel : channelData) {
@@ -345,18 +179,13 @@ bool AudioEngineBridge::registerClipBuffer(
   buffer->sampleRate = sampleRate;
   buffer->frameCount = frameCount;
   buffer->channelSamples = std::move(channelData);
-  const std::size_t byteSize =
-      channelCount * frameCount * sizeof(float);
+  const std::size_t byteSize = channelCount * frameCount * sizeof(float);
 
   std::lock_guard<std::mutex> lock(mutex_);
-  requireInitializedLocked();
-  auto [entryIt, inserted] = clipBuffers_.try_emplace(key);
-  auto& entry = entryIt->second;
+  auto& entry = clipBuffers_[key];
   entry.buffer = std::move(buffer);
   entry.byteSize = byteSize;
-  if (inserted || entry.referenceCount == 0U) {
-    entry.referenceCount = 1U;
-  }
+  entry.referenceCount += 1;
   return true;
 }
 
@@ -365,63 +194,41 @@ bool AudioEngineBridge::unregisterClipBuffer(const std::string& key) {
     return false;
   }
   std::lock_guard<std::mutex> lock(mutex_);
-  requireInitializedLocked();
   auto it = clipBuffers_.find(key);
   if (it == clipBuffers_.end()) {
     return true;
   }
   auto& entry = it->second;
-  if (entry.referenceCount > 0U) {
-    --entry.referenceCount;
+  if (entry.referenceCount > 0) {
+    entry.referenceCount -= 1;
   }
-  if (entry.referenceCount == 0U) {
+  if (entry.referenceCount == 0) {
     clipBuffers_.erase(it);
   }
   return true;
 }
 
-std::shared_ptr<const AudioEngineBridge::ClipBuffer>
-AudioEngineBridge::clipBufferForKey(const std::string& key) {
+std::shared_ptr<const AudioEngineBridge::ClipBuffer> AudioEngineBridge::clipBufferForKey(const std::string& key) {
   std::lock_guard<std::mutex> lock(mutex_);
-  requireInitializedLocked();
   if (const auto it = clipBuffers_.find(key); it != clipBuffers_.end()) {
     return it->second.buffer;
   }
   return nullptr;
 }
 
+/**
+ * @brief Retrieve current render diagnostics.
+ *
+ * Provides the number of xruns (missed or overrun render calls) and the duration
+ * of the last render call in microseconds.
+ *
+ * @return RenderDiagnostics Struct containing:
+ *  - xruns: number of missed/overrun render calls.
+ *  - lastRenderDurationMicros: duration of the last render call in microseconds.
+ */
 AudioEngineBridge::RenderDiagnostics AudioEngineBridge::getDiagnostics() {
-  RenderDiagnostics diagnostics{};
+  RenderDiagnostics diagnostics{xruns_.load(), lastRenderDurationMicros_.load(), 0};
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!graph_) {
-    return diagnostics;
-  }
-
-  const auto realtime = realtimePlane_.diagnostics();
-  diagnostics.xruns = realtime.xruns;
-  diagnostics.lastRenderDurationMicros =
-      static_cast<double>(realtime.lastRenderMicros);
-  diagnostics.initialized = true;
-  diagnostics.activeVoices = realtime.activeVoices;
-  diagnostics.pendingInstrumentEvents =
-      realtime.pendingInstrumentEvents;
-  diagnostics.realtimeQueueDepth = realtime.commandQueueDepth;
-  diagnostics.realtimeQueueOverflows = realtime.commandQueueOverflows;
-  diagnostics.realtimeCommandFailures = realtime.commandFailures;
-  diagnostics.renderCount = realtime.renderStatistics.renderCount;
-  diagnostics.maximumRenderDurationMicros =
-      static_cast<double>(realtime.renderStatistics.maximumRenderMicros);
-  diagnostics.p50RenderDurationMicros =
-      static_cast<double>(realtime.renderStatistics.p50RenderMicros);
-  diagnostics.p95RenderDurationMicros =
-      static_cast<double>(realtime.renderStatistics.p95RenderMicros);
-  diagnostics.p99RenderDurationMicros =
-      static_cast<double>(realtime.renderStatistics.p99RenderMicros);
-  if (realtime.renderStatistics.renderCount > 0U) {
-    diagnostics.averageRenderDurationMicros =
-        static_cast<double>(realtime.renderStatistics.totalRenderMicros) /
-        static_cast<double>(realtime.renderStatistics.renderCount);
-  }
   for (const auto& [_, entry] : clipBuffers_) {
     diagnostics.clipBufferBytes += entry.byteSize;
   }
