@@ -1,11 +1,7 @@
-import { AppState, NativeModules, Platform, type AppStateStatus } from 'react-native';
+import { NativeModules, Platform } from 'react-native';
 import { useEffect } from 'react';
 
-import {
-  createEmptySession,
-  type PluginRoutingNode,
-  type Session,
-} from '../../session/models';
+import type { PluginRoutingNode, Session } from '../../session/models';
 import { demoSession, DEMO_SESSION_ID } from '../../session/fixtures/demoSession';
 import { InMemorySessionStorageAdapter } from '../../session/storage/memoryAdapter';
 import type { SessionStorageAdapter } from '../../session/storage';
@@ -59,11 +55,6 @@ class PassiveAudioEngineBridge implements AudioEngineBridge {
       updatedAt: Date.now(),
     };
     this.emitTransport();
-  }
-
-  async resetSession(): Promise<void> {
-    this.lastSession = null;
-    this.transportSnapshot = null;
   }
 
   getSnapshot(): Session | null {
@@ -140,7 +131,8 @@ class PassiveAudioEngineBridge implements AudioEngineBridge {
   }
 
   async dispose(): Promise<void> {
-    await this.resetSession();
+    this.lastSession = null;
+    this.transportSnapshot = null;
     this.transportListeners.clear();
     this.diagnosticsListeners.clear();
   }
@@ -179,15 +171,7 @@ class PassiveAudioEngineBridge implements AudioEngineBridge {
   }
 }
 
-export class NativeAudioUnavailableError extends Error {
-  public override readonly cause?: unknown;
-
-  constructor(message: string, cause?: unknown) {
-    super(message);
-    this.name = 'NativeAudioUnavailableError';
-    this.cause = cause;
-  }
-}
+export class NativeAudioUnavailableError extends Error {}
 
 export interface DisposableAudioEngineBridge extends AudioEngineBridge {
   dispose?: () => Promise<void> | void;
@@ -208,7 +192,6 @@ interface ProductionEnvironmentOptions {
   framesPerBuffer?: number;
   bpm?: number;
   fileLoader?: AudioFileLoader;
-  storageAdapter?: SessionStorageAdapter;
 }
 
 interface PassiveEnvironmentOptions {
@@ -219,7 +202,6 @@ interface PassiveEnvironmentOptions {
 const DEFAULT_SAMPLE_RATE = demoSession.metadata.sampleRate;
 const DEFAULT_FRAMES_PER_BUFFER = 256;
 const DEFAULT_BPM = demoSession.metadata.bpm;
-const DEFAULT_SESSION_NAME = 'Untitled Session';
 
 export const createDemoSessionEnvironment = async (): Promise<SessionEnvironment> => {
   const storage = new InMemorySessionStorageAdapter();
@@ -260,10 +242,8 @@ export const createProductionSessionEnvironment = async (
   if (!isNativeModuleAvailable()) {
     throw new NativeAudioUnavailableError('AudioEngine native module is unavailable');
   }
-  if (!options.fileLoader && !isNativeAudioFileLoaderAvailable()) {
-    throw new NativeAudioUnavailableError(
-      'Audio sample loader native module is unavailable',
-    );
+  if (!isNativeAudioFileLoaderAvailable()) {
+    throw new Error('Audio sample loader native module is unavailable');
   }
 
   const sampleRate = options.sampleRate ?? DEFAULT_SAMPLE_RATE;
@@ -272,16 +252,26 @@ export const createProductionSessionEnvironment = async (
   const sessionId = options.sessionId ?? DEMO_SESSION_ID;
 
   const audioEngine = new AudioEngine({ sampleRate, framesPerBuffer, bpm });
-  let bridge: SessionAudioBridge | undefined;
-  let pluginHost: PluginHost | null = null;
-  let disposed = false;
-  const dispose = async () => {
-    if (disposed) {
-      return;
-    }
-    disposed = true;
+  await audioEngine.init();
+  const fileLoader = options.fileLoader ?? new NativeAudioFileLoader();
+  const pluginHost = instantiatePluginHost();
+  const resolvePluginDescriptor = pluginHost
+    ? createPluginDescriptorResolver(pluginHost)
+    : undefined;
+  const bridge = new SessionAudioBridge(audioEngine, {
+    fileLoader,
+    pluginHost: pluginHost ?? undefined,
+    resolvePluginDescriptor,
+  });
+  const storage = createSessionStorageAdapter(
+    await resolveStorageDirectory(options.storageDirectory),
+  );
+  await storage.initialize();
+  const manager = new SessionManager(storage, bridge);
+  await bootstrapSessionIfNeeded(manager, storage, sessionId);
 
-    if (bridge && typeof bridge.dispose === 'function') {
+  const dispose = async () => {
+    if (typeof bridge.dispose === 'function') {
       try {
         await bridge.dispose();
       } catch (error) {
@@ -300,44 +290,13 @@ export const createProductionSessionEnvironment = async (
     }
   };
 
-  try {
-    await audioEngine.init();
-  } catch (error) {
-    await dispose();
-    throw new NativeAudioUnavailableError('Audio engine initialization failed', error);
-  }
-
-  try {
-    const fileLoader = options.fileLoader ?? new NativeAudioFileLoader();
-    pluginHost = instantiatePluginHost();
-    const resolvePluginDescriptor = pluginHost
-      ? createPluginDescriptorResolver(pluginHost)
-      : undefined;
-    bridge = new SessionAudioBridge(audioEngine, {
-      fileLoader,
-      pluginHost: pluginHost ?? undefined,
-      resolvePluginDescriptor,
-    });
-    const storage =
-      options.storageAdapter ??
-      createSessionStorageAdapter(
-        await resolveStorageDirectory(options.storageDirectory),
-      );
-    await storage.initialize();
-    const manager = new SessionManager(storage, bridge);
-    await bootstrapSessionIfNeeded(manager, storage, sessionId);
-
-    return {
-      manager,
-      audioBridge: bridge,
-      sessionId,
-      pluginHost: pluginHost ?? undefined,
-      dispose,
-    };
-  } catch (error) {
-    await dispose();
-    throw error;
-  }
+  return {
+    manager,
+    audioBridge: bridge,
+    sessionId,
+    pluginHost: pluginHost ?? undefined,
+    dispose,
+  };
 };
 
 const bootstrapSessionIfNeeded = async (
@@ -350,10 +309,7 @@ const bootstrapSessionIfNeeded = async (
     await manager.loadSession(sessionId);
     return;
   }
-  // Persisted environments must not depend on fixture-only audio paths. Users can
-  // import or create tracks from this starter session without first-launch decode
-  // failures, while the explicit demo environment keeps the richer fixture.
-  const seed = createEmptySession(sessionId, DEFAULT_SESSION_NAME);
+  const seed = cloneDemoSession(sessionId);
   await manager.createSession(seed);
 };
 
@@ -938,27 +894,7 @@ export const useSessionEnvironmentLifecycle = (
       return undefined;
     }
     let disposed = false;
-    let appState: AppStateStatus = AppState.currentState;
-    environment.audioBridge.setInstrumentInputEnabled?.(appState === 'active');
-    const appStateSubscription = AppState.addEventListener('change', (nextState) => {
-      const leftForeground = appState === 'active' && nextState !== 'active';
-      appState = nextState;
-      environment.audioBridge.setInstrumentInputEnabled?.(nextState === 'active');
-      if (!leftForeground) {
-        return;
-      }
-      const stopTransport = environment.audioBridge.stopTransport;
-      if (typeof stopTransport !== 'function') {
-        return;
-      }
-      void Promise.resolve()
-        .then(() => stopTransport.call(environment.audioBridge))
-        .catch((error) => {
-          console.error(`Failed to stop transport while backgrounding ${context}`, error);
-        });
-    });
     return () => {
-      appStateSubscription.remove();
       if (disposed) {
         return;
       }

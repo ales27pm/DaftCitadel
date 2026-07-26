@@ -9,7 +9,6 @@ describe('disposeSessionEnvironment', () => {
     const { audioBridge: overrideBridge, ...rest } = overrides;
     const audioBridge: DisposableAudioEngineBridge = {
       applySessionUpdate: jest.fn(),
-      resetSession: jest.fn(),
       ...(overrideBridge ?? {}),
     } as DisposableAudioEngineBridge;
 
@@ -39,7 +38,6 @@ describe('disposeSessionEnvironment', () => {
       dispose,
       audioBridge: {
         applySessionUpdate: jest.fn(),
-        resetSession: jest.fn(),
         dispose: bridgeDispose,
       },
     });
@@ -56,7 +54,6 @@ describe('disposeSessionEnvironment', () => {
     const environment = createEnvironment({
       audioBridge: {
         applySessionUpdate: jest.fn(),
-        resetSession: jest.fn(),
         dispose: bridgeDispose,
       },
     });
@@ -83,7 +80,6 @@ describe('disposeSessionEnvironment', () => {
     const environment = createEnvironment({
       audioBridge: {
         applySessionUpdate: jest.fn(),
-        resetSession: jest.fn(),
         dispose: bridgeDispose,
       },
     });

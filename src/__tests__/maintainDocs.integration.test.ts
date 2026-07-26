@@ -171,6 +171,7 @@ describe('maintain:docs automation', () => {
 
     const applyResult = await runMaintainDocs(sandboxRoot, ['--no-prettier'], {
       MAINTAIN_DOCS_PYTHON: '/nonexistent/python',
+      PATH: '/tmp/invalid-path-does-not-exist',
     });
 
     expect(applyResult.code).toBe(1);

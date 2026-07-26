@@ -1,0 +1,17 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="com.daftcitadel.collab" >
+4
+5    <uses-sdk android:minSdkVersion="24" />
+6
+7    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+7-->/home/ales27pm/Documents/DaftCitadel/native/collab/android/src/main/AndroidManifest.xml:4:5-76
+7-->/home/ales27pm/Documents/DaftCitadel/native/collab/android/src/main/AndroidManifest.xml:4:22-73
+8    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+8-->/home/ales27pm/Documents/DaftCitadel/native/collab/android/src/main/AndroidManifest.xml:5:5-79
+8-->/home/ales27pm/Documents/DaftCitadel/native/collab/android/src/main/AndroidManifest.xml:5:22-76
+9    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
+9-->/home/ales27pm/Documents/DaftCitadel/native/collab/android/src/main/AndroidManifest.xml:6:5-78
+9-->/home/ales27pm/Documents/DaftCitadel/native/collab/android/src/main/AndroidManifest.xml:6:22-75
+10
+11</manifest>

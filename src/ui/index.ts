@@ -3,4 +3,3 @@ export * from './layout';
 export * from './editors';
 export * from './navigation';
 export * from './screens';
-export * from './settings';

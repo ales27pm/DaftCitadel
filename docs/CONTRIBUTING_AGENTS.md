@@ -18,11 +18,14 @@ Use this document when proposing changes to the automation agent configuration o
    - Run `python3 scripts/agents_sync.py plan --json` and verify that the plan contains only the intended changes.
    - Apply with `python3 scripts/agents_sync.py apply --auto-branch` or, if working on a feature branch, run without `--auto-branch` and commit manually.
 4. **Run mandatory quality gates**
-   - `npm run verify`
+   - `npm run prettier`
+   - `npm run lint`
+   - `npm run typecheck`
+   - `npm run test`
    - `npm run manage:agents`
 5. **Open a pull request**
    - Summarize the motivation, affected scopes, and any new platform requirements (entitlements, permissions, tooling).
-   - Attach the recorded `npm run verify` result and mention reviewers responsible for the impacted areas.
+   - Attach CI results and mention reviewers responsible for the impacted areas.
 
 ## Review Guidelines
 
@@ -34,7 +37,7 @@ Use this document when proposing changes to the automation agent configuration o
 ## Communication Expectations
 
 - Use the `#daft-citadel-agents` Slack channel for coordination, especially when changes alter required workflows.
-- Document any temporary deviations (for example, a platform check unavailable on the local toolchain) in `docs/CHANGELOG_AGENTS.md` so future contributors understand the timeline.
+- Document any temporary deviations (e.g., skipping a command due to CI outage) in `docs/CHANGELOG_AGENTS.md` so future contributors understand the timeline.
 - When blocking a PR, provide concrete remediation steps and link to the relevant section of this document.
 
 ## Incident Response

@@ -18,10 +18,8 @@ bool SceneGraph::addNode(const std::string& id, std::unique_ptr<DSPNode> node) {
     return false;
   }
   node->prepare(sampleRate_);
-  node->locate(clock_.frameTime());
   const auto result = nodes_.emplace(id, std::move(node));
   if (result.second) {
-    nodeIncarnations_[id] = nextNodeIncarnation_++;
     nodeBuffers_.try_emplace(id);
     rebuildTopology();
   }
@@ -30,7 +28,6 @@ bool SceneGraph::addNode(const std::string& id, std::unique_ptr<DSPNode> node) {
 
 void SceneGraph::removeNode(const std::string& id) {
   nodes_.erase(id);
-  nodeIncarnations_.erase(id);
   nodeBuffers_.erase(id);
   connections_.erase(std::remove_if(connections_.begin(), connections_.end(),
                                     [&](const auto& conn) {
@@ -54,41 +51,9 @@ bool SceneGraph::connect(const std::string& source, const std::string& destinati
   if (duplicate) {
     return false;
   }
-  if (wouldIntroduceCycle(source, destination)) {
-    return false;
-  }
   connections_.push_back({source, destination});
   rebuildTopology();
   return true;
-}
-
-bool SceneGraph::wouldIntroduceCycle(const std::string& source,
-                                     const std::string& destination) const {
-  if (destination == kOutputBusId) {
-    return false;
-  }
-  if (source == destination) {
-    return true;
-  }
-
-  std::vector<std::string> pending{destination};
-  std::unordered_set<std::string> visited;
-  while (!pending.empty()) {
-    auto current = std::move(pending.back());
-    pending.pop_back();
-    if (!visited.insert(current).second) {
-      continue;
-    }
-    if (current == source) {
-      return true;
-    }
-    for (const auto& connection : connections_) {
-      if (connection.source == current && connection.destination != kOutputBusId) {
-        pending.push_back(connection.destination);
-      }
-    }
-  }
-  return false;
 }
 
 void SceneGraph::disconnect(const std::string& source, const std::string& destination) {
@@ -105,51 +70,11 @@ void SceneGraph::render(AudioBufferView outputBuffer) {
     outputBuffer.fill(0.0F);
     return;
   }
+  scheduler_.dispatchDueEvents();
   outputBuffer.fill(0.0F);
 
-  std::size_t renderedFrames = 0U;
-  while (renderedFrames < outputBuffer.frameCount()) {
-    if (transportLoopEnabled_ && clock_.frameTime() >= loopEndFrame_) {
-      rewindTransportLoop();
-    }
-
-    const auto remainingFrames = outputBuffer.frameCount() - renderedFrames;
-    auto sectionFrames = remainingFrames;
-    if (transportLoopEnabled_) {
-      const auto framesUntilLoopEnd = loopEndFrame_ - clock_.frameTime();
-      sectionFrames = static_cast<std::size_t>(std::min<std::uint64_t>(
-          static_cast<std::uint64_t>(remainingFrames), framesUntilLoopEnd));
-    }
-    if (sectionFrames == 0U) {
-      // A valid loop always advances after rewind; this guard also prevents an
-      // accidental control-state regression from spinning on the audio thread.
-      break;
-    }
-
-    renderSection(outputBuffer, renderedFrames, sectionFrames);
-    renderedFrames += sectionFrames;
-
-    // Rewind immediately when a callback lands exactly on the exclusive loop
-    // end. The next callback therefore observes loopStartFrame_ rather than a
-    // transient out-of-range clock value.
-    if (transportLoopEnabled_ && clock_.frameTime() == loopEndFrame_) {
-      rewindTransportLoop();
-    }
-  }
-}
-
-void SceneGraph::renderSection(AudioBufferView outputBuffer,
-                               std::size_t frameOffset,
-                               std::size_t frameCount) {
-  std::array<float*, kMaxChannels> sectionChannels{};
-  for (std::size_t channel = 0U; channel < outputBuffer.channelCount(); ++channel) {
-    sectionChannels[channel] = outputBuffer.channel(channel).data() + frameOffset;
-  }
-  AudioBufferView sectionOutput(sectionChannels.data(), outputBuffer.channelCount(),
-                                frameCount);
-
-  scheduler_.dispatchDueEvents();
-  const auto channelCount = sectionOutput.channelCount();
+  const auto channelCount = outputBuffer.channelCount();
+  const auto frameCount = outputBuffer.frameCount();
 
   ensureNodeBuffers(channelCount, frameCount);
 
@@ -179,52 +104,11 @@ void SceneGraph::renderSection(AudioBufferView outputBuffer,
 
   for (const auto& sourceId : outputSources_) {
     if (auto it = nodeBuffers_.find(sourceId); it != nodeBuffers_.end()) {
-      sectionOutput.addBufferInPlace(it->second.view(channelCount));
+      outputBuffer.addBufferInPlace(it->second.view(channelCount));
     }
   }
 
   clock_.advanceBy(static_cast<std::uint32_t>(frameCount));
-}
-
-void SceneGraph::locate(std::uint64_t frame) {
-  clock_.locate(frame);
-  for (auto& [_, node] : nodes_) {
-    node->locate(frame);
-  }
-}
-
-void SceneGraph::setTransportLoop(std::uint64_t startFrame,
-                                  std::uint64_t endFrame, bool enabled) {
-  if (enabled && startFrame >= endFrame) {
-    throw std::invalid_argument(
-        "Enabled transport loop requires startFrame < endFrame");
-  }
-
-  if (transportLoopEnabled_) {
-    for (auto& [_, node] : nodes_) {
-      if (auto* instrument = dynamic_cast<InstrumentNode*>(node.get())) {
-        instrument->restoreTimelineAfterLoop(clock_.frameTime());
-      }
-    }
-  }
-
-  loopStartFrame_ = startFrame;
-  loopEndFrame_ = endFrame;
-  transportLoopEnabled_ = enabled;
-  if (transportLoopEnabled_ && clock_.frameTime() >= loopEndFrame_) {
-    rewindTransportLoop();
-  }
-}
-
-void SceneGraph::rewindTransportLoop() {
-  clock_.locate(loopStartFrame_);
-  for (auto& [_, node] : nodes_) {
-    if (auto* instrument = dynamic_cast<InstrumentNode*>(node.get())) {
-      instrument->rewindTimelineForLoop(loopStartFrame_, loopEndFrame_);
-    } else {
-      node->locate(loopStartFrame_);
-    }
-  }
 }
 
 void SceneGraph::scheduleAutomation(const std::string& nodeId, std::function<void(DSPNode&)> cb,
@@ -233,87 +117,12 @@ void SceneGraph::scheduleAutomation(const std::string& nodeId, std::function<voi
   if (it == nodes_.end()) {
     throw std::runtime_error("Node not found");
   }
-  const auto incarnationIt = nodeIncarnations_.find(nodeId);
-  if (incarnationIt == nodeIncarnations_.end()) {
-    throw std::runtime_error("Node incarnation not found");
-  }
-  const auto incarnation = incarnationIt->second;
 
-  const bool ok = scheduler_.schedule({
-      frame,
-      [this, nodeId, incarnation, cb = std::move(cb)]() mutable {
-        const auto currentIncarnation = nodeIncarnations_.find(nodeId);
-        if (currentIncarnation == nodeIncarnations_.end() ||
-            currentIncarnation->second != incarnation) {
-          return;
-        }
-        const auto node = nodes_.find(nodeId);
-        if (node != nodes_.end()) {
-          cb(*node->second);
-        }
-      },
-  });
+  const bool ok = scheduler_.schedule({frame, [node = it->second.get(), cb = std::move(cb)]() mutable {
+                                          cb(*node);
+                                        }});
   if (!ok) {
     throw std::runtime_error("Scheduler queue is full");
-  }
-}
-
-void SceneGraph::scheduleInstrumentEvents(
-    const std::string& nodeId, std::span<const InstrumentEvent> events,
-    bool replace) {
-  const auto node = nodes_.find(nodeId);
-  if (node == nodes_.end()) {
-    throw std::runtime_error("Node not found");
-  }
-  auto* instrument = dynamic_cast<InstrumentNode*>(node->second.get());
-  if (instrument == nullptr) {
-    throw std::runtime_error("Node is not an instrument");
-  }
-  if (!instrument->scheduleEvents(events, replace)) {
-    throw std::runtime_error("Instrument event queue is full or contains an invalid event");
-  }
-}
-
-void SceneGraph::setInstrumentParameter(const std::string& nodeId,
-                                        std::uint16_t parameter, float value) {
-  const auto node = nodes_.find(nodeId);
-  if (node == nodes_.end()) {
-    throw std::runtime_error("Node not found");
-  }
-  auto* instrument = dynamic_cast<InstrumentNode*>(node->second.get());
-  if (instrument == nullptr) {
-    throw std::runtime_error("Node is not an instrument");
-  }
-  if (!instrument->setImmediateParameter(parameter, value)) {
-    throw std::runtime_error("Instrument parameter is invalid");
-  }
-}
-
-void SceneGraph::allNotesOff(const std::string& nodeId) {
-  const auto node = nodes_.find(nodeId);
-  if (node == nodes_.end()) {
-    throw std::runtime_error("Node not found");
-  }
-  auto* instrument = dynamic_cast<InstrumentNode*>(node->second.get());
-  if (instrument == nullptr) {
-    throw std::runtime_error("Node is not an instrument");
-  }
-  instrument->allNotesOff();
-}
-
-void SceneGraph::allNotesOff() {
-  for (auto& [_, node] : nodes_) {
-    if (auto* instrument = dynamic_cast<InstrumentNode*>(node.get())) {
-      instrument->allNotesOff();
-    }
-  }
-}
-
-void SceneGraph::panicInstruments() noexcept {
-  for (auto& [_, node] : nodes_) {
-    if (auto* instrument = dynamic_cast<InstrumentNode*>(node.get())) {
-      instrument->panic();
-    }
   }
 }
 
@@ -360,10 +169,6 @@ void SceneGraph::rebuildTopology() {
       queue.push_back(id);
     }
   }
-  std::sort(queue.begin(), queue.end());
-  for (auto& [_, destinations] : adjacency) {
-    std::sort(destinations.begin(), destinations.end());
-  }
 
   std::size_t index = 0;
   while (index < queue.size()) {
@@ -383,16 +188,14 @@ void SceneGraph::rebuildTopology() {
     }
   }
 
-  if (renderOrder_.size() != nodes_.size()) {
-    renderOrder_.clear();
-    inboundEdges_.clear();
-    outputSources_.clear();
-    return;
+  for (const auto& [id, degree] : indegree) {
+    if (degree > 0U && std::find(renderOrder_.begin(), renderOrder_.end(), id) == renderOrder_.end()) {
+      renderOrder_.push_back(id);
+    }
   }
 
   if (!sourcesFeedingOutput.empty()) {
     outputSources_.assign(sourcesFeedingOutput.begin(), sourcesFeedingOutput.end());
-    std::sort(outputSources_.begin(), outputSources_.end());
   } else {
     outputSources_.clear();
     for (const auto& [id, _] : nodes_) {
@@ -400,7 +203,6 @@ void SceneGraph::rebuildTopology() {
         outputSources_.push_back(id);
       }
     }
-    std::sort(outputSources_.begin(), outputSources_.end());
   }
 }
 

@@ -107,7 +107,7 @@
         "instructions": [
           "Adhere to the repository-wide quality gates defined in the root AGENTS.md.",
           "Document any new platform interactions introduced within {{relativePath}} and ensure they remain cross-platform safe.",
-          "Add focused Jest coverage under `{{relativePath}}/__tests__/` for each new code path.",
+          "Add focused Jest coverage under {{relativePath}}/__tests__/ for each new code path.",
           "Prefer composable utilities and dependency injection so that the {{directoryName}} module remains testable."
         ],
         "notes": [

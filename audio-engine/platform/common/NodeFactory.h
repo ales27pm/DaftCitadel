@@ -5,7 +5,6 @@
 #include <cmath>
 #include <cctype>
 #include <cstddef>
-#include <cstdint>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -16,7 +15,6 @@
 
 #include "audio_engine/DSPNode.h"
 #include "audio_engine/PluginNode.h"
-#include "audio_engine/instruments/juno/Juno106Node.h"
 
 #if defined(__ANDROID__)
 #include "../android/AudioEngineBridge.h"
@@ -24,6 +22,18 @@
 #include "../ios/AudioEngineBridge.hpp"
 #endif
 
+/**
+ * Create a DSPNode instance matching the given node type.
+ *
+ * Creates and configures a concrete daft::audio::DSPNode (e.g., GainNode, SineOscillatorNode, MixerNode)
+ * based on a case-insensitive type name and applies parameters from `options`.
+ * For mixer nodes the "inputcount" option (if present) determines the number of inputs and is not applied as a parameter.
+ *
+ * @param type Case-insensitive name of the node type to create (e.g., "gain", "sine", "mixer").
+ * @param options Mapping of parameter names to numeric and string values to apply to the created node.
+ * @param error Set to a human-readable message if the requested type is unsupported; left unchanged on success.
+ * @returns A unique_ptr to the created DSPNode on success, or `nullptr` if the type is unsupported.
+ */
 namespace daft::audio::bridge {
 
 struct NodeOptions {
@@ -104,32 +114,11 @@ inline std::optional<std::string> clipBufferKeyFromOptions(const NodeOptions& op
 }
 }  // namespace detail
 
-/**
- * Create a DSPNode instance matching the given node type.
- *
- * Creates and configures a concrete daft::audio::DSPNode (e.g., GainNode, SineOscillatorNode, MixerNode)
- * based on a case-insensitive type name and applies parameters from `options`.
- * For mixer nodes the "inputcount" option (if present) determines the number of inputs and is not applied as a parameter.
- *
- * @param type Case-insensitive name of the node type to create (e.g., "gain", "sine", "mixer").
- * @param options Mapping of parameter names to numeric and string values to apply to the created node.
- * @param error Set to a human-readable message if the requested type is unsupported; left unchanged on success.
- * @param engineGeneration Active iOS bridge generation used for clip-buffer ownership checks; ignored on Android.
- * @returns A unique_ptr to the created DSPNode on success, or `nullptr` if the type is unsupported.
- */
 inline std::unique_ptr<daft::audio::DSPNode> CreateNode(const std::string& type,
                                                         const NodeOptions& options,
-                                                        std::string& error,
-                                                        [[maybe_unused]] std::uint64_t engineGeneration = 0) {
+                                                        std::string& error) {
   const auto normalized = detail::normalize(type);
-  if (normalized == "trackoutput") {
-    auto node = std::make_unique<daft::audio::TrackOutputNode>();
-    detail::applyParameters(*node, options, {});
-    return node;
-  }
-  // Other session routing endpoints and buses are transparent audio stages.
-  if (normalized == "gain" || normalized == "gainnode" || normalized == "trackinput" ||
-      normalized == "send" || normalized == "return" || normalized == "sidechaintap") {
+  if (normalized == "gain" || normalized == "gainnode") {
     auto node = std::make_unique<daft::audio::GainNode>();
     detail::applyParameters(*node, options, {});
     return node;
@@ -137,32 +126,6 @@ inline std::unique_ptr<daft::audio::DSPNode> CreateNode(const std::string& type,
   if (normalized == "sine" || normalized == "sineoscillator" || normalized == "oscillator") {
     auto node = std::make_unique<daft::audio::SineOscillatorNode>();
     detail::applyParameters(*node, options, {});
-    return node;
-  }
-  if (normalized == "juno" || normalized == "juno106" ||
-      normalized == "instrument:juno106") {
-    std::size_t polyphony = daft::audio::juno::JunoDSPEngine::kDefaultPolyphony;
-    if (const auto value = options.numericValue("polyphony")) {
-      if (!std::isfinite(*value) || *value < 1.0 || std::floor(*value) != *value ||
-          *value > static_cast<double>(daft::audio::juno::JunoDSPEngine::kMaximumPolyphony)) {
-        error = "juno106 polyphony must be an integer within the supported range";
-        return nullptr;
-      }
-      polyphony = static_cast<std::size_t>(*value);
-    }
-
-    std::uint32_t maximumFrames = daft::audio::juno::Juno106Node::kDefaultMaximumFramesPerBlock;
-    if (const auto value = options.numericValue("maximumframesperblock")) {
-      if (!std::isfinite(*value) || *value < 1.0 || std::floor(*value) != *value ||
-          *value > static_cast<double>(daft::audio::juno::JunoDSPEngine::kMaximumFramesPerBlock)) {
-        error = "juno106 maximumFramesPerBlock must be an integer within the supported range";
-        return nullptr;
-      }
-      maximumFrames = static_cast<std::uint32_t>(*value);
-    }
-
-    auto node = std::make_unique<daft::audio::juno::Juno106Node>(maximumFrames, polyphony);
-    detail::applyParameters(*node, options, {"polyphony", "maximumframesperblock"});
     return node;
   }
   if (normalized == "mixer" || normalized == "mixernode") {
@@ -180,11 +143,7 @@ inline std::unique_ptr<daft::audio::DSPNode> CreateNode(const std::string& type,
       error = "clipPlayer requires a bufferKey option";
       return nullptr;
     }
-#if defined(__ANDROID__)
     auto clipBuffer = AudioEngineBridge::clipBufferForKey(*key);
-#else
-    auto clipBuffer = AudioEngineBridge::clipBufferForKey(engineGeneration, *key);
-#endif
     if (!clipBuffer) {
       error = "clip buffer '" + *key + "' is not registered";
       return nullptr;

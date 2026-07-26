@@ -22,11 +22,6 @@ import { ThemeIntent, mapIntentToColor } from './tokens';
 import { createTextStyle, TypographyVariant } from './typography';
 import { useTheme } from './theme';
 
-const MotionView = Platform.select<React.ComponentType<ViewProps>>({
-  web: View,
-  default: Animated.View as unknown as React.ComponentType<ViewProps>,
-});
-
 export interface NeonSurfaceProps extends ViewProps, AccessibilityProps {
   elevation?: keyof ReturnType<typeof useTheme>['elevation'];
   intent?: ThemeIntent;
@@ -43,31 +38,29 @@ export const NeonSurface: React.FC<PropsWithChildren<NeonSurfaceProps>> = ({
 }) => {
   const theme = useTheme();
   const glowValue = useSharedValue(glow);
-  const accent = mapIntentToColor(theme, intent);
-  const elevationValue = theme.elevation[elevation];
-  const isAndroid = Platform.OS === 'android';
 
   useEffect(() => {
     glowValue.value = withTiming(glow, { duration: 200 });
   }, [glow, glowValue]);
 
   const animatedStyle = useAnimatedStyle(() => {
+    const accent = mapIntentToColor(theme, intent);
     const base: ViewStyle = {
       borderColor: accent,
       borderWidth: 1,
     };
 
-    if (isAndroid) {
-      base.elevation = elevationValue;
+    if (Platform.OS === 'android') {
+      base.elevation = theme.elevation[elevation];
     } else {
       base.shadowColor = accent;
       base.shadowOpacity = 0.7;
-      base.shadowRadius = elevationValue * glowValue.value;
+      base.shadowRadius = theme.elevation[elevation] * glowValue.value;
       base.shadowOffset = { width: 0, height: 0 };
     }
 
     return base;
-  }, [accent, elevationValue, glowValue, isAndroid]);
+  }, [elevation, glowValue, intent, theme]);
 
   const containerStyle: StyleProp<ViewStyle> = useMemo(
     () => [
@@ -82,14 +75,14 @@ export const NeonSurface: React.FC<PropsWithChildren<NeonSurfaceProps>> = ({
   );
 
   return (
-    <MotionView
+    <Animated.View
       accessible
       accessibilityRole="summary"
       style={[containerStyle, animatedStyle]}
       {...rest}
     >
       {children}
-    </MotionView>
+    </Animated.View>
   );
 };
 
@@ -139,8 +132,6 @@ export const NeonButton: React.FC<NeonButtonProps> = ({
   const theme = useTheme();
   const glow = useSharedValue(disabled ? theme.opacity.disabled : 1);
   const scale = useSharedValue(disabled ? 0.98 : 1);
-  const accent = mapIntentToColor(theme, intent);
-  const shadowRadius = theme.elevation.md;
 
   useEffect(() => {
     glow.value = withTiming(disabled ? theme.opacity.disabled : 1, { duration: 150 });
@@ -149,21 +140,21 @@ export const NeonButton: React.FC<NeonButtonProps> = ({
 
   const animatedGlow = useAnimatedStyle(
     () => ({
-      shadowColor: accent,
+      shadowColor: mapIntentToColor(theme, intent),
       shadowOpacity: glow.value,
-      shadowRadius,
+      shadowRadius: theme.elevation.md,
       transform: [
         {
           scale: scale.value,
         },
       ],
     }),
-    [accent, shadowRadius],
+    [intent, theme],
   );
 
   const baseStyle: StyleProp<ViewStyle> = [
     {
-      backgroundColor: accent,
+      backgroundColor: mapIntentToColor(theme, intent),
       paddingVertical: theme.spacing.sm,
       paddingHorizontal: theme.spacing.lg,
       borderRadius: theme.radii.md,
@@ -182,7 +173,7 @@ export const NeonButton: React.FC<NeonButtonProps> = ({
       disabled={disabled}
       {...rest}
     >
-      <MotionView style={[baseStyle, animatedGlow]}>
+      <Animated.View style={[baseStyle, animatedGlow]}>
         <NeonText
           variant="bodyLarge"
           weight="medium"
@@ -191,7 +182,7 @@ export const NeonButton: React.FC<NeonButtonProps> = ({
         >
           {label}
         </NeonText>
-      </MotionView>
+      </Animated.View>
     </Pressable>
   );
 };

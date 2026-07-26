@@ -48,7 +48,6 @@ declare module 'tweetnacl' {
   export const secretbox: SecretBox;
   export const box: Box;
   export function randomBytes(length: number): Uint8Array;
-  export function verify(left: Uint8Array, right: Uint8Array): boolean;
   export const hash: {
     (message: Uint8Array): Uint8Array;
     readonly hashLength: number;

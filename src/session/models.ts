@@ -28,7 +28,7 @@ export interface Clip {
   name: string;
   start: number; // milliseconds
   duration: number; // milliseconds
-  audioFile?: string;
+  audioFile: string;
   gain: number; // linear amplitude multiplier
   fadeIn: number; // milliseconds
   fadeOut: number; // milliseconds
@@ -98,63 +98,11 @@ export interface SidechainRoutingNode extends RoutingNodeBase {
   busId: string;
 }
 
-export const JUNO106_PARAMETER_NAMES = [
-  'pulseWidth',
-  'subLevel',
-  'cutoffHz',
-  'resonance',
-  'attackSeconds',
-  'releaseSeconds',
-  'chorusMode',
-  'outputGain',
-  'lfoRateHz',
-  'lfoDepth',
-] as const;
-
-export type Juno106ParameterName = (typeof JUNO106_PARAMETER_NAMES)[number];
-export type Juno106ParameterMap = Record<Juno106ParameterName, number>;
-
-export const JUNO106_MINIMUM_LFO_RATE_HZ = 0.05;
-export const JUNO106_MAXIMUM_LFO_RATE_HZ = 20;
-export const JUNO106_DEFAULT_LFO_RATE_HZ = 0.8;
-export const JUNO106_MINIMUM_LFO_DEPTH = 0;
-export const JUNO106_MAXIMUM_LFO_DEPTH = 1;
-export const JUNO106_DEFAULT_LFO_DEPTH = 0;
-
-export const JUNO106_DEFAULT_PARAMETERS: Readonly<Juno106ParameterMap> = Object.freeze({
-  pulseWidth: 0.5,
-  subLevel: 0,
-  cutoffHz: 1000,
-  resonance: 0.1,
-  attackSeconds: 0.01,
-  releaseSeconds: 0.5,
-  chorusMode: 1,
-  outputGain: 0.2,
-  lfoRateHz: JUNO106_DEFAULT_LFO_RATE_HZ,
-  lfoDepth: JUNO106_DEFAULT_LFO_DEPTH,
-});
-
-const JUNO106_PARAMETER_NAME_SET = new Set<string>(JUNO106_PARAMETER_NAMES);
-
-export interface InstrumentPresetMetadata {
-  id: string;
-  version: number;
-  name?: string;
-}
-
-export interface InstrumentRoutingNode extends RoutingNodeBase {
-  type: 'instrument';
-  instrumentType: 'juno106';
-  parameters: Juno106ParameterMap;
-  preset?: InstrumentPresetMetadata;
-}
-
 export type RoutingNode =
   | TrackEndpointNode
   | PluginRoutingNode
   | SendRoutingNode
-  | SidechainRoutingNode
-  | InstrumentRoutingNode;
+  | SidechainRoutingNode;
 
 export interface RoutingEndpointRef {
   nodeId: RoutingNodeID;
@@ -197,15 +145,6 @@ export interface Track {
   routing: TrackRouting;
 }
 
-export interface JunoInstrumentOptions {
-  parameters?: Partial<Juno106ParameterMap>;
-  preset?: InstrumentPresetMetadata;
-}
-
-export interface CreateJunoTrackOptions extends JunoInstrumentOptions {
-  name?: string;
-}
-
 export interface SessionMetadata {
   version: number;
   createdAt: string;
@@ -245,75 +184,6 @@ export const createDefaultTrackRoutingGraph = (trackId: TrackID): RoutingGraph =
   };
   return graph;
 };
-
-export const createJunoRoutingGraph = (
-  trackId: TrackID,
-  options: JunoInstrumentOptions = {},
-): RoutingGraph => {
-  const trackInputNode: TrackEndpointNode = {
-    id: `${trackId}:input:midi`,
-    type: 'trackInput',
-    ioId: 'input:midi',
-    channelCount: 1,
-    label: 'MIDI Input',
-  };
-  const instrumentNode: InstrumentRoutingNode = {
-    id: `${trackId}:instrument:juno106`,
-    type: 'instrument',
-    instrumentType: 'juno106',
-    label: 'Juno-106',
-    parameters: {
-      ...JUNO106_DEFAULT_PARAMETERS,
-      ...options.parameters,
-    },
-    ...(options.preset ? { preset: { ...options.preset } } : {}),
-  };
-  const trackOutputNode: TrackEndpointNode = {
-    id: `${trackId}:output:main`,
-    type: 'trackOutput',
-    ioId: 'output:main',
-    channelCount: 2,
-    label: 'Track Output',
-  };
-
-  return {
-    version: 1,
-    nodes: [trackInputNode, instrumentNode, trackOutputNode],
-    connections: [
-      {
-        id: `${trackId}:connection:midi-to-juno`,
-        from: { nodeId: trackInputNode.id },
-        to: { nodeId: instrumentNode.id },
-        signal: 'midi',
-        enabled: true,
-      },
-      {
-        id: `${trackId}:connection:juno-to-output`,
-        from: { nodeId: instrumentNode.id },
-        to: { nodeId: trackOutputNode.id },
-        signal: 'audio',
-        enabled: true,
-      },
-    ],
-  };
-};
-
-export const createDefaultJunoTrack = (
-  trackId: TrackID,
-  options: CreateJunoTrackOptions = {},
-): Track => ({
-  id: trackId,
-  name: options.name?.trim() || 'Juno-106',
-  clips: [],
-  muted: false,
-  solo: false,
-  volume: 0,
-  pan: 0,
-  automationCurves: [],
-  routing: {
-    graph: createJunoRoutingGraph(trackId, options),
-  },
-});
 
 export interface Session {
   id: SessionID;
@@ -381,12 +251,6 @@ export const validateSession = (session: Session): void => {
   if (!session.id) {
     throw new Error('Session id is required');
   }
-  if (!Number.isFinite(session.metadata.sampleRate) || session.metadata.sampleRate <= 0) {
-    throw new Error('Session sample rate must be positive and finite');
-  }
-  if (!Number.isFinite(session.metadata.bpm) || session.metadata.bpm <= 0) {
-    throw new Error('Session BPM must be positive and finite');
-  }
 
   session.tracks.forEach((track) => {
     if (!track.id) {
@@ -405,39 +269,18 @@ export const validateSession = (session: Session): void => {
       if (clip.duration <= 0) {
         throw new Error('Clip duration must be positive');
       }
-      const hasAudio =
-        typeof clip.audioFile === 'string' && clip.audioFile.trim().length > 0;
-      if (!hasAudio && !clip.midi) {
-        throw new Error(`Clip ${clip.id} must contain audio or MIDI data`);
-      }
       if (clip.midi) {
-        if (
-          clip.midi.pulsesPerQuarter !== undefined &&
-          (!Number.isInteger(clip.midi.pulsesPerQuarter) ||
-            clip.midi.pulsesPerQuarter <= 0)
-        ) {
-          throw new Error(
-            `MIDI pulsesPerQuarter must be a positive integer in clip ${clip.id}`,
-          );
-        }
         clip.midi.notes.forEach((note) => {
           if (!note.id) {
             throw new Error(`MIDI note requires an id in clip ${clip.id}`);
           }
-          if (!Number.isInteger(note.pitch) || note.pitch < 0 || note.pitch > 127) {
+          if (note.pitch < 0 || note.pitch > 127) {
             throw new Error(`Invalid MIDI pitch ${note.pitch} in clip ${clip.id}`);
           }
-          if (!Number.isFinite(note.startBeat) || note.startBeat < 0) {
-            throw new Error(`MIDI note start must be non-negative in clip ${clip.id}`);
-          }
-          if (!Number.isFinite(note.durationBeats) || note.durationBeats <= 0) {
+          if (note.durationBeats <= 0) {
             throw new Error(`MIDI note duration must be positive in clip ${clip.id}`);
           }
-          if (
-            !Number.isInteger(note.velocity) ||
-            note.velocity < 0 ||
-            note.velocity > 127
-          ) {
+          if (note.velocity < 0 || note.velocity > 127) {
             throw new Error(`Invalid MIDI velocity ${note.velocity} in clip ${clip.id}`);
           }
         });
@@ -445,12 +288,12 @@ export const validateSession = (session: Session): void => {
     });
 
     if (track.routing.graph) {
-      validateRoutingGraph(track.routing.graph, session.metadata.sampleRate);
+      validateRoutingGraph(track.routing.graph);
     }
   });
 };
 
-const validateRoutingGraph = (graph: RoutingGraph, sampleRate: number): void => {
+const validateRoutingGraph = (graph: RoutingGraph): void => {
   if (graph.version <= 0) {
     throw new Error('Routing graph version must be positive');
   }
@@ -469,103 +312,13 @@ const validateRoutingGraph = (graph: RoutingGraph, sampleRate: number): void => 
       }
     }
     if (node.type === 'send' || node.type === 'return') {
-      if (!Number.isFinite(node.gain) || node.gain < 0) {
+      if (node.gain < 0) {
         throw new Error(`Send/return node ${node.id} must have non-negative gain`);
-      }
-    }
-    if (node.type === 'instrument') {
-      if (node.instrumentType !== 'juno106') {
-        throw new Error(`Instrument node ${node.id} has unsupported instrument type`);
-      }
-      if (
-        !node.parameters ||
-        typeof node.parameters !== 'object' ||
-        Array.isArray(node.parameters)
-      ) {
-        throw new Error(`Instrument node ${node.id} requires a parameter map`);
-      }
-      Object.entries(node.parameters).forEach(([parameter, value]) => {
-        if (!JUNO106_PARAMETER_NAME_SET.has(parameter)) {
-          throw new Error(
-            `Instrument node ${node.id} has unsupported parameter ${parameter}`,
-          );
-        }
-        if (!Number.isFinite(value)) {
-          throw new Error(
-            `Instrument node ${node.id} parameter ${parameter} must be finite`,
-          );
-        }
-      });
-      JUNO106_PARAMETER_NAMES.forEach((parameter) => {
-        if (!Object.prototype.hasOwnProperty.call(node.parameters, parameter)) {
-          throw new Error(`Instrument node ${node.id} missing parameter ${parameter}`);
-        }
-      });
-      if (
-        !Number.isInteger(node.parameters.chorusMode) ||
-        node.parameters.chorusMode < 0 ||
-        node.parameters.chorusMode > 2
-      ) {
-        throw new Error(
-          `Instrument node ${node.id} parameter chorusMode must be 0, 1, or 2`,
-        );
-      }
-      if (
-        node.parameters.lfoRateHz < JUNO106_MINIMUM_LFO_RATE_HZ ||
-        node.parameters.lfoRateHz > JUNO106_MAXIMUM_LFO_RATE_HZ
-      ) {
-        throw new Error(
-          `Instrument node ${node.id} parameter lfoRateHz must be between 0.05 and 20 Hz`,
-        );
-      }
-      if (
-        node.parameters.lfoDepth < JUNO106_MINIMUM_LFO_DEPTH ||
-        node.parameters.lfoDepth > JUNO106_MAXIMUM_LFO_DEPTH
-      ) {
-        throw new Error(
-          `Instrument node ${node.id} parameter lfoDepth must be between 0 and 1`,
-        );
-      }
-      const boundedParameters: ReadonlyArray<
-        readonly [Juno106ParameterName, number, number]
-      > = [
-        ['pulseWidth', 0.05, 0.95],
-        ['subLevel', 0, 1],
-        ['cutoffHz', 20, sampleRate * 0.45],
-        ['resonance', 0, 1.2],
-        ['attackSeconds', 0.0005, 30],
-        ['releaseSeconds', 0.0005, 30],
-        ['outputGain', 0, 2],
-      ];
-      boundedParameters.forEach(([parameter, minimum, maximum]) => {
-        const value = node.parameters[parameter];
-        if (value < minimum || value > maximum) {
-          throw new Error(
-            `Instrument node ${node.id} parameter ${parameter} must be between ${minimum} and ${maximum}`,
-          );
-        }
-      });
-      if (node.preset) {
-        if (!node.preset.id?.trim()) {
-          throw new Error(`Instrument node ${node.id} preset id is required`);
-        }
-        if (!Number.isInteger(node.preset.version) || node.preset.version <= 0) {
-          throw new Error(
-            `Instrument node ${node.id} preset version must be a positive integer`,
-          );
-        }
       }
     }
   });
 
   const connectionIds = new Set<string>();
-  const audioAdjacency = new Map<string, string[]>();
-  const audioIndegree = new Map<string, number>();
-  nodeIds.forEach((nodeId) => {
-    audioAdjacency.set(nodeId, []);
-    audioIndegree.set(nodeId, 0);
-  });
-
   graph.connections.forEach((connection) => {
     if (connectionIds.has(connection.id)) {
       throw new Error(`Duplicate routing connection id: ${connection.id}`);
@@ -577,36 +330,7 @@ const validateRoutingGraph = (graph: RoutingGraph, sampleRate: number): void => 
     if (!nodeIds.has(connection.to.nodeId)) {
       throw new Error(`Connection ${connection.id} references missing destination node`);
     }
-    if (connection.gain !== undefined && !Number.isFinite(connection.gain)) {
-      throw new Error(`Connection ${connection.id} has invalid gain`);
-    }
-    if (connection.enabled && connection.signal === 'audio') {
-      audioAdjacency.get(connection.from.nodeId)?.push(connection.to.nodeId);
-      audioIndegree.set(
-        connection.to.nodeId,
-        (audioIndegree.get(connection.to.nodeId) ?? 0) + 1,
-      );
-    }
   });
-
-  const ready = Array.from(audioIndegree.entries())
-    .filter(([, degree]) => degree === 0)
-    .map(([nodeId]) => nodeId);
-  let visited = 0;
-  for (let index = 0; index < ready.length; index += 1) {
-    const nodeId = ready[index];
-    visited += 1;
-    audioAdjacency.get(nodeId)?.forEach((destinationId) => {
-      const nextDegree = (audioIndegree.get(destinationId) ?? 0) - 1;
-      audioIndegree.set(destinationId, nextDegree);
-      if (nextDegree === 0) {
-        ready.push(destinationId);
-      }
-    });
-  }
-  if (visited !== nodeIds.size) {
-    throw new Error('Enabled audio routing connections must form an acyclic graph');
-  }
 };
 
 const normalizeTrackRouting = (trackId: TrackID, routing: TrackRouting): TrackRouting => {
@@ -618,16 +342,6 @@ const normalizeTrackRouting = (trackId: TrackID, routing: TrackRouting): TrackRo
     .sort((a, b) => a.order - b.order)
     .map((plugin) => plugin.id);
   const normalizedNodes = graph.nodes.map((node) => {
-    if (node.type === 'instrument') {
-      return {
-        ...node,
-        parameters: {
-          ...JUNO106_DEFAULT_PARAMETERS,
-          ...node.parameters,
-        },
-        ...(node.preset ? { preset: { ...node.preset } } : {}),
-      };
-    }
     if (node.type !== 'plugin') {
       return node;
     }

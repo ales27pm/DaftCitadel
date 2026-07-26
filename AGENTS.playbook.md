@@ -31,7 +31,7 @@ This playbook captures the baseline rules for every directory in the repository.
 
 ## Required Workflow Before Commit
 
-1. Format and lint: `npm run format` then `npm run lint`.
+1. Format and lint: `npm run prettier` then `npm run lint`.
 2. Validate types and tests: `npm run typecheck` and `npm run test`.
 3. Synchronize automation rules: `npm run manage:agents` (now also runs `agents_sync.py` to refresh docs/ROADMAP.md and other managed guides automatically, then verifies no drift remains before exiting).
 4. Stage only intentional changes and review the diff for generated files or large assets.
