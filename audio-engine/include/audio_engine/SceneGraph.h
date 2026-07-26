@@ -88,7 +88,7 @@ class SceneGraph {
   void disconnect(const std::string& source, const std::string& destination);
 
   void render(AudioBufferView outputBuffer);
-  void scheduleAutomation(const std::string& nodeId, std::function<void(DSPNode&)> cb,
+  bool scheduleAutomation(const std::string& nodeId, std::function<void(DSPNode&)> cb,
                           std::uint64_t frame);
 
   [[nodiscard]] double sampleRate() const { return sampleRate_; }

@@ -57,6 +57,15 @@ void RunSchedulerTests() {
   if (order != std::vector<int>{1, 2, 3}) {
     throw std::runtime_error("Unexpected events dispatched");
   }
+
+  RealTimeScheduler<1> boundedScheduler(clock);
+  bool firstScheduled = boundedScheduler.schedule({clock.frameTime(), [&]() { immediateTriggered = true; }});
+  if (!firstScheduled) {
+    throw std::runtime_error("Bounded scheduler should accept the first event");
+  }
+  if (boundedScheduler.schedule({clock.frameTime(), [&]() { immediateTriggered = false; }})) {
+    throw std::runtime_error("Bounded scheduler should reject events when full");
+  }
 }
 
 }  // namespace daft::audio::tests

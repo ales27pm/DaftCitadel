@@ -111,19 +111,20 @@ void SceneGraph::render(AudioBufferView outputBuffer) {
   clock_.advanceBy(static_cast<std::uint32_t>(frameCount));
 }
 
-void SceneGraph::scheduleAutomation(const std::string& nodeId, std::function<void(DSPNode&)> cb,
+bool SceneGraph::scheduleAutomation(const std::string& nodeId, std::function<void(DSPNode&)> cb,
                                     std::uint64_t frame) {
-  auto it = nodes_.find(nodeId);
-  if (it == nodes_.end()) {
-    throw std::runtime_error("Node not found");
+  auto nodeIt = nodes_.find(nodeId);
+  if (nodeIt == nodes_.end()) {
+    return false;
   }
 
-  const bool ok = scheduler_.schedule({frame, [node = it->second.get(), cb = std::move(cb)]() mutable {
-                                          cb(*node);
+  const bool ok = scheduler_.schedule({frame, [this, nodeId = nodeIt->first, cb = std::move(cb)]() mutable {
+                                          auto it = nodes_.find(nodeId);
+                                          if (it != nodes_.end()) {
+                                            cb(*it->second);
+                                          }
                                         }});
-  if (!ok) {
-    throw std::runtime_error("Scheduler queue is full");
-  }
+  return ok;
 }
 
 void SceneGraph::rebuildTopology() {

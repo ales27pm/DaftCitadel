@@ -16,6 +16,10 @@ add_library(daft_audio_engine
     src/Clock.cpp
     src/PluginHost.cpp
     src/PluginNode.cpp
+    src/instruments/juno/JunoDSPEngine.cpp
+    src/instruments/juno/JunoVoice.cpp
+    src/instruments/juno/RCUParameterManager.cpp
+    src/instruments/juno/JunoInstrumentNode.cpp
     platform/common/NodeFactory.cpp
 )
 
@@ -34,6 +38,7 @@ if(DAFT_AUDIO_ENGINE_BUILD_TESTS)
         tests/SchedulerTests.cpp
         tests/ClipPlayerNodeTests.cpp
         tests/PluginNodeTests.cpp
+        tests/JunoCoreTests.cpp
     )
     target_link_libraries(daft_audio_engine_tests PRIVATE daft_audio_engine)
     add_test(NAME AudioEngineTests COMMAND daft_audio_engine_tests)

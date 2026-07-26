@@ -5,8 +5,9 @@
 #include <chrono>
 #include <cmath>
 #include <exception>
-#include <mutex>
-#include <vector>
+#include <memory>
+
+#include "audio_engine/DSPNode.h"
 
 namespace daft::audio::bridge {
 
@@ -17,46 +18,48 @@ os_log_t Logger() {
 }
 }  // namespace
 
-std::unique_ptr<SceneGraph> AudioEngineBridge::graph_;
+std::atomic<std::shared_ptr<SceneGraph>> AudioEngineBridge::graph_{nullptr};
 std::mutex AudioEngineBridge::mutex_;
 std::atomic<std::uint64_t> AudioEngineBridge::xruns_{0};
 std::atomic<double> AudioEngineBridge::lastRenderDurationMicros_{0.0};
 std::unordered_map<std::string, AudioEngineBridge::ClipBufferEntry> AudioEngineBridge::clipBuffers_;
+AudioEngineBridge::ParameterAutomationQueue AudioEngineBridge::commandQueue_;
 
 void AudioEngineBridge::initialize(double sampleRate, std::uint32_t framesPerBuffer) {
   std::lock_guard<std::mutex> lock(mutex_);
-  graph_ = std::make_unique<SceneGraph>(sampleRate, framesPerBuffer);
+  graph_.store(std::make_shared<SceneGraph>(sampleRate, framesPerBuffer), std::memory_order_release);
   xruns_.store(0);
   lastRenderDurationMicros_.store(0.0);
+  clipBuffers_.clear();
+  commandQueue_.reset();
   os_log(Logger(), "Audio engine initialized at %.2f Hz", sampleRate);
 }
 
 void AudioEngineBridge::shutdown() {
   std::lock_guard<std::mutex> lock(mutex_);
-  graph_.reset();
+  graph_.store(nullptr, std::memory_order_release);
   xruns_.store(0);
   lastRenderDurationMicros_.store(0.0);
   clipBuffers_.clear();
+  commandQueue_.reset();
   os_log(Logger(), "Audio engine shutdown");
 }
 
 void AudioEngineBridge::render(float** outputs, std::size_t channelCount, std::size_t frameCount) {
   AudioBufferView view(outputs, channelCount, frameCount);
-  std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
-  if (!lock.owns_lock()) {
+  const auto graph = graph_.load(std::memory_order_acquire);
+  if (!graph) {
     view.fill(0.0F);
     xruns_.fetch_add(1);
     lastRenderDurationMicros_.store(0.0);
     return;
   }
-  if (!graph_) {
-    view.fill(0.0F);
-    lastRenderDurationMicros_.store(0.0);
-    return;
-  }
+
+  applyParameterAutomation(graph);
+
   const auto start = std::chrono::steady_clock::now();
   try {
-    graph_->render(view);
+    graph->render(view);
   } catch (const std::exception& ex) {
     view.fill(0.0F);
     xruns_.fetch_add(1);
@@ -76,46 +79,46 @@ void AudioEngineBridge::render(float** outputs, std::size_t channelCount, std::s
 }
 
 bool AudioEngineBridge::addNode(const std::string& id, std::unique_ptr<DSPNode> node) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (!graph_) {
+  const auto graph = graph_.load(std::memory_order_acquire);
+  if (!graph) {
     return false;
   }
-  return graph_->addNode(id, std::move(node));
+  std::lock_guard<std::mutex> lock(mutex_);
+  return graph->addNode(id, std::move(node));
 }
 
 void AudioEngineBridge::removeNode(const std::string& id) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (graph_) {
-    graph_->removeNode(id);
+  const auto graph = graph_.load(std::memory_order_acquire);
+  if (!graph) {
+    return;
   }
+  std::lock_guard<std::mutex> lock(mutex_);
+  graph->removeNode(id);
 }
 
 bool AudioEngineBridge::connect(const std::string& source, const std::string& destination) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (!graph_) {
+  const auto graph = graph_.load(std::memory_order_acquire);
+  if (!graph) {
     return false;
   }
-  return graph_->connect(source, destination);
+  std::lock_guard<std::mutex> lock(mutex_);
+  return graph->connect(source, destination);
 }
 
 void AudioEngineBridge::disconnect(const std::string& source, const std::string& destination) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (graph_) {
-    graph_->disconnect(source, destination);
+  const auto graph = graph_.load(std::memory_order_acquire);
+  if (!graph) {
+    return;
   }
+  std::lock_guard<std::mutex> lock(mutex_);
+  graph->disconnect(source, destination);
 }
 
 void AudioEngineBridge::scheduleParameterAutomation(const std::string& nodeId, const std::string& parameter,
-                                                    std::uint64_t frame, double value) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (!graph_) {
-    return;
-  }
-  try {
-    graph_->scheduleAutomation(nodeId,
-                               [parameter, value](DSPNode& node) { node.setParameter(parameter, value); }, frame);
-  } catch (const std::exception& ex) {
-    os_log_error(Logger(), "Failed to schedule automation: %{public}s", ex.what());
+                                                  std::uint64_t frame, double value) {
+  const bool queued = commandQueue_.push({nodeId, parameter, frame, value});
+  if (!queued) {
+    os_log_error(Logger(), "Failed to queue automation: command queue full");
   }
 }
 
@@ -181,6 +184,21 @@ AudioEngineBridge::RenderDiagnostics AudioEngineBridge::getDiagnostics() {
     diagnostics.clipBufferBytes += entry.byteSize;
   }
   return diagnostics;
+}
+
+void AudioEngineBridge::applyParameterAutomation(const std::shared_ptr<SceneGraph>& graph) {
+  ParameterAutomationCommand command{};
+  while (commandQueue_.pop(command)) {
+    const bool scheduled = graph->scheduleAutomation(
+      command.nodeId,
+      [parameter = std::move(command.parameter), value = command.value](DSPNode& node) {
+        node.setParameter(parameter, value);
+      },
+      command.frame);
+    if (!scheduled) {
+      os_log_error(Logger(), "Failed to apply automation: node missing or scheduler full");
+    }
+  }
 }
 
 }  // namespace daft::audio::bridge
