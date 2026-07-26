@@ -30,6 +30,13 @@ git status
 
 ## 2) iOS physical capture
 
+Expected outputs for this run:
+
+- `artifacts/p8b-ios-<timestamp>/ios-traffic.pcap`
+- `artifacts/p8b-ios-<timestamp>/ios-time-profiler.trace` (Time Profiler)
+- `artifacts/p8b-ios-<timestamp>/ios-allocations.trace` (Allocations)
+- `artifacts/p8b-ios-<timestamp>/p8b-diagnostics-template.csv` (filled)
+
 1. Collect packet or app-level logs:
 
    ```bash
@@ -58,6 +65,14 @@ git status
 
 ## 3) Android physical capture
 
+Expected outputs for this run:
+
+- `artifacts/p8b-android-<timestamp>/android-logcat.txt`
+- `artifacts/p8b-android-<timestamp>/android-meminfo.log` (if `--collect-memory`)
+- `artifacts/p8b-android-<timestamp>/p8b-physical.trace` (Perfetto)
+- `artifacts/p8b-android-<timestamp>/p8b-simpleperf.perf.data` (Simpleperf)
+- `artifacts/p8b-android-<timestamp>/p8b-diagnostics-template.csv` (filled)
+
 1. Start capture helper on the device:
 
    ```bash
@@ -83,7 +98,30 @@ git status
 
    - `adb logcat` or equivalent capture for app diagnostics tags.
    - Trace exports for both lifecycle and sustained scenarios.
-   - `xruns` and `p50/p95/p99` values at end of each scenario.
+  - `xruns` and `p50/p95/p99` values at end of each scenario.
+
+## 5) Evidence row template (per scenario)
+
+Fill at least four scenario rows in `p8b-diagnostics-template.csv`:
+
+- `baseline`
+- `route_change`
+- `interruption`
+- `background`
+- `return_to_baseline`
+
+For each row, include UTC timestamps plus:
+
+- `xruns`
+- `p50RenderDurationMicros`
+- `p95RenderDurationMicros`
+- `p99RenderDurationMicros`
+- `activeVoices`
+- `realtimeQueueDepth`
+- `realtimeQueueOverflows`
+- `realtimeCommandFailures`
+- `clipBufferBytes`
+- `notes` (device route, interruptions observed, thermal/throttle notes)
 
 ## 4) Required evidence artifact checklist
 

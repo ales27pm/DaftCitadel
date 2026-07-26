@@ -239,6 +239,7 @@ main() {
       echo "error: --ios-device-udid is required for ios platform" >&2
       exit 1
     fi
+    ensure_command xcrun
     if [[ ! -x scripts/rvictl-capture.sh ]]; then
       echo "warning: scripts/rvictl-capture.sh is not executable; install permissions or run manually" >&2
     fi
