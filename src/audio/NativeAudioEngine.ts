@@ -5,6 +5,24 @@ import type { InstrumentParameterEvent, MidiEvent } from './Instruments';
 
 type NodeId = string;
 
+export type NativeRenderDiagnostics = {
+  xruns: number;
+  lastRenderDurationMicros: number;
+  clipBufferBytes: number;
+  initialized?: boolean;
+  activeVoices?: number;
+  pendingInstrumentEvents?: number;
+  realtimeQueueDepth?: number;
+  realtimeQueueOverflows?: number;
+  realtimeCommandFailures?: number;
+  renderCount?: number;
+  averageRenderDurationMicros?: number;
+  maximumRenderDurationMicros?: number;
+  p50RenderDurationMicros?: number;
+  p95RenderDurationMicros?: number;
+  p99RenderDurationMicros?: number;
+};
+
 export interface AudioEngineSpec extends TurboModule {
   initialize(sampleRate: number, framesPerBuffer: number): Promise<void>;
   shutdown(): Promise<void>;
@@ -59,12 +77,7 @@ export interface AudioEngineSpec extends TurboModule {
     currentFrame: number;
     isPlaying: boolean;
   }>;
-  getRenderDiagnostics(): Promise<{
-    xruns: number;
-    lastRenderDurationMicros: number;
-    clipBufferBytes: number;
-    initialized?: boolean;
-  }>;
+  getRenderDiagnostics(): Promise<NativeRenderDiagnostics>;
 }
 
 const moduleName = 'AudioEngineModule';

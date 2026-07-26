@@ -20,10 +20,19 @@ The integration is split into narrow layers:
    materializes the persisted graph, translates MIDI clips and supported
    automation into absolute-frame events, and exposes relative-frame live
    controls.
-4. The iOS and Android module bridges validate and forward compact event payloads
-   to [`SceneGraph`](../audio-engine/src/SceneGraph.cpp).
-5. [`InstrumentNode`](../audio-engine/src/instruments/InstrumentNode.cpp) owns the
-   fixed event queue, while
+4. The iOS and Android module bridges validate names and payloads on their
+   control threads, resolve graph nodes and parameters to stable numeric IDs,
+   and publish fixed `RealtimeControlCommand` records through the shared
+   [`RealtimeControlPlane`](../audio-engine/src/RealtimeControlPlane.cpp).
+5. The control plane owns a preallocated 4,096-command SPSC queue. The C++ DSP
+   render entrypoints drain it without mutexes, allocation, logging, I/O,
+   JavaScript, or exception handling, then invoke
+   [`SceneGraph`](../audio-engine/src/SceneGraph.cpp). Android performs the
+   required blocking `AudioTrack.write` only after DSP rendering in its device
+   driver; that render loop is separately kept free of logging and exception
+   handling.
+6. [`InstrumentNode`](../audio-engine/src/instruments/InstrumentNode.cpp) owns the
+   fixed 1,024-event instrument timeline, while
    [`Juno106Node`](../audio-engine/src/instruments/juno/Juno106Node.cpp) translates
    events into the allocation-free render path in
    [`JunoDSPEngine`](../audio-engine/src/instruments/juno/JunoDSPEngine.cpp).
@@ -57,8 +66,41 @@ and reapplies the persisted instrument schedule.
 Each instrument node accepts at most 1,024 queued MIDI and parameter events in
 total. The JavaScript bridge rejects an oversized combined schedule before
 sending it, and the C++ node uses the same fixed capacity without growing memory
-on the render path. Split denser arrangements across instrument tracks or reduce
-their event count instead of raising the realtime bound casually.
+on the render path. The outer realtime command queue is independently bounded at
+4,096 commands and rejects overflow atomically. Split denser arrangements across
+instrument tracks or reduce their event count instead of raising either realtime
+bound casually.
+
+## Realtime control invariants
+
+P8a establishes the following portable invariants:
+
+- node names and readable parameter names are resolved before crossing the
+  realtime boundary;
+- numeric node handles are monotonic and never reused, so a delayed command
+  cannot target a replacement node that happens to reuse the same string ID;
+- live MIDI, parameters, locate, transport-loop changes, all-notes-off, and panic
+  use a fixed SPSC queue with atomic batch publication;
+- the iOS source-node callback, iOS and Android DSP bridges, Android device render
+  loop, and common render entrypoint contain no mutex acquisition, logging,
+  `try`/`catch`, explicit allocation, or `std::function` dispatch; the device
+  driver retains only the required `AudioTrack.write` operation;
+- add/remove/connect/disconnect are rejected while transport is playing;
+  `GraphReconciler` serializes structural mutations, pauses playback, captures
+  the stopped frame, and resumes only after a successful rebuild;
+- plugin render callbacks are declared `noexcept`; unavailable or failed plugin
+  renders increment atomics rather than logging from the audio thread;
+- diagnostics use lock-free atomics and include active voices, pending instrument
+  events, realtime queue depth and overflows, command failures, xruns, render
+  count, average/max duration, and p50/p95/p99 histogram estimates.
+
+The control-plane tests run a concurrent producer against render callbacks at
+48 kHz with both 128- and 256-frame buffers. They exercise note on/off, sustain,
+pitch bend, channel/poly aftertouch, parameter commands, panic, deliberate queue
+saturation, stale graph publication tokens, finite output, and clean voice/event
+drain. Optimized non-sanitized builds enforce p99 below 70% of the corresponding
+buffer budget and zero xruns; sanitizer builds validate safety without being
+used as performance evidence.
 
 ## Presets, SysEx, and storage
 
@@ -94,13 +136,13 @@ patch and preset persistence functional, and disables the keyboard; passive
 transport behavior is not audio-render evidence.
 
 The keyboard cleanup path sends all-notes-off, which follows the instrument's
-musical release behavior. Transport stop is deliberately stronger: both native
-bridges call `SceneGraph::panicInstruments()`, immediately resetting voices and
-effect history before silencing render output. Panic discards queued transient
-live-input events while retaining persisted timeline events for transport
-restart. Moving the app from active to an inactive or background state stops
-transport through the same path, preventing stuck notes. Returning to the
-foreground does not auto-resume playback.
+musical release behavior. Transport stop is deliberately stronger: the control
+thread stops graph publication, waits for any in-flight callback, resets voices
+and effect history, and discards queued transient commands before returning.
+This prevents stale gestures and stuck notes without taking a mutex in the audio
+callback. Moving the app from active to an inactive or background state stops
+transport through the same path. Returning to the foreground does not
+auto-resume playback.
 
 ## Validation
 
@@ -119,6 +161,17 @@ npm run native:core:test:sanitize
 npm run export:web
 ```
 
+The native test output includes `REALTIME_CONTROL_P99_US` records for 128 and
+256 frames. Use an optimized CMake build for the enforced 70%-budget gate:
+
+```bash
+cmake -S audio-engine -B audio-engine/build-release \
+  -DDAFT_AUDIO_ENGINE_BUILD_TESTS=ON \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build audio-engine/build-release --parallel
+ctest --test-dir audio-engine/build-release --output-on-failure
+```
+
 `npm run verify` is the broader local gate (Expo Doctor, formatting, lint,
 types, Jest, managed-doc checks, production dependency audit, shell syntax, and
 the native core). `npm run verify:sanitize` runs the same gate with ASan/UBSan.
@@ -135,7 +188,18 @@ Compile the checked-in platform hosts only on machines with the documented SDKs:
   CODE_SIGNING_ALLOWED=NO build)
 ```
 
-These commands validate compilation, not physical-device audio output, route
-changes, latency, or interruption recovery. Record those separately when they
-are exercised on iOS or Android hardware; do not infer device evidence from a
-portable test, simulator build, or web export.
+## P8b physical-device validation
+
+Portable tests, sanitizers, simulator compilation, and web export do **not**
+prove physical-device realtime behavior. P8b remains separate and must record:
+
+- Instruments Allocations/Time Profiler traces, route changes, interruptions,
+  background/foreground, peripheral changes, xruns, memory, and p50/p95/p99 on a
+  physical iPhone;
+- equivalent Perfetto/Simpleperf traces and lifecycle scenarios on physical
+  Android hardware;
+- the exact device, OS, sample rate, buffer size, route, build configuration, and
+  sustained test duration for every claim.
+
+Do not infer P8b evidence from a portable test, simulator build, or passive web
+transport.

@@ -14,7 +14,10 @@ const methodBody = (source: string, startMarker: string, endMarker: string): str
   return source.slice(start, end);
 };
 
-describe('iOS audio bridge crash containment', () => {
+const forbiddenRealtimeConstructs =
+  /\b(?:std::)?(?:unique_lock|lock_guard|mutex)\b|os_log|__android_log|\btry\b|\bcatch\b|\bthrow\b|std::function|make_unique|make_shared|\bnew\b/;
+
+describe('native audio bridge crash containment', () => {
   const moduleSource = readRepositoryFile('native/audio/ios/AudioEngineModule.mm');
   const deviceSource = readRepositoryFile('native/audio/ios/AudioDeviceDriver.mm');
   const bridgeHeader = readRepositoryFile(
@@ -23,6 +26,19 @@ describe('iOS audio bridge crash containment', () => {
   const bridgeSource = readRepositoryFile(
     'audio-engine/platform/ios/AudioEngineBridge.mm',
   );
+  const androidBridgeSource = readRepositoryFile(
+    'audio-engine/platform/android/AudioEngineBridge.cpp',
+  );
+  const controlPlaneHeader = readRepositoryFile(
+    'audio-engine/include/audio_engine/RealtimeControlPlane.h',
+  );
+  const controlPlaneSource = readRepositoryFile(
+    'audio-engine/src/RealtimeControlPlane.cpp',
+  );
+  const pluginHostHeader = readRepositoryFile(
+    'audio-engine/include/audio_engine/PluginHost.h',
+  );
+  const pluginHostSource = readRepositoryFile('audio-engine/src/PluginHost.cpp');
 
   it('contains native exceptions in every exported Promise operation', () => {
     const exports = [...moduleSource.matchAll(/RCT_EXPORT_METHOD\((\w+):/g)];
@@ -196,13 +212,88 @@ describe('iOS audio bridge crash containment', () => {
     expect(startTransport).not.toMatch(/\b(?:resolve|reject)\s*\(/);
   });
 
-  it('silences stale iOS device routes instead of rendering a replacement graph', () => {
+  it('silences stale iOS device routes before touching a replacement graph', () => {
     expect(deviceSource).toContain('engineGeneration:(uint64_t)engineGeneration');
     expect(deviceSource).toContain(
       'AudioEngineBridge::render(engineGeneration, channelPointers.data(), channels, frames)',
     );
-    expect(bridgeSource).toContain('if (!ownsGenerationLocked(generation))');
-    expect(bridgeSource).toContain('generation_.load(std::memory_order_acquire)');
+
+    const render = methodBody(
+      bridgeSource,
+      'void AudioEngineBridge::render(',
+      'void AudioEngineBridge::startTransport(',
+    );
+    expect(render).toContain('realtimePlane_.render(view, generation)');
+    expect(render).not.toMatch(forbiddenRealtimeConstructs);
+    expect(controlPlaneSource).toContain(
+      'publicationToken_.load(std::memory_order_acquire)',
+    );
+    expect(controlPlaneSource).toContain('expectedPublicationToken');
+    expect(controlPlaneSource).toContain('RenderReaderLease reader(renderReaders_)');
+  });
+
+  it('keeps iOS, Android, and common render callbacks lock-free and exception-free', () => {
+    const iosRender = methodBody(
+      bridgeSource,
+      'void AudioEngineBridge::render(',
+      'void AudioEngineBridge::startTransport(',
+    );
+    const androidRender = methodBody(
+      androidBridgeSource,
+      'void AudioEngineBridge::render(',
+      'void AudioEngineBridge::startTransport(',
+    );
+    const commonRender = methodBody(
+      controlPlaneSource,
+      'void RealtimeControlPlane::render(',
+      'void RealtimeControlPlane::waitUntilRenderIdle(',
+    );
+
+    expect(iosRender).not.toMatch(forbiddenRealtimeConstructs);
+    expect(androidRender).not.toMatch(forbiddenRealtimeConstructs);
+    expect(commonRender).not.toMatch(forbiddenRealtimeConstructs);
+    expect(controlPlaneHeader).toContain('is_always_lock_free');
+    expect(controlPlaneHeader).toContain('RealtimeSpscQueue<RealtimeControlCommand');
+    expect(commonRender).toContain('commandQueue_.tryPop(command)');
+    expect(commonRender).toContain('graph->applyRealtimeCommand(command)');
+  });
+
+  it('forbids structural graph mutations while transport is playing', () => {
+    const methods = [
+      ['addNode', 'bool AudioEngineBridge::addNode(', 'void AudioEngineBridge::removeNode('],
+      ['removeNode', 'void AudioEngineBridge::removeNode(', 'bool AudioEngineBridge::connect('],
+      ['connect', 'bool AudioEngineBridge::connect(', 'void AudioEngineBridge::disconnect('],
+      [
+        'disconnect',
+        'void AudioEngineBridge::disconnect(',
+        'void AudioEngineBridge::scheduleParameterAutomation(',
+      ],
+    ] as const;
+
+    for (const [name, startMarker, endMarker] of methods) {
+      const iosMethod = methodBody(bridgeSource, startMarker, endMarker);
+      const androidMethod = methodBody(androidBridgeSource, startMarker, endMarker);
+      expect({ name, ios: iosMethod.includes('requireTransportStoppedLocked()') }).toEqual({
+        name,
+        ios: true,
+      });
+      expect({ name, android: androidMethod.includes('requireTransportStoppedLocked()') }).toEqual({
+        name,
+        android: true,
+      });
+    }
+  });
+
+  it('requires plugin render callbacks to contain their own failures', () => {
+    const render = methodBody(
+      pluginHostSource,
+      'std::optional<PluginRenderResult> PluginHostBridge::Render(',
+      '}  // namespace daft::audio',
+    );
+    expect(pluginHostHeader).toContain('void* userData) noexcept');
+    expect(pluginHostSource).toContain('is_always_lock_free');
+    expect(render).not.toMatch(/\btry\b|\bcatch\b|\bthrow\b/);
+    expect(render).toContain('return callback(request, userData)');
   });
 
   it('turns AVFoundation exceptions into NSError failures after guarded cleanup', () => {

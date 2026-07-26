@@ -8,6 +8,8 @@ void RunPluginNodeTests();
 void RunSceneGraphTests();
 void RunJunoCoreTests();
 void RunInstrumentNodeTests();
+void RunRealtimeControlQueueTests();
+void RunRealtimeControlPlaneTests();
 }  // namespace daft::audio::tests
 
 int main() {
@@ -18,6 +20,8 @@ int main() {
     daft::audio::tests::RunSceneGraphTests();
     daft::audio::tests::RunJunoCoreTests();
     daft::audio::tests::RunInstrumentNodeTests();
+    daft::audio::tests::RunRealtimeControlQueueTests();
+    daft::audio::tests::RunRealtimeControlPlaneTests();
   } catch (const std::exception& ex) {
     std::cerr << "Test failure: " << ex.what() << std::endl;
     return 1;

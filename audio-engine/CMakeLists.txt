@@ -13,6 +13,8 @@ add_library(daft_audio_engine
     src/DSPNode.cpp
     src/Scheduler.cpp
     src/SceneGraph.cpp
+    src/SceneGraphRealtimeBatch.cpp
+    src/RealtimeControlPlane.cpp
     src/Automation.cpp
     src/Clock.cpp
     src/PluginHost.cpp
@@ -50,6 +52,7 @@ endif()
 
 if(DAFT_AUDIO_ENGINE_BUILD_TESTS)
     enable_testing()
+    find_package(Threads REQUIRED)
     add_executable(daft_audio_engine_tests
         tests/TestMain.cpp
         tests/SchedulerTests.cpp
@@ -58,8 +61,10 @@ if(DAFT_AUDIO_ENGINE_BUILD_TESTS)
         tests/SceneGraphTests.cpp
         tests/JunoCoreTests.cpp
         tests/InstrumentNodeTests.cpp
+        tests/RealtimeControlQueueTests.cpp
+        tests/RealtimeControlPlaneTests.cpp
     )
-    target_link_libraries(daft_audio_engine_tests PRIVATE daft_audio_engine)
+    target_link_libraries(daft_audio_engine_tests PRIVATE daft_audio_engine Threads::Threads)
     if(DAFT_AUDIO_ENGINE_ENABLE_SANITIZERS)
         target_compile_options(daft_audio_engine_tests PRIVATE
             -fsanitize=address,undefined

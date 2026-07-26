@@ -6,11 +6,19 @@ const createHarness = () => {
   const removeNodes = jest.fn(async (_nodeIds: string[]) => undefined);
   const connect = jest.fn(async (_source: string, _destination: string) => undefined);
   const disconnect = jest.fn(async (_source: string, _destination: string) => undefined);
+  const getTransportState = jest.fn(async () => ({ frame: 0, isPlaying: false }));
+  const stopTransport = jest.fn(async () => undefined);
+  const locateTransport = jest.fn(async (_frame: number) => undefined);
+  const startTransport = jest.fn(async () => undefined);
   const engine = {
     configureNodes,
     removeNodes,
     connect,
     disconnect,
+    getTransportState,
+    stopTransport,
+    locateTransport,
+    startTransport,
   } as unknown as AudioEngine;
   const logger = {
     debug: jest.fn(),
@@ -24,6 +32,11 @@ const createHarness = () => {
     removeNodes,
     connect,
     disconnect,
+    getTransportState,
+    stopTransport,
+    locateTransport,
+    startTransport,
+    logger,
   };
 };
 
@@ -42,16 +55,29 @@ describe('GraphReconciler', () => {
 
   it('removes and recreates changed nodes before restoring their connections', async () => {
     const { reconciler, configureNodes, removeNodes, connect } = createHarness();
-    const initial = { id: 'track:output', type: 'trackOutput', options: { gain: 1 } };
-    const changed = { id: 'track:output', type: 'trackOutput', options: { gain: 0.5 } };
-    const connections = new Set([reconciler.getConnectionKey(changed.id, OUTPUT_BUS)]);
+    const initial = {
+      id: 'track:output',
+      type: 'trackOutput',
+      options: { gain: 1 },
+    };
+    const changed = {
+      id: 'track:output',
+      type: 'trackOutput',
+      options: { gain: 0.5 },
+    };
+    const connections = new Set([
+      reconciler.getConnectionKey(changed.id, OUTPUT_BUS),
+    ]);
 
     await reconciler.apply(new Map([[initial.id, initial]]), connections);
     configureNodes.mockClear();
     removeNodes.mockClear();
     connect.mockClear();
 
-    const result = await reconciler.apply(new Map([[changed.id, changed]]), connections);
+    const result = await reconciler.apply(
+      new Map([[changed.id, changed]]),
+      connections,
+    );
 
     expect(removeNodes).toHaveBeenCalledWith([changed.id]);
     expect(configureNodes).toHaveBeenCalledWith([changed]);
@@ -64,7 +90,8 @@ describe('GraphReconciler', () => {
   });
 
   it('keeps Juno nodes in place when only realtime parameters change', async () => {
-    const { reconciler, configureNodes, removeNodes } = createHarness();
+    const { reconciler, configureNodes, removeNodes, getTransportState } =
+      createHarness();
     const initial = {
       id: 'juno',
       type: 'juno106',
@@ -79,14 +106,19 @@ describe('GraphReconciler', () => {
     await reconciler.apply(nodes, new Set());
     configureNodes.mockClear();
     removeNodes.mockClear();
+    getTransportState.mockClear();
 
-    expect(reconciler.hasChanges(new Map([[changed.id, changed]]), new Set())).toBe(
-      false,
+    expect(
+      reconciler.hasChanges(new Map([[changed.id, changed]]), new Set()),
+    ).toBe(false);
+    const result = await reconciler.apply(
+      new Map([[changed.id, changed]]),
+      new Set(),
     );
-    const result = await reconciler.apply(new Map([[changed.id, changed]]), new Set());
 
     expect(removeNodes).not.toHaveBeenCalled();
     expect(configureNodes).not.toHaveBeenCalled();
+    expect(getTransportState).not.toHaveBeenCalled();
     expect([...result.replacedNodeIds]).toEqual([]);
   });
 
@@ -104,9 +136,19 @@ describe('GraphReconciler', () => {
 
   it('preserves replacement changes when connection reconciliation fails', async () => {
     const { reconciler, connect } = createHarness();
-    const initial = { id: 'track:output', type: 'trackOutput', options: { gain: 1 } };
-    const changed = { id: 'track:output', type: 'trackOutput', options: { gain: 0.5 } };
-    const connections = new Set([reconciler.getConnectionKey(changed.id, OUTPUT_BUS)]);
+    const initial = {
+      id: 'track:output',
+      type: 'trackOutput',
+      options: { gain: 1 },
+    };
+    const changed = {
+      id: 'track:output',
+      type: 'trackOutput',
+      options: { gain: 0.5 },
+    };
+    const connections = new Set([
+      reconciler.getConnectionKey(changed.id, OUTPUT_BUS),
+    ]);
 
     await reconciler.apply(new Map([[initial.id, initial]]), connections);
     connect.mockRejectedValueOnce(new Error('Connection unavailable'));
@@ -115,7 +157,10 @@ describe('GraphReconciler', () => {
       reconciler.apply(new Map([[changed.id, changed]]), connections),
     ).rejects.toThrow('Connection unavailable');
 
-    const result = await reconciler.apply(new Map([[changed.id, changed]]), connections);
+    const result = await reconciler.apply(
+      new Map([[changed.id, changed]]),
+      connections,
+    );
     expect([...result.replacedNodeIds]).toEqual([changed.id]);
   });
 
@@ -133,7 +178,10 @@ describe('GraphReconciler', () => {
     };
 
     const outputConnection = reconciler.getConnectionKey(initial.id, OUTPUT_BUS);
-    await reconciler.apply(new Map([[initial.id, initial]]), new Set([outputConnection]));
+    await reconciler.apply(
+      new Map([[initial.id, initial]]),
+      new Set([outputConnection]),
+    );
     configureNodes.mockClear();
     connect.mockClear();
     await reconciler.forceConfigureNode(recovered);
@@ -141,5 +189,97 @@ describe('GraphReconciler', () => {
     expect(removeNodes).toHaveBeenCalledWith([recovered.id]);
     expect(configureNodes).toHaveBeenCalledWith([recovered]);
     expect(connect).toHaveBeenCalledWith(recovered.id, OUTPUT_BUS);
+  });
+
+  it('pauses a playing transport and resumes at the stopped frame', async () => {
+    const {
+      reconciler,
+      getTransportState,
+      stopTransport,
+      locateTransport,
+      startTransport,
+      configureNodes,
+    } = createHarness();
+    getTransportState
+      .mockResolvedValueOnce({ frame: 120, isPlaying: true })
+      .mockResolvedValueOnce({ frame: 128, isPlaying: false });
+    const node = { id: 'track:output', type: 'trackOutput' };
+
+    await reconciler.apply(new Map([[node.id, node]]), new Set());
+
+    expect(stopTransport).toHaveBeenCalledTimes(1);
+    expect(configureNodes).toHaveBeenCalledWith([node]);
+    expect(locateTransport).toHaveBeenCalledWith(128);
+    expect(startTransport).toHaveBeenCalledTimes(1);
+    expect(stopTransport.mock.invocationCallOrder[0]).toBeLessThan(
+      configureNodes.mock.invocationCallOrder[0],
+    );
+    expect(configureNodes.mock.invocationCallOrder[0]).toBeLessThan(
+      startTransport.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('keeps transport stopped when a structural mutation fails', async () => {
+    const {
+      reconciler,
+      getTransportState,
+      stopTransport,
+      locateTransport,
+      startTransport,
+      configureNodes,
+      logger,
+    } = createHarness();
+    getTransportState
+      .mockResolvedValueOnce({ frame: 64, isPlaying: true })
+      .mockResolvedValueOnce({ frame: 72, isPlaying: false });
+    configureNodes.mockRejectedValueOnce(
+      new Error('Native graph rejected mutation'),
+    );
+    const node = { id: 'track:output', type: 'trackOutput' };
+
+    await expect(
+      reconciler.apply(new Map([[node.id, node]]), new Set()),
+    ).rejects.toThrow('Native graph rejected mutation');
+
+    expect(stopTransport).toHaveBeenCalledTimes(1);
+    expect(locateTransport).toHaveBeenCalledWith(72);
+    expect(startTransport).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Graph mutation failed; transport remains stopped at the captured frame',
+      { frame: 72 },
+    );
+  });
+
+  it('serializes overlapping structural mutations', async () => {
+    const { reconciler, configureNodes } = createHarness();
+    let releaseFirst!: () => void;
+    let markFirstStarted!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    configureNodes.mockImplementationOnce(async () => {
+      markFirstStarted();
+      await firstGate;
+    });
+
+    const firstNode = { id: 'first', type: 'trackOutput' };
+    const secondNode = { id: 'second', type: 'trackOutput' };
+    const first = reconciler.apply(
+      new Map([[firstNode.id, firstNode]]),
+      new Set(),
+    );
+    await firstStarted;
+    const second = reconciler.forceConfigureNode(secondNode);
+    await Promise.resolve();
+
+    expect(configureNodes).toHaveBeenCalledTimes(1);
+    releaseFirst();
+    await first;
+    await second;
+    expect(configureNodes).toHaveBeenCalledTimes(2);
+    expect(configureNodes.mock.calls[1][0]).toEqual([secondNode]);
   });
 });
