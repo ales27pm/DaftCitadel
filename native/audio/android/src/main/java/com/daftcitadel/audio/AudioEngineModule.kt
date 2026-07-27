@@ -347,6 +347,82 @@ override fun getName(): String = NAME
     }
   }
 
+  @ReactMethod
+  fun startTransport(promise: Promise) {
+    try {
+      nativeStartTransport()
+      promise.resolve(null)
+    } catch (error: Exception) {
+      promise.reject("transport_start_failed", error)
+    }
+  }
+
+  @ReactMethod
+  fun stopTransport(promise: Promise) {
+    try {
+      nativeStopTransport()
+      promise.resolve(null)
+    } catch (error: Exception) {
+      promise.reject("transport_stop_failed", error)
+    }
+  }
+
+  @ReactMethod
+  fun locateTransport(frame: Double, promise: Promise) {
+    if (!frame.isFinite() || frame < 0) {
+      promise.reject("invalid_arguments", "frame must be non-negative and finite")
+      return
+    }
+    val frameTicks = frame.roundToLong()
+    if (abs(frame - frameTicks.toDouble()) > 1e-6) {
+      promise.reject("invalid_arguments", "frame must be an integer value")
+      return
+    }
+    try {
+      nativeLocateTransport(frameTicks)
+      promise.resolve(null)
+    } catch (error: Exception) {
+      promise.reject("transport_locate_failed", error)
+    }
+  }
+
+  @ReactMethod
+  fun setTransportLoop(startFrame: Double, endFrame: Double, enabled: Boolean, promise: Promise) {
+    if (!startFrame.isFinite() || startFrame < 0 || !endFrame.isFinite() || endFrame < 0) {
+      promise.reject("invalid_arguments", "transport loop frames must be non-negative and finite")
+      return
+    }
+    val startTicks = startFrame.roundToLong()
+    val endTicks = endFrame.roundToLong()
+    if (abs(startFrame - startTicks.toDouble()) > 1e-6 ||
+      abs(endFrame - endTicks.toDouble()) > 1e-6
+    ) {
+      promise.reject("invalid_arguments", "transport loop frames must be integer values")
+      return
+    }
+    try {
+      nativeSetTransportLoop(startTicks, endTicks, enabled)
+      promise.resolve(null)
+    } catch (error: Exception) {
+      promise.reject("transport_loop_failed", error)
+    }
+  }
+
+  @ReactMethod
+  fun getTransportState(promise: Promise) {
+    try {
+      val payload = nativeGetTransportState()
+      val state = Arguments.createMap().apply {
+        putDouble("currentFrame", payload[0])
+        putDouble("frame", payload[0])
+        putBoolean("isPlaying", payload[1] != 0.0)
+      }
+      promise.resolve(state)
+    } catch (error: Exception) {
+      promise.reject("transport_state_failed", error)
+    }
+  }
+
   /**
    * Fetches runtime render diagnostics from the native audio engine and delivers them to JavaScript.
    *
@@ -459,6 +535,11 @@ private external fun nativeDisconnectNodes(source: String, destination: String)
  * @param value The value to apply to the parameter at the specified frame.
  */
 private external fun nativeScheduleAutomation(nodeId: String, parameter: String, frame: Long, value: Double)
+private external fun nativeStartTransport()
+private external fun nativeStopTransport()
+private external fun nativeLocateTransport(frame: Long)
+private external fun nativeSetTransportLoop(startFrame: Long, endFrame: Long, enabled: Boolean)
+private external fun nativeGetTransportState(): DoubleArray
   /**
    * Registers a multi-channel Float32 clip buffer with the native audio engine.
    *

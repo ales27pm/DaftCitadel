@@ -420,6 +420,73 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeScheduleAutomation(JNIEnv* en
   }
 }
 
+JNIEXPORT void JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeStartTransport(JNIEnv* env, jobject /*thiz*/) {
+  try {
+    AudioEngineBridge::startTransport();
+  } catch (const std::exception& ex) {
+    ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeStopTransport(JNIEnv* env, jobject /*thiz*/) {
+  try {
+    AudioEngineBridge::stopTransport();
+  } catch (const std::exception& ex) {
+    ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeLocateTransport(JNIEnv* env, jobject /*thiz*/, jlong frame) {
+  if (frame < 0) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException", "frame must be non-negative");
+    return;
+  }
+  try {
+    AudioEngineBridge::locateTransport(static_cast<std::uint64_t>(frame));
+  } catch (const std::exception& ex) {
+    ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeSetTransportLoop(JNIEnv* env, jobject /*thiz*/, jlong startFrame,
+                                                                    jlong endFrame, jboolean enabled) {
+  if (startFrame < 0 || endFrame < 0) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException", "transport loop frames must be non-negative");
+    return;
+  }
+  try {
+    AudioEngineBridge::setTransportLoop(static_cast<std::uint64_t>(startFrame),
+                                        static_cast<std::uint64_t>(endFrame),
+                                        enabled == JNI_TRUE);
+  } catch (const std::exception& ex) {
+    ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
+  }
+}
+
+JNIEXPORT jdoubleArray JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeGetTransportState(JNIEnv* env, jobject /*thiz*/) {
+  constexpr jsize kPayloadSize = 2;
+  jdoubleArray result = env->NewDoubleArray(kPayloadSize);
+  if (result == nullptr) {
+    return nullptr;
+  }
+  try {
+    const auto state = AudioEngineBridge::getTransportState();
+    const jdouble payload[kPayloadSize] = {
+        static_cast<jdouble>(state.currentFrame),
+        state.isPlaying ? 1.0 : 0.0,
+    };
+    env->SetDoubleArrayRegion(result, 0, kPayloadSize, payload);
+  } catch (const std::exception& ex) {
+    ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
+  }
+  return result;
+}
+
 /**
  * @brief Retrieve runtime diagnostics from the audio engine.
  *
