@@ -10,7 +10,9 @@ export type {
 export { buildTracks, buildTransport } from './selectors';
 export { SessionStoryProvider } from './fixtures';
 export { SessionAppProvider } from './SessionAppProvider';
+export { useSessionActions } from './useSessionActions';
 export { useTransportControls } from './useTransportControls';
+export { useInstrumentControls } from './useInstrumentControls';
 export { useProjectedTransport } from './useProjectedTransport';
 export {
   createDemoSessionEnvironment,

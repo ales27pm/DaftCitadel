@@ -16,6 +16,7 @@
 #include "audio_engine/DSPNode.h"
 #include "audio_engine/PluginNode.h"
 #include "audio_engine/instruments/juno/JunoInstrumentNode.h"
+#include "audio_engine/instruments/juno/Juno106Node.h"
 
 #if defined(__ANDROID__)
 #include "../android/AudioEngineBridge.h"
@@ -211,6 +212,24 @@ inline std::unique_ptr<daft::audio::DSPNode> CreateNode(const std::string& type,
     return node;
   }
 
+
+  if (normalized == "juno106" || normalized == "juno-106") {
+    std::size_t polyphony = 8;
+    if (const auto value = options.numericValue("polyphony")) {
+      if (std::isfinite(*value)) {
+        const auto clamped = std::llround(*value);
+        if (clamped >= 1 && clamped <= 128) {
+          polyphony = static_cast<std::size_t>(clamped);
+        }
+      }
+    }
+
+    auto node = std::make_unique<daft::audio::juno::Juno106Node>(
+        daft::audio::juno::Juno106Node::kDefaultMaximumFramesPerBlock,
+        polyphony);
+    detail::applyParameters(*node, options, {"polyphony"});
+    return node;
+  }
 
   if (normalized == "juno" || normalized == "junosynth") {
     std::size_t polyphony = 8;

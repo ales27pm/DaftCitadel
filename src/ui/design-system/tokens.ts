@@ -3,10 +3,14 @@ import { ColorSchemeName } from 'react-native';
 export type ColorTokens = {
   background: string;
   surface: string;
+  surfaceElevated: string;
   surfaceVariant: string;
   textPrimary: string;
   textSecondary: string;
+  textTertiary: string;
+  border: string;
   accentPrimary: string;
+  accentPrimaryInk: string;
   accentSecondary: string;
   accentTertiary: string;
   waveform: string;
@@ -87,10 +91,14 @@ export const lightTokens: ThemeTokens = {
   colors: {
     background: '#08090F',
     surface: '#0E1120',
+    surfaceElevated: '#151B31',
     surfaceVariant: '#11162A',
     textPrimary: '#F5F6FF',
     textSecondary: '#CED4FF',
+    textTertiary: '#8C94C6',
+    border: 'rgba(80, 227, 194, 0.42)',
     accentPrimary: '#50E3C2',
+    accentPrimaryInk: '#03100C',
     accentSecondary: '#FB3EFF',
     accentTertiary: '#25C1FF',
     waveform: '#25C1FF',
@@ -156,10 +164,14 @@ export const darkTokens: ThemeTokens = {
   colors: {
     background: '#03050A',
     surface: '#060A14',
+    surfaceElevated: '#0D1427',
     surfaceVariant: '#0A1021',
     textPrimary: '#FFFFFF',
     textSecondary: '#C8CCFF',
+    textTertiary: '#8991C3',
+    border: 'rgba(92, 255, 202, 0.46)',
     accentPrimary: '#5CFFCA',
+    accentPrimaryInk: '#02110C',
     accentSecondary: '#FF63FF',
     accentTertiary: '#4DD6FF',
     waveform: '#4DD6FF',

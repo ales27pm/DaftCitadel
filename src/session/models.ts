@@ -28,7 +28,7 @@ export interface Clip {
   name: string;
   start: number; // milliseconds
   duration: number; // milliseconds
-  audioFile: string;
+  audioFile?: string;
   gain: number; // linear amplitude multiplier
   fadeIn: number; // milliseconds
   fadeOut: number; // milliseconds
@@ -84,6 +84,64 @@ export interface PluginRoutingNode extends RoutingNodeBase {
   emits: RoutingSignalType[];
 }
 
+export type Juno106ParameterName =
+  | 'pulseWidth'
+  | 'subLevel'
+  | 'cutoffHz'
+  | 'resonance'
+  | 'attackSeconds'
+  | 'releaseSeconds'
+  | 'chorusMode'
+  | 'outputGain'
+  | 'lfoRateHz'
+  | 'lfoDepth';
+
+export type Juno106ParameterMap = Record<Juno106ParameterName, number>;
+
+export const JUNO106_PARAMETER_NAMES: readonly Juno106ParameterName[] =
+  Object.freeze([
+    'pulseWidth',
+    'subLevel',
+    'cutoffHz',
+    'resonance',
+    'attackSeconds',
+    'releaseSeconds',
+    'chorusMode',
+    'outputGain',
+    'lfoRateHz',
+    'lfoDepth',
+  ]);
+
+export const JUNO106_DEFAULT_PARAMETERS: Readonly<Juno106ParameterMap> =
+  Object.freeze({
+    pulseWidth: 0.5,
+    subLevel: 0.35,
+    cutoffHz: 2400,
+    resonance: 0.15,
+    attackSeconds: 0.01,
+    releaseSeconds: 0.45,
+    chorusMode: 1,
+    outputGain: 0.2,
+    lfoRateHz: 0.8,
+    lfoDepth: 0,
+  });
+
+export interface Juno106PresetSnapshot {
+  id: string;
+  version: number;
+  name?: string;
+}
+
+export interface InstrumentRoutingNode extends RoutingNodeBase {
+  type: 'instrument';
+  instrumentType: 'juno106';
+  parameters: Juno106ParameterMap;
+  preset?: Juno106PresetSnapshot;
+  polyphony?: number;
+  accepts: RoutingSignalType[];
+  emits: RoutingSignalType[];
+}
+
 export interface SendRoutingNode extends RoutingNodeBase {
   type: 'send' | 'return';
   busId: string;
@@ -100,6 +158,7 @@ export interface SidechainRoutingNode extends RoutingNodeBase {
 
 export type RoutingNode =
   | TrackEndpointNode
+  | InstrumentRoutingNode
   | PluginRoutingNode
   | SendRoutingNode
   | SidechainRoutingNode;
@@ -212,6 +271,90 @@ export const createEmptySession = (id: SessionID, name: string): Session => {
   return deepFreeze(session);
 };
 
+export interface CreateJunoTrackOptions {
+  name?: string;
+  color?: string;
+  parameters?: Partial<Juno106ParameterMap>;
+  preset?: Juno106PresetSnapshot;
+  polyphony?: number;
+}
+
+const cloneJunoParameters = (
+  overrides: Partial<Juno106ParameterMap> = {},
+): Juno106ParameterMap => ({
+  ...JUNO106_DEFAULT_PARAMETERS,
+  ...overrides,
+});
+
+export const createJunoRoutingGraph = (
+  trackId: TrackID,
+  options: CreateJunoTrackOptions = {},
+): RoutingGraph => {
+  const trackInputNode: TrackEndpointNode = {
+    id: `${trackId}:input:midi`,
+    type: 'trackInput',
+    ioId: 'input:midi',
+    channelCount: 2,
+    label: 'Track Input',
+  };
+  const instrumentNode: InstrumentRoutingNode = {
+    id: `${trackId}:instrument:juno106`,
+    type: 'instrument',
+    instrumentType: 'juno106',
+    parameters: cloneJunoParameters(options.parameters),
+    ...(options.preset ? { preset: { ...options.preset } } : {}),
+    ...(options.polyphony ? { polyphony: options.polyphony } : {}),
+    accepts: ['midi'],
+    emits: ['audio'],
+    label: 'Juno-106',
+  };
+  const trackOutputNode: TrackEndpointNode = {
+    id: `${trackId}:output:main`,
+    type: 'trackOutput',
+    ioId: 'output:main',
+    channelCount: 2,
+    label: 'Track Output',
+  };
+  return {
+    version: 1,
+    nodes: [trackInputNode, instrumentNode, trackOutputNode],
+    connections: [
+      {
+        id: `${trackId}:connection:midi-to-juno`,
+        from: { nodeId: trackInputNode.id },
+        to: { nodeId: instrumentNode.id },
+        signal: 'midi',
+        enabled: true,
+      },
+      {
+        id: `${trackId}:connection:juno-to-output`,
+        from: { nodeId: instrumentNode.id },
+        to: { nodeId: trackOutputNode.id },
+        signal: 'audio',
+        enabled: true,
+      },
+    ],
+  };
+};
+
+export const createDefaultJunoTrack = (
+  trackId: TrackID,
+  options: CreateJunoTrackOptions = {},
+): Track => ({
+  id: trackId,
+  name: options.name?.trim() || 'Juno-106',
+  color: options.color ?? '#50E3C2',
+  clips: [],
+  muted: false,
+  solo: false,
+  volume: -6,
+  pan: 0,
+  automationCurves: [],
+  routing: {
+    graph: createJunoRoutingGraph(trackId, options),
+  },
+});
+
 export const updateSessionTimestamp = (session: Session): Session => ({
   ...session,
   metadata: {
@@ -269,6 +412,11 @@ export const validateSession = (session: Session): void => {
       if (clip.duration <= 0) {
         throw new Error('Clip duration must be positive');
       }
+      const hasAudioFile =
+        typeof clip.audioFile === 'string' && clip.audioFile.trim().length > 0;
+      if (!hasAudioFile && !clip.midi) {
+        throw new Error(`Clip ${clip.id} must contain audio or MIDI data`);
+      }
       if (clip.midi) {
         clip.midi.notes.forEach((note) => {
           if (!note.id) {
@@ -309,6 +457,24 @@ const validateRoutingGraph = (graph: RoutingGraph): void => {
       }
       if (node.order < 0) {
         throw new Error(`Plugin node ${node.id} has invalid order`);
+      }
+    }
+    if (node.type === 'instrument') {
+      if (node.instrumentType !== 'juno106') {
+        throw new Error(`Instrument node ${node.id} has unsupported instrument type`);
+      }
+      JUNO106_PARAMETER_NAMES.forEach((parameter) => {
+        if (!Number.isFinite(node.parameters[parameter])) {
+          throw new Error(
+            `Instrument node ${node.id} parameter ${parameter} must be finite`,
+          );
+        }
+      });
+      if (
+        node.polyphony !== undefined &&
+        (!Number.isInteger(node.polyphony) || node.polyphony <= 0)
+      ) {
+        throw new Error(`Instrument node ${node.id} polyphony must be positive`);
       }
     }
     if (node.type === 'send' || node.type === 'return') {

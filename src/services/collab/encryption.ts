@@ -58,6 +58,70 @@ function hashSharedSecret(sharedSecret: Uint8Array): Uint8Array {
   return hash.slice(0, HASH_BYTES);
 }
 
+function concatBytes(first: Uint8Array, second: Uint8Array): Uint8Array {
+  const combined = new Uint8Array(first.length + second.length);
+  combined.set(first, 0);
+  combined.set(second, first.length);
+  return combined;
+}
+
+function encodeBase64Url(bytes: Uint8Array): string {
+  return encodeBase64(bytes)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function deriveAuthenticationKey(
+  sharedSecret: Uint8Array,
+  binding: Uint8Array,
+): Uint8Array {
+  return hashSharedSecret(concatBytes(sharedSecret, binding)).slice(
+    0,
+    SYMMETRIC_KEY_SIZE,
+  );
+}
+
+export function fingerprintPublicKey(publicKey: string): string {
+  const publicKeyBytes = decodeBase64String(publicKey);
+  const digest = nacl.hash(publicKeyBytes);
+  return `peer-${encodeBase64Url(digest.slice(0, 16))}`;
+}
+
+export function createAuthenticationProof(
+  claim: string,
+  sharedSecret: Uint8Array,
+  binding: Uint8Array,
+): Ciphertext {
+  const key = deriveAuthenticationKey(sharedSecret, binding);
+  const nonce = nacl.randomBytes(NONCE_LENGTH);
+  const box = nacl.secretbox(encodeUtf8(claim), nonce, key);
+  return {
+    nonce: encodeBase64(nonce),
+    box: encodeBase64(box),
+  };
+}
+
+export function verifyAuthenticationProof(
+  proof: Ciphertext,
+  claim: string,
+  sharedSecret: Uint8Array,
+  binding: Uint8Array,
+): boolean {
+  try {
+    const key = deriveAuthenticationKey(sharedSecret, binding);
+    const nonce = decodeBase64String(proof.nonce);
+    const box = decodeBase64String(proof.box);
+    const opened = nacl.secretbox.open(box, nonce, key);
+    if (!opened) {
+      return false;
+    }
+    return decodeUtf8(opened) === claim;
+  } catch (_error) {
+    return false;
+  }
+}
+
 export function generateIdentityKeyPair(): KeyPair {
   const keyPair = nacl.box.keyPair();
   return {

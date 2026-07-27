@@ -6,3 +6,6 @@ export * from './sessionManager';
 export * from './storage';
 export * from './storage/sqliteAdapter';
 export * from './storage/memoryAdapter';
+export * from './juno106Presets';
+export * from './juno106SysEx';
+export * from './junoPresetStorage';

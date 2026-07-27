@@ -2,6 +2,7 @@ import { AudioEngine, NodeConfiguration, OUTPUT_BUS } from './AudioEngine';
 import { AutomationLane, ClockSyncService } from './Automation';
 import {
   Clip,
+  InstrumentRoutingNode,
   PluginRoutingNode,
   RoutingGraph,
   RoutingNode,
@@ -11,6 +12,8 @@ import {
 } from '../session/models';
 import type {
   AudioDiagnosticsSnapshot,
+  AudioInstrumentMidiEvent,
+  InstrumentParameterChange,
   AudioTransportSnapshot,
 } from '../session/sessionManager';
 import {
@@ -58,6 +61,9 @@ const isTrackEndpointNode = (node: RoutingNode): node is TrackEndpointNode =>
 
 const isPluginNode = (node: RoutingNode): node is PluginRoutingNode =>
   node.type === 'plugin';
+
+const isInstrumentNode = (node: RoutingNode): node is InstrumentRoutingNode =>
+  node.type === 'instrument';
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
@@ -531,6 +537,27 @@ export class SessionAudioBridge {
     await this.refreshTransportState();
   }
 
+  public async sendInstrumentMidi(
+    nodeId: string,
+    event: AudioInstrumentMidiEvent,
+  ): Promise<void> {
+    await this.audioEngine.sendInstrumentMidi(nodeId, event);
+    await this.refreshDiagnosticsState();
+  }
+
+  public async setInstrumentParameter(
+    nodeId: string,
+    change: InstrumentParameterChange,
+  ): Promise<void> {
+    await this.audioEngine.setInstrumentParameter(nodeId, change);
+    await this.refreshDiagnosticsState();
+  }
+
+  public async allNotesOff(nodeId: string): Promise<void> {
+    await this.audioEngine.allNotesOff(nodeId);
+    await this.refreshDiagnosticsState();
+  }
+
   public getDiagnosticsState(): AudioDiagnosticsSnapshot {
     return { ...this.diagnosticsSnapshot };
   }
@@ -626,6 +653,9 @@ export class SessionAudioBridge {
 
         await Promise.all(
           track.clips.map(async (clip) => {
+            if (!clip.audioFile || clip.audioFile.trim().length === 0) {
+              return;
+            }
             try {
               const clipState = await this.prepareClipNode(
                 track,
@@ -679,8 +709,9 @@ export class SessionAudioBridge {
     if (isTrackEndpointNode(node)) {
       return {
         id: node.id,
-        type: node.type,
+        type: 'gain',
         options: {
+          gain: 1,
           ioId: node.ioId,
           channelCount: node.channelCount,
           label: node.label ?? '',
@@ -703,6 +734,17 @@ export class SessionAudioBridge {
           emitsAudio: node.emits.includes('audio'),
           emitsMidi: node.emits.includes('midi'),
           emitsSidechain: node.emits.includes('sidechain'),
+        },
+      };
+    }
+    if (isInstrumentNode(node)) {
+      return {
+        id: node.id,
+        type: node.instrumentType,
+        options: {
+          ...node.parameters,
+          polyphony: node.polyphony ?? 8,
+          label: node.label ?? '',
         },
       };
     }
@@ -747,6 +789,9 @@ export class SessionAudioBridge {
     automationKey: string;
     bufferDescriptor: ClipBufferDescriptor;
   }> {
+    if (!clip.audioFile || clip.audioFile.trim().length === 0) {
+      throw new Error(`Clip ${clip.id} has no audio file`);
+    }
     const bufferDescriptor = await this.bufferCache.getClipBuffer(
       clip.audioFile,
       sampleRate,

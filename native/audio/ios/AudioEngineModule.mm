@@ -9,6 +9,7 @@
 #include <cctype>
 #include <exception>
 #include <limits>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -104,6 +105,48 @@ bool EnsureInitialized(AudioEngineBridge::EngineGeneration generation, RCTPromis
   }
   RejectPromise(reject, @"engine_not_initialized", "Audio engine is not initialized");
   return false;
+}
+
+std::optional<daft::audio::InstrumentEventType> ConvertInstrumentEventType(NSNumber* value) {
+  if (value == nil) {
+    return std::nullopt;
+  }
+  switch (value.integerValue) {
+    case 0:
+      return daft::audio::InstrumentEventType::kNoteOn;
+    case 1:
+      return daft::audio::InstrumentEventType::kNoteOff;
+    case 2:
+      return daft::audio::InstrumentEventType::kControlChange;
+    case 3:
+      return daft::audio::InstrumentEventType::kPitchBend;
+    case 4:
+      return daft::audio::InstrumentEventType::kChannelAftertouch;
+    case 5:
+      return daft::audio::InstrumentEventType::kPolyAftertouch;
+    default:
+      return std::nullopt;
+  }
+}
+
+bool ReadBoundedInteger(NSDictionary* event, NSString* key, NSInteger minimum,
+                        NSInteger maximum, NSInteger& out) {
+  id value = event[key];
+  if (![value isKindOfClass:[NSNumber class]]) {
+    return false;
+  }
+  NSNumber* number = (NSNumber*)value;
+  const double raw = number.doubleValue;
+  if (!std::isfinite(raw)) {
+    return false;
+  }
+  const NSInteger integer = number.integerValue;
+  if (std::fabs(raw - static_cast<double>(integer)) > 1e-6 ||
+      integer < minimum || integer > maximum) {
+    return false;
+  }
+  out = integer;
+  return true;
 }
 }  // namespace
 
@@ -432,6 +475,98 @@ RCT_EXPORT_METHOD(scheduleParameterAutomation:(NSString*)nodeId
   } catch (const std::exception& ex) {
     os_log_error(ModuleLogger(), "scheduleParameterAutomation failed: %{public}s", ex.what());
     RejectPromise(reject, @"automation_failed", ex.what());
+  }
+}
+
+RCT_EXPORT_METHOD(sendInstrumentMidi:(NSString*)nodeId
+                  event:(NSDictionary*)event
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+  if (nodeId.length == 0 || event == nil) {
+    RejectPromise(reject, @"invalid_arguments", "nodeId and event are required");
+    return;
+  }
+  const auto generation = _engineGeneration;
+  if (!EnsureInitialized(generation, reject)) {
+    return;
+  }
+
+  auto eventType = ConvertInstrumentEventType(event[@"type"]);
+  NSInteger channel = 0;
+  NSInteger data1 = 0;
+  NSInteger data2 = 0;
+  if (!eventType ||
+      !ReadBoundedInteger(event, @"channel", 0, 15, channel) ||
+      !ReadBoundedInteger(event, @"data1", 0, 127, data1) ||
+      !ReadBoundedInteger(event, @"data2", 0, 127, data2)) {
+    RejectPromise(reject, @"invalid_arguments", "Invalid MIDI event payload");
+    return;
+  }
+
+  std::uint64_t frameOffset = 0U;
+  id rawFrameOffset = event[@"frameOffset"];
+  if (rawFrameOffset != nil) {
+    if (![rawFrameOffset isKindOfClass:[NSNumber class]]) {
+      RejectPromise(reject, @"invalid_arguments", "frameOffset must be numeric");
+      return;
+    }
+    NSNumber* frameNumber = (NSNumber*)rawFrameOffset;
+    const double frameValue = frameNumber.doubleValue;
+    if (!std::isfinite(frameValue) || frameValue < 0.0) {
+      RejectPromise(reject, @"invalid_arguments", "frameOffset must be non-negative");
+      return;
+    }
+    frameOffset = frameNumber.unsignedLongLongValue;
+    if (std::fabs(frameValue - static_cast<double>(frameOffset)) > 1e-6) {
+      RejectPromise(reject, @"invalid_arguments", "frameOffset must be an integer");
+      return;
+    }
+  }
+
+  daft::audio::InstrumentEvent nativeEvent{};
+  nativeEvent.type = *eventType;
+  nativeEvent.channel = static_cast<std::uint8_t>(channel);
+  nativeEvent.data = static_cast<std::uint8_t>(data1);
+  nativeEvent.value = static_cast<float>(data2) / 127.0F;
+  nativeEvent.retainAcrossPanic = false;
+
+  if (*eventType == daft::audio::InstrumentEventType::kChannelAftertouch) {
+    nativeEvent.data = 0U;
+    nativeEvent.value = static_cast<float>(data1) / 127.0F;
+  } else if (*eventType == daft::audio::InstrumentEventType::kPitchBend) {
+    const NSInteger bend = (data2 << 7) | data1;
+    nativeEvent.data = 0U;
+    nativeEvent.value = static_cast<float>(
+        std::clamp((static_cast<double>(bend) - 8192.0) / 8192.0, -1.0, 1.0));
+  }
+
+  try {
+    AudioEngineBridge::scheduleInstrumentEventFromNow(
+        generation, [nodeId UTF8String], nativeEvent, frameOffset);
+    resolve(nil);
+  } catch (const std::exception& ex) {
+    os_log_error(ModuleLogger(), "sendInstrumentMidi failed: %{public}s", ex.what());
+    RejectPromise(reject, @"instrument_event_failed", ex.what());
+  }
+}
+
+RCT_EXPORT_METHOD(allNotesOff:(NSString*)nodeId
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+  if (nodeId.length == 0) {
+    RejectPromise(reject, @"invalid_arguments", "nodeId is required");
+    return;
+  }
+  const auto generation = _engineGeneration;
+  if (!EnsureInitialized(generation, reject)) {
+    return;
+  }
+  try {
+    AudioEngineBridge::allNotesOff(generation, [nodeId UTF8String]);
+    resolve(nil);
+  } catch (const std::exception& ex) {
+    os_log_error(ModuleLogger(), "allNotesOff failed: %{public}s", ex.what());
+    RejectPromise(reject, @"all_notes_off_failed", ex.what());
   }
 }
 

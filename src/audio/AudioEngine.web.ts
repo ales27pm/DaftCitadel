@@ -582,5 +582,8 @@ const ensureArrayBuffer = (value: ChannelPayload): ArrayBuffer => {
   if (value instanceof ArrayBuffer) {
     return value;
   }
-  return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
+  const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
 };

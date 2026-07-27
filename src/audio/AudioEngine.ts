@@ -1,5 +1,9 @@
 import { NativeAudioEngine, isNativeModuleAvailable } from './NativeAudioEngine';
 import { AutomationLane, publishAutomationLane, ClockSyncService } from './Automation';
+import type {
+  AudioInstrumentMidiEvent,
+  InstrumentParameterChange,
+} from '../session/sessionManager';
 
 type ChannelPayload =
   | ArrayBuffer
@@ -207,6 +211,24 @@ export class AudioEngine {
 
   public async publishAutomation(nodeId: string, lane: AutomationLane): Promise<void> {
     await this.publishAutomationLane(nodeId, lane);
+  }
+
+  public async sendInstrumentMidi(
+    nodeId: string,
+    event: AudioInstrumentMidiEvent,
+  ): Promise<void> {
+    await NativeAudioEngine.sendInstrumentMidi(nodeId, event);
+  }
+
+  public async setInstrumentParameter(
+    nodeId: string,
+    change: InstrumentParameterChange,
+  ): Promise<void> {
+    await NativeAudioEngine.setInstrumentParameter(nodeId, change);
+  }
+
+  public async allNotesOff(nodeId: string): Promise<void> {
+    await NativeAudioEngine.allNotesOff(nodeId);
   }
 
   public async startTransport(): Promise<void> {

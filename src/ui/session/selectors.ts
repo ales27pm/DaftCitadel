@@ -5,6 +5,7 @@ import {
   Session,
   SessionMetadata,
   Track,
+  type InstrumentRoutingNode,
 } from '../../session';
 import {
   SessionDiagnosticsView,
@@ -209,6 +210,7 @@ const buildTrackViewModel = (
       ? 0
       : clamp(dbToLinear(track.volume) * peakAutomation * renderAttenuation, 0, 1);
   const plugins = buildPluginChain(track.routing.graph, pluginCrashes);
+  const instrument = buildInstrument(track.routing.graph);
   return {
     id: track.id,
     name: track.name,
@@ -223,6 +225,24 @@ const buildTrackViewModel = (
     midiNotes,
     meterLevel,
     plugins,
+    instrument,
+  };
+};
+
+const buildInstrument = (graph: RoutingGraph | undefined) => {
+  const instrument = graph?.nodes.find(
+    (node): node is InstrumentRoutingNode =>
+      node.type === 'instrument' && node.instrumentType === 'juno106',
+  );
+  if (!instrument) {
+    return undefined;
+  }
+  return {
+    nodeId: instrument.id,
+    instrumentType: instrument.instrumentType,
+    label: instrument.label,
+    parameters: { ...instrument.parameters },
+    ...(instrument.preset ? { preset: { ...instrument.preset } } : {}),
   };
 };
 

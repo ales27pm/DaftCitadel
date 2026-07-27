@@ -11,6 +11,7 @@ import {
 
 import { ThemeIntent, mapIntentToColor } from '../../design-system/tokens';
 import { useTheme } from '../../design-system/theme';
+import { parseTimeSignature, quarterNoteBeatsPerBar } from '../../utils/timeSignature';
 
 interface GridMetrics {
   startBeat: number;
@@ -29,6 +30,7 @@ export interface MidiNote {
 export interface MidiPianoRollProps {
   notes: MidiNote[];
   totalBars: number;
+  timeSignature?: string;
   pixelsPerBeat?: number;
   style?: StyleProp<ViewStyle>;
 }
@@ -41,11 +43,14 @@ const DEFAULT_PIXELS_PER_BEAT = 48;
 export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
   notes,
   totalBars,
+  timeSignature = '4/4',
   pixelsPerBeat = DEFAULT_PIXELS_PER_BEAT,
   style,
 }) => {
   const theme = useTheme();
   const { width: viewportWidth } = useWindowDimensions();
+  const { denominator, numerator } = parseTimeSignature(timeSignature);
+  const signatureBeatInQuarterNotes = 4 / denominator;
   const [gridState, setGridState] = useState<GridMetrics>({
     startBeat: 0,
     visibleBeats: 0,
@@ -54,15 +59,16 @@ export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
   const noteHeight = useMemo(() => Math.max(18, Math.floor(720 / KEY_COUNT)), []);
 
   const contentWidth = useMemo(
-    () => totalBars * pixelsPerBeat * 4,
-    [pixelsPerBeat, totalBars],
+    () => totalBars * quarterNoteBeatsPerBar(timeSignature) * pixelsPerBeat,
+    [pixelsPerBeat, timeSignature, totalBars],
   );
 
   const updateGridState = useCallback(
     (scrollOffsetX: number) => {
       const windowWidth = Math.max(1, viewportWidth || 0);
-      const visibleBeats = Math.ceil(windowWidth / pixelsPerBeat);
-      const startBeat = Math.floor(scrollOffsetX / pixelsPerBeat);
+      const signatureBeatWidth = signatureBeatInQuarterNotes * pixelsPerBeat;
+      const visibleBeats = Math.ceil(windowWidth / signatureBeatWidth);
+      const startBeat = Math.floor(scrollOffsetX / signatureBeatWidth);
       setGridState((previous) => {
         if (
           previous.startBeat === startBeat &&
@@ -73,7 +79,7 @@ export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
         return { visibleBeats, startBeat };
       });
     },
-    [pixelsPerBeat, viewportWidth],
+    [pixelsPerBeat, signatureBeatInQuarterNotes, viewportWidth],
   );
 
   useEffect(() => {
@@ -150,8 +156,8 @@ export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
         <View style={rollStyle}>
           {Array.from({ length: gridState.visibleBeats + 2 }).map((_, index) => {
             const beat = gridState.startBeat + index;
-            const left = beat * pixelsPerBeat;
-            const isBarStart = beat % 4 === 0;
+            const left = beat * signatureBeatInQuarterNotes * pixelsPerBeat;
+            const isBarStart = beat % numerator === 0;
             const lineStyle = buildGridLineStyle(left, isBarStart);
             return <View key={`grid-${beat}`} pointerEvents="none" style={lineStyle} />;
           })}

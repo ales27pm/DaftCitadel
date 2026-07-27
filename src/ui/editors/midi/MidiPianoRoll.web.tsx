@@ -17,7 +17,7 @@ export interface MidiNote {
 export interface MidiPianoRollProps {
   notes: MidiNote[];
   totalBars: number;
-  timeSignature: string;
+  timeSignature?: string;
   pixelsPerBeat?: number;
   style?: StyleProp<ViewStyle>;
 }
@@ -30,7 +30,7 @@ const DEFAULT_PIXELS_PER_BEAT = 48;
 export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
   notes,
   totalBars,
-  timeSignature,
+  timeSignature = '4/4',
   pixelsPerBeat = DEFAULT_PIXELS_PER_BEAT,
   style,
 }) => {

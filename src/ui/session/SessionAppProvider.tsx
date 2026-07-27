@@ -98,16 +98,16 @@ const bootstrapEnvironment = async (
   try {
     return await createProductionSessionEnvironment();
   } catch (error) {
-    if (error instanceof NativeAudioUnavailableError) {
-      console.info(
-        'Audio engine unavailable; falling back to passive session environment.',
-      );
-      return createPassiveSessionEnvironment();
+    if (shouldUseProduction) {
+      if (error instanceof NativeAudioUnavailableError) {
+        throw new NativeAudioUnavailableError(
+          `Native audio engine is required for release builds: ${error.message}`,
+        );
+      }
+      console.error('Failed to bootstrap production session environment.', error);
+      throw error;
     }
-    console.error(
-      'Failed to bootstrap production session environment; falling back to passive session environment.',
-      error,
-    );
+    console.error('Failed to bootstrap production session environment.', error);
     return createPassiveSessionEnvironment();
   }
 };

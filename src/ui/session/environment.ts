@@ -1,7 +1,7 @@
 import { NativeModules, Platform } from 'react-native';
 import { useEffect } from 'react';
 
-import type { PluginRoutingNode, Session } from '../../session/models';
+import { createEmptySession, type PluginRoutingNode, type Session } from '../../session/models';
 import { demoSession, DEMO_SESSION_ID } from '../../session/fixtures/demoSession';
 import { InMemorySessionStorageAdapter } from '../../session/storage/memoryAdapter';
 import type { SessionStorageAdapter } from '../../session/storage';
@@ -209,9 +209,12 @@ interface PassiveEnvironmentOptions {
   storageDirectory?: string;
 }
 
-const DEFAULT_SAMPLE_RATE = demoSession.metadata.sampleRate;
+export const DEFAULT_SESSION_ID = 'default-session';
+
+const DEFAULT_SESSION_NAME = 'Daft Citadel Session';
+const DEFAULT_SAMPLE_RATE = 48000;
 const DEFAULT_FRAMES_PER_BUFFER = 256;
-const DEFAULT_BPM = demoSession.metadata.bpm;
+const DEFAULT_BPM = 120;
 
 const createDefaultAudioFileLoader = (): AudioFileLoader => {
   if (Platform.OS === 'web') {
@@ -251,7 +254,7 @@ export const createDemoSessionEnvironment = async (): Promise<SessionEnvironment
 export const createPassiveSessionEnvironment = async (
   options: PassiveEnvironmentOptions = {},
 ): Promise<SessionEnvironment> => {
-  const sessionId = options.sessionId ?? DEMO_SESSION_ID;
+  const sessionId = options.sessionId ?? DEFAULT_SESSION_ID;
   const storage = createSessionStorageAdapter(
     await resolveStorageDirectory(options.storageDirectory),
   );
@@ -273,7 +276,7 @@ export const createProductionSessionEnvironment = async (
   const sampleRate = options.sampleRate ?? DEFAULT_SAMPLE_RATE;
   const framesPerBuffer = options.framesPerBuffer ?? DEFAULT_FRAMES_PER_BUFFER;
   const bpm = options.bpm ?? DEFAULT_BPM;
-  const sessionId = options.sessionId ?? DEMO_SESSION_ID;
+  const sessionId = options.sessionId ?? DEFAULT_SESSION_ID;
 
   if (Platform.OS === 'web') {
     if (!isWebAudioEngineAvailable()) {
@@ -343,7 +346,7 @@ const bootstrapSessionIfNeeded = async (
     await manager.loadSession(sessionId);
     return;
   }
-  const seed = cloneDemoSession(sessionId);
+  const seed = createEmptySession(sessionId, DEFAULT_SESSION_NAME);
   await manager.createSession(seed);
 };
 

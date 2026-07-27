@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { SafeAreaView, ScrollView, View } from 'react-native';
 
-import { NeonButton, NeonSurface, NeonText, NeonToolbar } from '../design-system';
+import { NeonSurface, NeonText, NeonToolbar } from '../design-system';
 import { useAdaptiveLayout } from '../layout';
 import { useSessionViewModel, useProjectedTransport } from '../session';
+import { JunoPerformancePanel } from './JunoPerformancePanel';
 
 export const PerformanceScreen: React.FC = () => {
   const adaptive = useAdaptiveLayout();
@@ -18,18 +19,6 @@ export const PerformanceScreen: React.FC = () => {
   const statusCardStyle = useMemo(() => ({ marginBottom: 24 }), []);
   const bpmContainerStyle = useMemo(() => ({ marginTop: 16 }), []);
   const statusTextStyle = useMemo(() => ({ marginTop: 8 }), []);
-  const sceneRowStyle = useMemo(
-    () => ({ flexDirection: 'row' as const, flexWrap: 'wrap' as const, marginTop: 12 }),
-    [],
-  );
-  const sceneButtonStyle = useMemo(() => ({ margin: 6, minWidth: 120 }), []);
-  const scenes = useMemo(() => {
-    const names = new Set<string>();
-    tracks.forEach((track) => {
-      track.clips.forEach((clip) => names.add(clip.name));
-    });
-    return Array.from(names);
-  }, [tracks]);
 
   useEffect(() => {
     setDisplayBpm(Math.round(transport?.bpm ?? 0));
@@ -55,10 +44,7 @@ export const PerformanceScreen: React.FC = () => {
       <ScrollView contentInsetAdjustmentBehavior="automatic">
         <NeonToolbar
           title="Performance"
-          actions={[
-            { label: 'Record', onPress: () => undefined, intent: 'critical' },
-            { label: 'Refresh', onPress: handleRefresh, intent: 'secondary' },
-          ]}
+          actions={[{ label: 'Refresh', onPress: handleRefresh, intent: 'secondary' }]}
         />
         <View style={contentStyle}>
           <NeonSurface style={statusCardStyle}>
@@ -82,26 +68,7 @@ export const PerformanceScreen: React.FC = () => {
               {(diagnostics.renderLoad * 100).toFixed(0)}%
             </NeonText>
           </NeonSurface>
-          <NeonSurface>
-            <NeonText variant="title" weight="medium">
-              Scene Launcher
-            </NeonText>
-            <View style={sceneRowStyle}>
-              {scenes.length === 0 ? (
-                <NeonText variant="body">No scenes detected in current session.</NeonText>
-              ) : (
-                scenes.map((scene) => (
-                  <View key={scene} style={sceneButtonStyle}>
-                    <NeonButton
-                      label={scene}
-                      onPress={() => undefined}
-                      intent="secondary"
-                    />
-                  </View>
-                ))
-              )}
-            </View>
-          </NeonSurface>
+          <JunoPerformancePanel status={status} tracks={tracks} />
         </View>
       </ScrollView>
     </SafeAreaView>

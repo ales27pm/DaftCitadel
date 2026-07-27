@@ -8,6 +8,7 @@ declare module '@react-native-async-storage/async-storage' {
     removeItem(key: string): Promise<void>;
     getAllKeys(): Promise<string[]>;
     multiGet(keys: readonly string[]): Promise<MultiGetResult>;
+    clear(): Promise<void>;
   }
 
   const AsyncStorage: AsyncStorageStatic;

@@ -24,6 +24,10 @@ const STORAGE_KEY = 'daftcitadel.pluginSandboxes.v1';
 export class PluginSandboxManager {
   private readonly sandboxes = new Map<string, SandboxRecord>();
 
+  private readonly requestExternalStorage?: () => Promise<boolean>;
+
+  private readonly storage: SandboxStorage;
+
   private persistTimer?: ReturnType<typeof setTimeout>;
 
   private pendingPersist?: Promise<void>;
@@ -37,9 +41,16 @@ export class PluginSandboxManager {
   private readonly ready: Promise<void>;
 
   constructor(
-    private readonly requestExternalStorage?: () => Promise<boolean>,
-    private readonly storage: SandboxStorage = AsyncStorage,
+    requestExternalStorageOrStorage?: (() => Promise<boolean>) | SandboxStorage,
+    storage: SandboxStorage = AsyncStorage,
   ) {
+    if (typeof requestExternalStorageOrStorage === 'function') {
+      this.requestExternalStorage = requestExternalStorageOrStorage;
+      this.storage = storage;
+    } else {
+      this.requestExternalStorage = undefined;
+      this.storage = requestExternalStorageOrStorage ?? storage;
+    }
     this.ready = this.hydrateFromStorage().catch((error) => {
       console.warn('Failed to hydrate sandbox metadata', error);
     });

@@ -11,7 +11,13 @@ export interface TransportControlsHandle {
   locateFrame: (frame: number) => Promise<void>;
   locateBeats: (beats: number) => Promise<void>;
   locateStart: () => Promise<void>;
+  setLoopBeats: (
+    startBeat: number,
+    endBeat: number,
+    enabled: boolean,
+  ) => Promise<void>;
   isAvailable: boolean;
+  isLoopAvailable: boolean;
   isPlaying: boolean;
   transportRuntime: ReturnType<typeof useSessionViewModel>['transportRuntime'];
   transport: ReturnType<typeof useSessionViewModel>['transport'];
@@ -225,6 +231,13 @@ export const useTransportControls = (): TransportControlsHandle => {
 
   const locateStart = useCallback(() => locateBeats(0), [locateBeats]);
 
+  const setLoopBeats = useCallback(
+    (startBeat: number, endBeat: number, enabled: boolean) => {
+      return controller.setLoopBeats(startBeat, endBeat, enabled);
+    },
+    [controller],
+  );
+
   const resolvedRuntime =
     optimisticRuntime ?? transportRuntime ?? runtimeSnapshotRef.current;
 
@@ -257,7 +270,9 @@ export const useTransportControls = (): TransportControlsHandle => {
       locateFrame,
       locateBeats,
       locateStart,
+      setLoopBeats,
       isAvailable: controller.isAvailable,
+      isLoopAvailable: controller.isLoopAvailable,
       isPlaying: resolvedTransport?.isPlaying ?? transport?.isPlaying ?? false,
       transportRuntime: resolvedRuntime ?? null,
       transport: resolvedTransport ?? transport,
@@ -268,7 +283,9 @@ export const useTransportControls = (): TransportControlsHandle => {
       locateFrame,
       locateStart,
       play,
+      setLoopBeats,
       stop,
+      controller.isLoopAvailable,
       resolvedRuntime,
       resolvedTransport,
       transport,

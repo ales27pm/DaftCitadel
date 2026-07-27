@@ -34,11 +34,37 @@ export type AudioDiagnosticsSnapshot = {
   updatedAt?: number;
 };
 
+export type AudioInstrumentMidiEvent = {
+  type: number;
+  channel: number;
+  data1: number;
+  data2: number;
+  frameOffset?: number;
+};
+
+export type InstrumentMidiEvent = AudioInstrumentMidiEvent;
+
+export type InstrumentParameterChange = {
+  parameterId: number;
+  value: number;
+  frameOffset?: number;
+};
+
 export interface AudioEngineBridge {
   applySessionUpdate(session: Session): Promise<void>;
+  resetSession?(): Promise<void>;
   startTransport?(): Promise<void>;
   stopTransport?(): Promise<void>;
   locateTransport?(frame: number): Promise<void>;
+  sendInstrumentMidi?(
+    nodeId: string,
+    event: AudioInstrumentMidiEvent,
+  ): Promise<void>;
+  setInstrumentParameter?(
+    nodeId: string,
+    change: InstrumentParameterChange,
+  ): Promise<void>;
+  allNotesOff?(nodeId: string): Promise<void>;
   getTransportState?(): AudioTransportSnapshot | null;
   subscribeTransport?(listener: (snapshot: AudioTransportSnapshot) => void): () => void;
   getDiagnosticsState?(): AudioDiagnosticsSnapshot | null;

@@ -13,6 +13,7 @@ export interface ConnectionManagerOptions {
   logger: Logger;
   onLocalIceCandidate: (candidate: RTCIceCandidateInit) => Promise<void> | void;
   onDataChannel: (channel: RTCDataChannel) => void;
+  maxPendingRemoteCandidates?: number;
 }
 
 export class ConnectionManager {
@@ -22,22 +23,26 @@ export class ConnectionManager {
     candidate: RTCIceCandidateInit,
   ) => Promise<void> | void;
   private readonly onDataChannel: (channel: RTCDataChannel) => void;
+  private readonly maxPendingRemoteCandidates: number;
 
   private peerConnection?: RTCPeerConnection;
   private remoteDescriptionSet = false;
   private pendingRemoteCandidates: RTCIceCandidateInit[] = [];
+  private connectionGeneration = 0;
 
   constructor(options: ConnectionManagerOptions) {
     this.connectionFactory = options.connectionFactory;
     this.logger = options.logger;
     this.onLocalIceCandidate = options.onLocalIceCandidate;
     this.onDataChannel = options.onDataChannel;
+    this.maxPendingRemoteCandidates = options.maxPendingRemoteCandidates ?? 64;
   }
 
   getOrCreate(): RTCPeerConnection {
     if (this.peerConnection) {
       return this.peerConnection;
     }
+    this.connectionGeneration += 1;
     const connection = this.connectionFactory();
     connection.onicecandidate = (event: { candidate: RTCIceCandidateInit | null }) => {
       if (!event.candidate) {
@@ -76,7 +81,11 @@ export class ConnectionManager {
 
   async setRemoteDescription(description: RTCSessionDescriptionInit): Promise<void> {
     const connection = this.getOrCreate();
+    const generation = this.connectionGeneration;
     await connection.setRemoteDescription(description);
+    if (generation !== this.connectionGeneration || connection !== this.peerConnection) {
+      throw new Error('Peer connection changed before remote description completed');
+    }
     this.remoteDescriptionSet = true;
     if (this.pendingRemoteCandidates.length > 0) {
       const queued = [...this.pendingRemoteCandidates];
@@ -94,6 +103,12 @@ export class ConnectionManager {
   async addIceCandidate(candidate: RTCIceCandidateInit): Promise<void> {
     const connection = this.getOrCreate();
     if (!this.remoteDescriptionSet) {
+      if (this.pendingRemoteCandidates.length >= this.maxPendingRemoteCandidates) {
+        this.pendingRemoteCandidates.shift();
+        this.logger('collab.pendingIceCandidateDropped', {
+          maxPendingRemoteCandidates: this.maxPendingRemoteCandidates,
+        });
+      }
       this.pendingRemoteCandidates.push(candidate);
       return;
     }
@@ -112,5 +127,6 @@ export class ConnectionManager {
     this.peerConnection = undefined;
     this.remoteDescriptionSet = false;
     this.pendingRemoteCandidates = [];
+    this.connectionGeneration += 1;
   }
 }

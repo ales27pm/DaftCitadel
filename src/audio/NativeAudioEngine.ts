@@ -1,6 +1,11 @@
 import type { TurboModule } from 'react-native';
 import { NativeModules, Platform, TurboModuleRegistry } from 'react-native';
 
+import type {
+  AudioInstrumentMidiEvent,
+  InstrumentParameterChange,
+} from '../session/sessionManager';
+
 type NodeId = string;
 
 export type NativeRenderDiagnostics = {
@@ -46,6 +51,15 @@ export interface AudioEngineSpec extends TurboModule {
     frame: number,
     value: number,
   ): Promise<void>;
+  sendInstrumentMidi(
+    nodeId: NodeId,
+    event: AudioInstrumentMidiEvent,
+  ): Promise<void>;
+  setInstrumentParameter(
+    nodeId: NodeId,
+    change: InstrumentParameterChange,
+  ): Promise<void>;
+  allNotesOff(nodeId: NodeId): Promise<void>;
   startTransport(): Promise<void>;
   stopTransport(): Promise<void>;
   locateTransport(frame: number): Promise<void>;
@@ -137,6 +151,21 @@ export const NativeAudioEngine: AudioEngineSpec = {
       value,
     );
   },
+  sendInstrumentMidi(
+    nodeId: NodeId,
+    event: AudioInstrumentMidiEvent,
+  ): Promise<void> {
+    return requireNativeAudioEngineModule().sendInstrumentMidi(nodeId, event);
+  },
+  setInstrumentParameter(
+    nodeId: NodeId,
+    change: InstrumentParameterChange,
+  ): Promise<void> {
+    return requireNativeAudioEngineModule().setInstrumentParameter(nodeId, change);
+  },
+  allNotesOff(nodeId: NodeId): Promise<void> {
+    return requireNativeAudioEngineModule().allNotesOff(nodeId);
+  },
   startTransport(): Promise<void> {
     return requireNativeAudioEngineModule().startTransport();
   },
@@ -156,4 +185,12 @@ export const NativeAudioEngine: AudioEngineSpec = {
 
 export const isNativeModuleAvailable = (): boolean => {
   return getNativeAudioEngineModule() != null;
+};
+
+export const isNativeInstrumentControlsAvailable = (): boolean => {
+  const module = getNativeAudioEngineModule();
+  return (
+    typeof module?.sendInstrumentMidi === 'function' &&
+    typeof module.allNotesOff === 'function'
+  );
 };

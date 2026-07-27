@@ -267,12 +267,6 @@ export class GraphReconciler {
     if (lhs.id !== rhs.id || lhs.type !== rhs.type) {
       return false;
     }
-    // Juno parameters are mutable realtime state. The session bridge applies
-    // option changes through the instrument parameter API so held voices and
-    // chorus history survive a knob or preset update.
-    if (lhs.type === 'juno106') {
-      return true;
-    }
     const leftOptions = lhs.options ?? {};
     const rightOptions = rhs.options ?? {};
     const leftKeys = Object.keys(leftOptions);

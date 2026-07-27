@@ -15,6 +15,8 @@ import {
   SessionStorageError,
   type AudioDiagnosticsSnapshot,
   type AudioEngineBridge,
+  type AudioInstrumentMidiEvent,
+  type InstrumentParameterChange,
   type AudioTransportSnapshot,
 } from '../../session';
 import type { PluginHost, PluginCrashReport } from '../../audio';
@@ -43,19 +45,47 @@ const SessionViewModelContext = createContext<SessionViewModelContextValue | und
 
 interface TransportController {
   isAvailable: boolean;
+  isLoopAvailable: boolean;
   start: () => Promise<void>;
   stop: () => Promise<void>;
   locateFrame: (frame: number) => Promise<void>;
+  setLoopBeats: (startBeat: number, endBeat: number, enabled: boolean) => Promise<void>;
+}
+
+export interface InstrumentControlsHandle {
+  isAvailable: boolean;
+  sendInstrumentMidi: (
+    nodeId: string,
+    event: AudioInstrumentMidiEvent,
+  ) => Promise<void>;
+  setInstrumentParameter: (
+    nodeId: string,
+    change: InstrumentParameterChange,
+  ) => Promise<void>;
+  allNotesOff: (nodeId: string) => Promise<void>;
 }
 
 export const TransportControlsContext = createContext<TransportController | undefined>(
   undefined,
 );
 
+export const InstrumentControlsContext = createContext<
+  InstrumentControlsHandle | undefined
+>(undefined);
+
 type TransportCapableBridge = AudioEngineBridge & {
   startTransport: NonNullable<AudioEngineBridge['startTransport']>;
   stopTransport: NonNullable<AudioEngineBridge['stopTransport']>;
   locateTransport: NonNullable<AudioEngineBridge['locateTransport']>;
+};
+
+type InstrumentCapableBridge = AudioEngineBridge & {
+  sendInstrumentMidi: NonNullable<AudioEngineBridge['sendInstrumentMidi']>;
+  allNotesOff: NonNullable<AudioEngineBridge['allNotesOff']>;
+};
+
+type InstrumentParameterCapableBridge = AudioEngineBridge & {
+  setInstrumentParameter: NonNullable<AudioEngineBridge['setInstrumentParameter']>;
 };
 
 const hasTransportControls = (
@@ -65,6 +95,18 @@ const hasTransportControls = (
   typeof bridge.startTransport === 'function' &&
   typeof bridge.stopTransport === 'function' &&
   typeof bridge.locateTransport === 'function';
+
+const hasInstrumentControls = (
+  bridge: AudioEngineBridge | undefined,
+): bridge is InstrumentCapableBridge =>
+  !!bridge &&
+  typeof bridge.sendInstrumentMidi === 'function' &&
+  typeof bridge.allNotesOff === 'function';
+
+const hasInstrumentParameterControls = (
+  bridge: AudioEngineBridge | undefined,
+): bridge is InstrumentParameterCapableBridge =>
+  !!bridge && typeof bridge.setInstrumentParameter === 'function';
 
 export const SessionViewModelProvider: React.FC<SessionViewModelProviderProps> = ({
   manager,
@@ -379,25 +421,57 @@ export const SessionViewModelProvider: React.FC<SessionViewModelProviderProps> =
       };
       return {
         isAvailable: false,
+        isLoopAvailable: false,
         start: fallback,
         stop: fallback,
         locateFrame: fallback,
+        setLoopBeats: fallback,
+      };
+    }
+    const unavailableLoop = async () => {
+      throw new Error('Transport loop controls unavailable');
+    };
+    return {
+      isAvailable: true,
+      isLoopAvailable: false,
+      start: () => audioBridge.startTransport(),
+      stop: () => audioBridge.stopTransport(),
+      locateFrame: (frame: number) => audioBridge.locateTransport(frame),
+      setLoopBeats: unavailableLoop,
+    };
+  }, [audioBridge]);
+
+  const instrumentControls = useMemo<InstrumentControlsHandle>(() => {
+    const unavailable = async () => {
+      throw new Error('Live instrument controls are unavailable');
+    };
+    if (!hasInstrumentControls(audioBridge)) {
+      return {
+        isAvailable: false,
+        sendInstrumentMidi: unavailable,
+        setInstrumentParameter: unavailable,
+        allNotesOff: unavailable,
       };
     }
     return {
       isAvailable: true,
-      start: () => audioBridge.startTransport(),
-      stop: () => audioBridge.stopTransport(),
-      locateFrame: (frame: number) => audioBridge.locateTransport(frame),
+      sendInstrumentMidi: (nodeId, event) =>
+        audioBridge.sendInstrumentMidi(nodeId, event),
+      setInstrumentParameter: hasInstrumentParameterControls(audioBridge)
+        ? (nodeId, change) => audioBridge.setInstrumentParameter(nodeId, change)
+        : unavailable,
+      allNotesOff: (nodeId) => audioBridge.allNotesOff(nodeId),
     };
   }, [audioBridge]);
 
   return (
-    <TransportControlsContext.Provider value={transportControls}>
-      <SessionViewModelContext.Provider value={contextValue}>
-        {children}
-      </SessionViewModelContext.Provider>
-    </TransportControlsContext.Provider>
+    <InstrumentControlsContext.Provider value={instrumentControls}>
+      <TransportControlsContext.Provider value={transportControls}>
+        <SessionViewModelContext.Provider value={contextValue}>
+          {children}
+        </SessionViewModelContext.Provider>
+      </TransportControlsContext.Provider>
+    </InstrumentControlsContext.Provider>
   );
 };
 
@@ -405,6 +479,16 @@ export const useSessionViewModel = (): SessionViewModelContextValue => {
   const context = useContext(SessionViewModelContext);
   if (!context) {
     throw new Error('useSessionViewModel must be used within a SessionViewModelProvider');
+  }
+  return context;
+};
+
+export const useInstrumentControls = (): InstrumentControlsHandle => {
+  const context = useContext(InstrumentControlsContext);
+  if (!context) {
+    throw new Error(
+      'useInstrumentControls must be used within a SessionViewModelProvider',
+    );
   }
   return context;
 };
