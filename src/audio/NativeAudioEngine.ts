@@ -55,7 +55,7 @@ export interface AudioEngineSpec extends TurboModule {
     nodeId: NodeId,
     event: AudioInstrumentMidiEvent,
   ): Promise<void>;
-  setInstrumentParameter(
+  setInstrumentParameter?(
     nodeId: NodeId,
     change: InstrumentParameterChange,
   ): Promise<void>;
@@ -72,7 +72,38 @@ export interface AudioEngineSpec extends TurboModule {
 
 const moduleName = 'AudioEngineModule';
 
-const getTurboModuleSafely = (): AudioEngineSpec | null => {
+const REQUIRED_AUDIO_ENGINE_METHODS = [
+  'initialize',
+  'shutdown',
+  'addNode',
+  'registerClipBuffer',
+  'unregisterClipBuffer',
+  'removeNode',
+  'connectNodes',
+  'disconnectNodes',
+  'scheduleParameterAutomation',
+  'sendInstrumentMidi',
+  'allNotesOff',
+  'startTransport',
+  'stopTransport',
+  'locateTransport',
+  'getTransportState',
+  'getRenderDiagnostics',
+] as const satisfies ReadonlyArray<keyof AudioEngineSpec>;
+
+const hasNativeAudioEngineMethods = (
+  candidate: unknown,
+): candidate is AudioEngineSpec => {
+  if (!candidate || typeof candidate !== 'object') {
+    return false;
+  }
+  const module = candidate as Record<string, unknown>;
+  return REQUIRED_AUDIO_ENGINE_METHODS.every(
+    (method) => typeof module[method] === 'function',
+  );
+};
+
+const getTurboModuleSafely = (): unknown | null => {
   try {
     return TurboModuleRegistry.get<AudioEngineSpec>(moduleName);
   } catch (error) {
@@ -85,8 +116,15 @@ const getNativeAudioEngineModule = (): AudioEngineSpec | null => {
   if (Platform.OS === 'web') {
     return null;
   }
-  const bridgeModule = NativeModules[moduleName] as AudioEngineSpec | undefined;
-  return bridgeModule ?? getTurboModuleSafely();
+  const bridgeModule = NativeModules[moduleName];
+  if (hasNativeAudioEngineMethods(bridgeModule)) {
+    return bridgeModule;
+  }
+  const turboModule = getTurboModuleSafely();
+  if (hasNativeAudioEngineMethods(turboModule)) {
+    return turboModule;
+  }
+  return null;
 };
 
 const requireNativeAudioEngineModule = (): AudioEngineSpec => {
@@ -161,7 +199,11 @@ export const NativeAudioEngine: AudioEngineSpec = {
     nodeId: NodeId,
     change: InstrumentParameterChange,
   ): Promise<void> {
-    return requireNativeAudioEngineModule().setInstrumentParameter(nodeId, change);
+    const module = requireNativeAudioEngineModule();
+    if (typeof module.setInstrumentParameter !== 'function') {
+      throw new Error(`${moduleName}.setInstrumentParameter is not available`);
+    }
+    return module.setInstrumentParameter(nodeId, change);
   },
   allNotesOff(nodeId: NodeId): Promise<void> {
     return requireNativeAudioEngineModule().allNotesOff(nodeId);

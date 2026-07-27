@@ -224,7 +224,11 @@ export class AudioEngine {
     nodeId: string,
     change: InstrumentParameterChange,
   ): Promise<void> {
-    await NativeAudioEngine.setInstrumentParameter(nodeId, change);
+    const setInstrumentParameter = NativeAudioEngine.setInstrumentParameter;
+    if (typeof setInstrumentParameter !== 'function') {
+      throw new Error('AudioEngineModule.setInstrumentParameter is not available');
+    }
+    await setInstrumentParameter(nodeId, change);
   }
 
   public async allNotesOff(nodeId: string): Promise<void> {

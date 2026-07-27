@@ -1,7 +1,6 @@
 #import "AudioEngineModule.h"
 
 #import <React/RCTConvert.h>
-#import <ReactCommon/RCTTurboModule.h>
 #import <os/log.h>
 
 #include <algorithm>
@@ -166,11 +165,6 @@ RCT_EXPORT_MODULE();
 
 + (BOOL)requiresMainQueueSetup {
   return NO;
-}
-
-- (std::shared_ptr<facebook::react::TurboModule>)getTurboModule:
-    (const facebook::react::ObjCTurboModule::InitParams &)params {
-  return std::make_shared<facebook::react::ObjCTurboModule>(params);
 }
 
 RCT_EXPORT_METHOD(initialize:(double)sampleRate
