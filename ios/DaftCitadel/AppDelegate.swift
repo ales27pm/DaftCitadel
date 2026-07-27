@@ -13,6 +13,10 @@ public class AppDelegate: ExpoAppDelegate {
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
+#if !DEBUG
+    installReactNativeFatalContainment()
+#endif
+
     let delegate = ReactNativeDelegate()
     let factory = ExpoReactNativeFactory(delegate: delegate)
     delegate.dependencyProvider = RCTAppDependencyProvider()
@@ -50,6 +54,21 @@ public class AppDelegate: ExpoAppDelegate {
     let result = RCTLinkingManager.application(application, continue: userActivity, restorationHandler: restorationHandler)
     return super.application(application, continue: userActivity, restorationHandler: restorationHandler) || result
   }
+
+#if !DEBUG
+  private func installReactNativeFatalContainment() {
+    RCTSetFatalHandler { error in
+      let message = error?.localizedDescription ?? "No error description provided"
+      NSLog("DaftCitadel contained React Native fatal error: %@", message)
+    }
+
+    RCTSetFatalExceptionHandler { exception in
+      let name = exception?.name.rawValue ?? "UnknownException"
+      let reason = exception?.reason ?? "No exception reason provided"
+      NSLog("DaftCitadel contained React Native fatal exception: %@ %@", name, reason)
+    }
+  }
+#endif
 }
 
 class ReactNativeDelegate: ExpoReactNativeFactoryDelegate {

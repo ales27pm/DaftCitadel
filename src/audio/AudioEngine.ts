@@ -38,6 +38,16 @@ const isNodeBufferLike = (
   return globalBuffer.isBuffer(value);
 };
 
+const copyArrayBufferLikeSlice = (
+  buffer: ArrayBufferLike,
+  byteOffset: number,
+  byteLength: number,
+): ArrayBuffer => {
+  const copy = new Uint8Array(byteLength);
+  copy.set(new Uint8Array(buffer, byteOffset, byteLength));
+  return copy.buffer;
+};
+
 const isNumericArray = (value: unknown): value is ReadonlyArray<number> => {
   if (!Array.isArray(value)) {
     return false;
@@ -64,15 +74,23 @@ const normalizeChannelPayload = (payload: ChannelPayload): NormalizedChannel => 
       throw new Error('channelData typed views must be Float32Array (Float32 PCM)');
     }
     return {
-      buffer: payload.buffer,
-      byteOffset: payload.byteOffset,
+      buffer: copyArrayBufferLikeSlice(
+        payload.buffer,
+        payload.byteOffset,
+        payload.byteLength,
+      ),
+      byteOffset: 0,
       byteLength: payload.byteLength,
     };
   }
   if (isNodeBufferLike(payload)) {
     return {
-      buffer: payload.buffer,
-      byteOffset: payload.byteOffset,
+      buffer: copyArrayBufferLikeSlice(
+        payload.buffer,
+        payload.byteOffset,
+        payload.byteLength,
+      ),
+      byteOffset: 0,
       byteLength: payload.byteLength,
     };
   }

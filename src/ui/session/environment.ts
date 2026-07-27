@@ -175,6 +175,14 @@ class PassiveAudioEngineBridge implements AudioEngineBridge {
 
 export class NativeAudioUnavailableError extends Error {}
 
+class UnavailableAudioFileLoader implements AudioFileLoader {
+  async load(filePath: string): Promise<never> {
+    throw new Error(
+      `Audio sample loader native module is unavailable for ${filePath}`,
+    );
+  }
+}
+
 export interface DisposableAudioEngineBridge extends AudioEngineBridge {
   dispose?: () => Promise<void> | void;
 }
@@ -204,6 +212,27 @@ interface PassiveEnvironmentOptions {
 const DEFAULT_SAMPLE_RATE = demoSession.metadata.sampleRate;
 const DEFAULT_FRAMES_PER_BUFFER = 256;
 const DEFAULT_BPM = demoSession.metadata.bpm;
+
+const createDefaultAudioFileLoader = (): AudioFileLoader => {
+  if (Platform.OS === 'web') {
+    return new WebAudioFileLoader();
+  }
+  if (!isNativeAudioFileLoaderAvailable()) {
+    console.warn(
+      'Audio sample loader native module is unavailable; sample clips will fail lazily.',
+    );
+    return new UnavailableAudioFileLoader();
+  }
+  try {
+    return new NativeAudioFileLoader();
+  } catch (error) {
+    console.warn(
+      'Failed to initialize native audio sample loader; sample clips will fail lazily.',
+      error,
+    );
+    return new UnavailableAudioFileLoader();
+  }
+};
 
 export const createDemoSessionEnvironment = async (): Promise<SessionEnvironment> => {
   const storage = new InMemorySessionStorageAdapter();
@@ -254,18 +283,11 @@ export const createProductionSessionEnvironment = async (
     if (!isNativeModuleAvailable()) {
       throw new NativeAudioUnavailableError('AudioEngine native module is unavailable');
     }
-    if (!isNativeAudioFileLoaderAvailable()) {
-      throw new Error('Audio sample loader native module is unavailable');
-    }
   }
 
   const audioEngine = new AudioEngine({ sampleRate, framesPerBuffer, bpm });
   await audioEngine.init();
-  const fileLoader =
-    options.fileLoader ??
-    (Platform.OS === 'web'
-      ? new WebAudioFileLoader()
-      : new NativeAudioFileLoader());
+  const fileLoader = options.fileLoader ?? createDefaultAudioFileLoader();
   const pluginHost = instantiatePluginHost();
   const resolvePluginDescriptor = pluginHost
     ? createPluginDescriptorResolver(pluginHost)

@@ -1,13 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { SafeAreaView, ScrollView, View } from 'react-native';
-import Animated, {
-  runOnJS,
-  useAnimatedReaction,
-  useAnimatedStyle,
-  useDerivedValue,
-  useSharedValue,
-  withTiming,
-} from 'react-native-reanimated';
 
 import { NeonButton, NeonSurface, NeonText, NeonToolbar } from '../design-system';
 import { useAdaptiveLayout } from '../layout';
@@ -17,9 +9,6 @@ export const PerformanceScreen: React.FC = () => {
   const adaptive = useAdaptiveLayout();
   const { status, transport, tracks, diagnostics, refresh } = useSessionViewModel();
   const { projectedBeats } = useProjectedTransport(transport);
-  const bpm = useSharedValue(transport?.bpm ?? 0);
-  const renderLoad = useSharedValue(diagnostics.renderLoad);
-  const bpmDisplay = useDerivedValue(() => bpm.value);
   const [displayBpm, setDisplayBpm] = useState(transport?.bpm ?? 0);
   const safeAreaStyle = useMemo(() => ({ flex: 1 }), []);
   const contentStyle = useMemo(
@@ -43,33 +32,19 @@ export const PerformanceScreen: React.FC = () => {
   }, [tracks]);
 
   useEffect(() => {
-    if (transport) {
-      bpm.value = withTiming(transport.bpm, { duration: 300 });
-    }
-  }, [bpm, transport]);
+    setDisplayBpm(Math.round(transport?.bpm ?? 0));
+  }, [transport?.bpm]);
 
-  useEffect(() => {
-    renderLoad.value = withTiming(diagnostics.renderLoad, { duration: 220 });
-  }, [diagnostics.renderLoad, renderLoad]);
-
-  useAnimatedReaction(
-    () => bpmDisplay.value,
-    (value) => {
-      runOnJS(setDisplayBpm)(Math.round(value));
-    },
-    [bpmDisplay],
+  const bpmStyle = useMemo(
+    () => ({
+      transform: [
+        {
+          scale: adaptive.prefersReducedMotion ? 1 : 1 + (1 - diagnostics.renderLoad) * 0.2,
+        },
+      ],
+    }),
+    [adaptive.prefersReducedMotion, diagnostics.renderLoad],
   );
-
-  const bpmStyle = useAnimatedStyle(() => ({
-    transform: [
-      {
-        scale: withTiming(
-          adaptive.prefersReducedMotion ? 1 : 1 + (1 - renderLoad.value) * 0.2,
-          { duration: 150 },
-        ),
-      },
-    ],
-  }));
 
   const handleRefresh = () => {
     refresh().catch(() => undefined);
@@ -90,11 +65,11 @@ export const PerformanceScreen: React.FC = () => {
             <NeonText variant="headline" weight="bold">
               Live Status
             </NeonText>
-            <Animated.View style={[bpmContainerStyle, bpmStyle]}>
+            <View style={[bpmContainerStyle, bpmStyle]}>
               <NeonText variant="title" weight="medium" intent="tertiary">
                 {displayBpm} BPM
               </NeonText>
-            </Animated.View>
+            </View>
             <NeonText variant="body" style={statusTextStyle}>
               {status === 'ready'
                 ? `Time Signature ${transport?.timeSignature ?? '4/4'} • Playhead ${

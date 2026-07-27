@@ -97,9 +97,27 @@ NodeOptions ConvertOptions(NSDictionary* options) {
 void RejectPromise(RCTPromiseRejectBlock reject, NSString* code, const std::string& message) {
   reject(code, [NSString stringWithUTF8String:message.c_str()], nil);
 }
+
+bool EnsureInitialized(AudioEngineBridge::EngineGeneration generation, RCTPromiseRejectBlock reject) {
+  if (generation != 0) {
+    return true;
+  }
+  RejectPromise(reject, @"engine_not_initialized", "Audio engine is not initialized");
+  return false;
+}
 }  // namespace
 
-@implementation AudioEngineModule
+@implementation AudioEngineModule {
+  AudioEngineBridge::EngineGeneration _engineGeneration;
+}
+
+- (instancetype)init {
+  self = [super init];
+  if (self != nil) {
+    _engineGeneration = 0;
+  }
+  return self;
+}
 
 RCT_EXPORT_MODULE();
 
@@ -107,10 +125,9 @@ RCT_EXPORT_MODULE();
   return NO;
 }
 
-- (std::shared_ptr<facebook::react::TurboModule>)getTurboModuleWithJsInvoker:(std::shared_ptr<facebook::react::CallInvoker>)jsInvoker
-                                                                nativeInvoker:(std::shared_ptr<facebook::react::CallInvoker>)nativeInvoker
-                                                                   perfLogger:(id<RCTTurboModulePerformanceLogger>)perfLogger {
-  return std::make_shared<facebook::react::ObjCTurboModule>(self, jsInvoker, nativeInvoker, perfLogger);
+- (std::shared_ptr<facebook::react::TurboModule>)getTurboModule:
+    (const facebook::react::ObjCTurboModule::InitParams &)params {
+  return std::make_shared<facebook::react::ObjCTurboModule>(params);
 }
 
 RCT_EXPORT_METHOD(initialize:(double)sampleRate
@@ -139,7 +156,7 @@ RCT_EXPORT_METHOD(initialize:(double)sampleRate
     return;
   }
   try {
-    AudioEngineBridge::initialize(sampleRate, framesUnsigned);
+    _engineGeneration = AudioEngineBridge::initialize(sampleRate, framesUnsigned);
     resolve(nil);
   } catch (const std::exception& ex) {
     os_log_error(ModuleLogger(), "Initialize failed: %{public}s", ex.what());
@@ -150,7 +167,11 @@ RCT_EXPORT_METHOD(initialize:(double)sampleRate
 RCT_EXPORT_METHOD(shutdown:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
   try {
-    AudioEngineBridge::shutdown();
+    const auto generation = _engineGeneration;
+    if (generation != 0) {
+      AudioEngineBridge::shutdownIfOwner(generation);
+      _engineGeneration = 0;
+    }
     resolve(nil);
   } catch (const std::exception& ex) {
     os_log_error(ModuleLogger(), "Shutdown failed: %{public}s", ex.what());
@@ -167,7 +188,12 @@ RCT_EXPORT_METHOD(addNode:(NSString*)nodeId
     RejectPromise(reject, @"invalid_arguments", "nodeId and nodeType are required");
     return;
   }
+  const auto generation = _engineGeneration;
+  if (!EnsureInitialized(generation, reject)) {
+    return;
+  }
   NodeOptions nativeOptions = ConvertOptions(options);
+  nativeOptions.engineGeneration = generation;
   std::string error;
   auto node = CreateNode([nodeType UTF8String], nativeOptions, error);
   if (!node) {
@@ -175,7 +201,7 @@ RCT_EXPORT_METHOD(addNode:(NSString*)nodeId
     RejectPromise(reject, @"unsupported_node", error);
     return;
   }
-  const bool success = AudioEngineBridge::addNode([nodeId UTF8String], std::move(node));
+  const bool success = AudioEngineBridge::addNode(generation, [nodeId UTF8String], std::move(node));
   if (!success) {
     std::string message = "Failed to add node '" + std::string([nodeId UTF8String]) + "'";
     os_log_error(ModuleLogger(), "%{public}s", message.c_str());
@@ -195,6 +221,10 @@ RCT_EXPORT_METHOD(registerClipBuffer:(NSString*)bufferKey
   const std::string key = Trim(bufferKey.length > 0 ? [bufferKey UTF8String] : "");
   if (key.empty()) {
     RejectPromise(reject, @"invalid_arguments", "bufferKey is required");
+    return;
+  }
+  const auto generation = _engineGeneration;
+  if (!EnsureInitialized(generation, reject)) {
     return;
   }
   if (!std::isfinite(sampleRate) || sampleRate <= 0.0) {
@@ -271,7 +301,8 @@ RCT_EXPORT_METHOD(registerClipBuffer:(NSString*)bufferKey
     nativeChannels.push_back(std::move(channel));
   }
 
-  const bool ok = AudioEngineBridge::registerClipBuffer(key, sampleRate, channelCount, frameCount, std::move(nativeChannels));
+  const bool ok = AudioEngineBridge::registerClipBuffer(generation, key, sampleRate, channelCount, frameCount,
+                                                        std::move(nativeChannels));
   if (!ok) {
     os_log_error(ModuleLogger(), "Failed to register clip buffer %{public}@", bufferKey);
     RejectPromise(reject, @"register_clip_failed", "Failed to register clip buffer");
@@ -288,7 +319,11 @@ RCT_EXPORT_METHOD(unregisterClipBuffer:(NSString*)bufferKey
     RejectPromise(reject, @"invalid_arguments", "bufferKey is required");
     return;
   }
-  const bool ok = AudioEngineBridge::unregisterClipBuffer([trimmedKey UTF8String]);
+  const auto generation = _engineGeneration;
+  if (!EnsureInitialized(generation, reject)) {
+    return;
+  }
+  const bool ok = AudioEngineBridge::unregisterClipBuffer(generation, [trimmedKey UTF8String]);
   if (!ok) {
     os_log_error(ModuleLogger(), "Failed to unregister clip buffer %{public}@", trimmedKey);
     RejectPromise(reject, @"unregister_clip_failed", "Failed to unregister clip buffer");
@@ -304,8 +339,12 @@ RCT_EXPORT_METHOD(removeNode:(NSString*)nodeId
     RejectPromise(reject, @"invalid_arguments", "nodeId is required");
     return;
   }
+  const auto generation = _engineGeneration;
+  if (!EnsureInitialized(generation, reject)) {
+    return;
+  }
   try {
-    AudioEngineBridge::removeNode([nodeId UTF8String]);
+    AudioEngineBridge::removeNode(generation, [nodeId UTF8String]);
     resolve(nil);
   } catch (const std::exception& ex) {
     os_log_error(ModuleLogger(), "removeNode failed: %{public}s", ex.what());
@@ -321,7 +360,11 @@ RCT_EXPORT_METHOD(connectNodes:(NSString*)source
     RejectPromise(reject, @"invalid_arguments", "source and destination are required");
     return;
   }
-  const bool ok = AudioEngineBridge::connect([source UTF8String], [destination UTF8String]);
+  const auto generation = _engineGeneration;
+  if (!EnsureInitialized(generation, reject)) {
+    return;
+  }
+  const bool ok = AudioEngineBridge::connect(generation, [source UTF8String], [destination UTF8String]);
   if (!ok) {
     std::string message = "Failed to connect '" + std::string([source UTF8String]) + "' -> '" +
                           std::string([destination UTF8String]) + "'";
@@ -340,8 +383,12 @@ RCT_EXPORT_METHOD(disconnectNodes:(NSString*)source
     RejectPromise(reject, @"invalid_arguments", "source and destination are required");
     return;
   }
+  const auto generation = _engineGeneration;
+  if (!EnsureInitialized(generation, reject)) {
+    return;
+  }
   try {
-    AudioEngineBridge::disconnect([source UTF8String], [destination UTF8String]);
+    AudioEngineBridge::disconnect(generation, [source UTF8String], [destination UTF8String]);
     resolve(nil);
   } catch (const std::exception& ex) {
     os_log_error(ModuleLogger(), "disconnectNodes failed: %{public}s", ex.what());
@@ -368,6 +415,10 @@ RCT_EXPORT_METHOD(scheduleParameterAutomation:(NSString*)nodeId
     RejectPromise(reject, @"invalid_arguments", "value must be finite");
     return;
   }
+  const auto generation = _engineGeneration;
+  if (!EnsureInitialized(generation, reject)) {
+    return;
+  }
   const unsigned long long frameTicks = frame.unsignedLongLongValue;
   const double diff = std::fabs(frameValue - static_cast<double>(frameTicks));
   if (diff > 1e-6) {
@@ -375,7 +426,8 @@ RCT_EXPORT_METHOD(scheduleParameterAutomation:(NSString*)nodeId
     return;
   }
   try {
-    AudioEngineBridge::scheduleParameterAutomation([nodeId UTF8String], [parameter UTF8String], frameTicks, value);
+    AudioEngineBridge::scheduleParameterAutomation(generation, [nodeId UTF8String], [parameter UTF8String],
+                                                   frameTicks, value);
     resolve(nil);
   } catch (const std::exception& ex) {
     os_log_error(ModuleLogger(), "scheduleParameterAutomation failed: %{public}s", ex.what());
@@ -385,8 +437,12 @@ RCT_EXPORT_METHOD(scheduleParameterAutomation:(NSString*)nodeId
 
 RCT_EXPORT_METHOD(getRenderDiagnostics:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
+  const auto generation = _engineGeneration;
+  if (!EnsureInitialized(generation, reject)) {
+    return;
+  }
   try {
-    const auto diagnostics = AudioEngineBridge::getDiagnostics();
+    const auto diagnostics = AudioEngineBridge::getDiagnostics(generation);
     resolve(@{
       @"xruns" : @(static_cast<NSInteger>(diagnostics.xruns)),
       @"lastRenderDurationMicros" : @(diagnostics.lastRenderDurationMicros),

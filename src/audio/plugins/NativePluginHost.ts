@@ -56,16 +56,80 @@ export type PluginHostEventPayloads = {
 
 const moduleName = 'PluginHostModule';
 
-const unavailableModule = new Proxy({} as PluginHostSpec, {
-  get: () => () =>
-    Promise.reject(new Error(`${moduleName} is not available on this platform`)),
-});
+const getTurboModuleSafely = (): PluginHostSpec | null => {
+  try {
+    return TurboModuleRegistry.get<PluginHostSpec>(moduleName);
+  } catch (error) {
+    console.warn(`${moduleName} TurboModule lookup failed`, error);
+    return null;
+  }
+};
 
-export const NativePluginHost: PluginHostSpec =
-  Platform.OS === 'web'
-    ? unavailableModule
-    : TurboModuleRegistry.getEnforcing<PluginHostSpec>(moduleName);
+const getNativePluginHostModule = (): PluginHostSpec | null => {
+  if (Platform.OS === 'web') {
+    return null;
+  }
+  const bridgeModule = NativeModules[moduleName] as PluginHostSpec | undefined;
+  return bridgeModule ?? getTurboModuleSafely();
+};
+
+const requireNativePluginHostModule = (): PluginHostSpec => {
+  const module = getNativePluginHostModule();
+  if (!module) {
+    throw new Error(`${moduleName} is not available on this platform`);
+  }
+  return module;
+};
+
+export const NativePluginHost: PluginHostSpec = {
+  queryAvailablePlugins(format?: string): Promise<PluginDescriptor[]> {
+    return requireNativePluginHostModule().queryAvailablePlugins(format);
+  },
+  instantiatePlugin(
+    identifier: string,
+    options: PluginInstanceOptions,
+  ): Promise<PluginInstanceHandle> {
+    return requireNativePluginHostModule().instantiatePlugin(identifier, options);
+  },
+  releasePlugin(instanceId: string): Promise<void> {
+    return requireNativePluginHostModule().releasePlugin(instanceId);
+  },
+  loadPreset(instanceId: string, preset: PluginPreset): Promise<void> {
+    return requireNativePluginHostModule().loadPreset(instanceId, preset);
+  },
+  setParameterValue(
+    instanceId: string,
+    parameterId: string,
+    value: number,
+  ): Promise<void> {
+    return requireNativePluginHostModule().setParameterValue(
+      instanceId,
+      parameterId,
+      value,
+    );
+  },
+  scheduleAutomation(
+    instanceId: string,
+    parameterId: string,
+    curve: PluginAutomationPoint[],
+  ): Promise<void> {
+    return requireNativePluginHostModule().scheduleAutomation(
+      instanceId,
+      parameterId,
+      curve,
+    );
+  },
+  ensureSandbox(identifier: string): Promise<{ sandboxPath: string }> {
+    return requireNativePluginHostModule().ensureSandbox(identifier);
+  },
+  acknowledgeCrash(instanceId: string): Promise<void> {
+    return requireNativePluginHostModule().acknowledgeCrash(instanceId);
+  },
+} as PluginHostSpec;
 
 export const isPluginHostAvailable = (): boolean => {
-  return Platform.OS !== 'web' && NativeModules[moduleName] != null;
+  const module = getNativePluginHostModule() as
+    | (PluginHostSpec & { runtimeReady?: boolean })
+    | null;
+  return module?.runtimeReady === true;
 };

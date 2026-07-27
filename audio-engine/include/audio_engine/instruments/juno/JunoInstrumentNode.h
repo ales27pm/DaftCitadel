@@ -1,7 +1,7 @@
 #pragma once
 
 #include "audio_engine/DSPNode.h"
-#include "audio_engine/instruments/juno/JunoDSPEngine.hpp"
+#include "audio_engine/instruments/juno/JunoDSPEngine.h"
 
 #include <algorithm>
 #include <cmath>
@@ -16,8 +16,8 @@ class JunoInstrumentNode final : public DSPNode {
   explicit JunoInstrumentNode(std::size_t polyphony = 8);
 
   void prepare(double sampleRate) override;
-  void reset() override;
-  void process(AudioBufferView buffer) override;
+  void reset() noexcept override;
+  void process(AudioBufferView buffer) noexcept override;
   void setParameter(const std::string& name, double value) override;
 
  private:
@@ -28,7 +28,7 @@ class JunoInstrumentNode final : public DSPNode {
   void ensureInitialized();
   void applyPatchParameter(const std::string& name, double value);
 
-  JunoDSPEngine engine_;
+  juno::JunoDSPEngine engine_;
   std::size_t polyphony_;
   float noteVelocity_{1.0f};
   bool initialized_{false};

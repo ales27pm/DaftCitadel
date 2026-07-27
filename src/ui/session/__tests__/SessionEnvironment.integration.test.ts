@@ -4,7 +4,7 @@ import path from 'path';
 
 import { NativeModules } from 'react-native';
 
-import { JsonSessionStorageAdapter } from '../../../session';
+import { JsonSessionStorageAdapter } from '../../../session/storage/jsonAdapter';
 import type { AudioFileLoader, AudioFileData } from '../../../audio';
 import { demoSession } from '../../../session/fixtures/demoSession';
 import {

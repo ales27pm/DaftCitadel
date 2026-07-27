@@ -40,6 +40,9 @@ namespace daft::audio::bridge {
 struct NodeOptions {
   std::unordered_map<std::string, double> numeric;
   std::unordered_map<std::string, std::string> strings;
+#if !defined(__ANDROID__)
+  AudioEngineBridge::EngineGeneration engineGeneration = 0;
+#endif
 
   void setNumeric(std::string key, double value) { numeric[std::move(key)] = value; }
   void setString(std::string key, std::string value) { strings[std::move(key)] = std::move(value); }
@@ -144,7 +147,15 @@ inline std::unique_ptr<daft::audio::DSPNode> CreateNode(const std::string& type,
       error = "clipPlayer requires a bufferKey option";
       return nullptr;
     }
+#if defined(__ANDROID__)
     auto clipBuffer = AudioEngineBridge::clipBufferForKey(*key);
+#else
+    if (options.engineGeneration == 0) {
+      error = "clipPlayer requires an initialized audio engine";
+      return nullptr;
+    }
+    auto clipBuffer = AudioEngineBridge::clipBufferForKey(options.engineGeneration, *key);
+#endif
     if (!clipBuffer) {
       error = "clip buffer '" + *key + "' is not registered";
       return nullptr;

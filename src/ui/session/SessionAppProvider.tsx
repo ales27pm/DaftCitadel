@@ -1,5 +1,5 @@
 import React, { PropsWithChildren, useEffect, useState } from 'react';
-import { Platform } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 
 import { SessionViewModelProvider } from './SessionViewModelProvider';
 import {
@@ -49,10 +49,12 @@ export const SessionAppProvider: React.FC<PropsWithChildren> = ({ children }) =>
   }, []);
 
   if (error) {
-    // In a real app, you'd render a proper error screen with a retry button.
-    // For now, we can just display the error message.
-    // return <ErrorDisplayComponent error={error} onRetry={...} />;
-    throw error; // Or keep throwing if an Error Boundary is guaranteed.
+    return (
+      <View style={styles.bootstrapErrorContainer}>
+        <Text style={styles.bootstrapErrorTitle}>Session unavailable</Text>
+        <Text style={styles.bootstrapErrorBody}>{error.message}</Text>
+      </View>
+    );
   }
 
   if (!environment) {
@@ -102,8 +104,11 @@ const bootstrapEnvironment = async (
       );
       return createPassiveSessionEnvironment();
     }
-    console.error('Failed to bootstrap production session environment', error);
-    throw error;
+    console.error(
+      'Failed to bootstrap production session environment; falling back to passive session environment.',
+      error,
+    );
+    return createPassiveSessionEnvironment();
   }
 };
 
@@ -124,3 +129,24 @@ const resolveWebNativeBridgePreference = (): boolean | undefined => {
   }
   return undefined;
 };
+
+const styles = StyleSheet.create({
+  bootstrapErrorContainer: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
+    padding: 24,
+  },
+  bootstrapErrorTitle: {
+    color: '#111111',
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  bootstrapErrorBody: {
+    color: '#444444',
+    fontSize: 14,
+    textAlign: 'center',
+  },
+});

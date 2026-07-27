@@ -1,11 +1,13 @@
-import 'expo-sqlite/localStorage/install';
-
 export interface UserPreferences {
   autoPlayScenes: boolean;
   showDiagnostics: boolean;
 }
 
 type PreferenceListener = () => void;
+type PreferenceStorage = {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+};
 
 const STORAGE_KEY = 'daft-citadel:user-preferences:v1';
 
@@ -15,13 +17,26 @@ export const DEFAULT_USER_PREFERENCES: Readonly<UserPreferences> = {
 };
 
 const listeners = new Set<PreferenceListener>();
+const memoryStorage = new Map<string, string>();
 let snapshot: UserPreferences | undefined;
 
 const isBoolean = (value: unknown): value is boolean => typeof value === 'boolean';
 
+const getPreferenceStorage = (): PreferenceStorage => {
+  if (globalThis.localStorage !== undefined) {
+    return globalThis.localStorage;
+  }
+  return {
+    getItem: (key: string) => memoryStorage.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      memoryStorage.set(key, value);
+    },
+  };
+};
+
 const readPreferences = (): UserPreferences => {
   try {
-    const stored = globalThis.localStorage.getItem(STORAGE_KEY);
+    const stored = getPreferenceStorage().getItem(STORAGE_KEY);
     if (!stored) {
       return { ...DEFAULT_USER_PREFERENCES };
     }
@@ -48,7 +63,7 @@ const getSnapshot = (): UserPreferences => {
 const setPreferences = (next: UserPreferences): void => {
   snapshot = next;
   try {
-    globalThis.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    getPreferenceStorage().setItem(STORAGE_KEY, JSON.stringify(next));
   } catch (error) {
     console.warn('Failed to persist user preferences', error);
   }
@@ -66,6 +81,7 @@ export const userPreferencesStore = {
   },
   resetForTesting(): void {
     snapshot = undefined;
+    memoryStorage.clear();
     listeners.clear();
   },
 };

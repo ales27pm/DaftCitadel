@@ -1,10 +1,5 @@
-import React, { useCallback, useEffect, useMemo } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { SafeAreaView, ScrollView, View, StyleSheet, ViewStyle } from 'react-native';
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-  withTiming,
-} from 'react-native-reanimated';
 
 import {
   NeonButton,
@@ -61,15 +56,12 @@ const screenStyles = StyleSheet.create({
 });
 
 const MixerChannel: React.FC<{ track: TrackViewModel }> = ({ track }) => {
-  const level = useSharedValue(track.meterLevel);
-
-  useEffect(() => {
-    level.value = withTiming(track.meterLevel, { duration: 220 });
-  }, [level, track.meterLevel]);
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    height: 180 * level.value,
-  }));
+  const meterFillStyle = useMemo(
+    () => ({
+      height: 180 * track.meterLevel,
+    }),
+    [track.meterLevel],
+  );
 
   const statusLabel = useMemo(() => {
     if (track.muted) {
@@ -124,7 +116,7 @@ const MixerChannel: React.FC<{ track: TrackViewModel }> = ({ track }) => {
         {statusLabel} • {track.volumeDb.toFixed(1)} dB • Pan {track.pan.toFixed(2)}
       </NeonText>
       <View accessibilityLabel={`${track.name} level`} style={channelStyles.meterShell}>
-        <Animated.View style={[channelStyles.meterFill, animatedStyle]} />
+        <View style={[channelStyles.meterFill, meterFillStyle]} />
       </View>
       {pluginBadges}
     </NeonSurface>

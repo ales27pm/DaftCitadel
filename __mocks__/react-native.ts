@@ -259,7 +259,9 @@ const audioEngineModule = {
         source = payload;
       } else if (ArrayBuffer.isView(payload)) {
         const view = payload as ArrayBufferView;
-        source = view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
+        const copy = new Uint8Array(view.byteLength);
+        copy.set(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+        source = copy.buffer;
       } else {
         throw new Error(
           `channelData[${index}] must be an ArrayBuffer or ArrayBufferView`,

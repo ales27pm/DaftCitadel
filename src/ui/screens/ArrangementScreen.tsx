@@ -1,6 +1,5 @@
-import React, { useCallback, useEffect, useMemo } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { SafeAreaView, ScrollView, View } from 'react-native';
-import { useSharedValue } from 'react-native-reanimated';
 
 import { MidiPianoRoll, WaveformEditor } from '../editors';
 import {
@@ -31,7 +30,7 @@ export const ArrangementScreen: React.FC = () => {
     [arrangementTrack, tracks],
   );
   const waveform = arrangementTrack?.waveform ?? new Float32Array(0);
-  const playhead = useSharedValue(0.25);
+  const playhead = transport ? projectedRatio : 0.25;
   const safeAreaStyle = useMemo(() => ({ flex: 1 }), []);
   const contentHorizontalPadding = adaptive.breakpoint === 'phone' ? 16 : 32;
   const contentStyle = useMemo(
@@ -112,12 +111,6 @@ export const ArrangementScreen: React.FC = () => {
       .map((curve) => `${curve.parameter} (${curve.points.length} pts)`)
       .join(' • ');
   }, [arrangementTrack]);
-
-  useEffect(() => {
-    if (transport) {
-      playhead.value = projectedRatio;
-    }
-  }, [playhead, projectedRatio, transport]);
 
   const handlePlay = useCallback(() => {
     transportControls.play().catch((error) => {

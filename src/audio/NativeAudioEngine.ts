@@ -58,16 +58,102 @@ export interface AudioEngineSpec extends TurboModule {
 
 const moduleName = 'AudioEngineModule';
 
-const unavailableModule = new Proxy({} as AudioEngineSpec, {
-  get: () => () =>
-    Promise.reject(new Error(`${moduleName} is not available on this platform`)),
-});
+const getTurboModuleSafely = (): AudioEngineSpec | null => {
+  try {
+    return TurboModuleRegistry.get<AudioEngineSpec>(moduleName);
+  } catch (error) {
+    console.warn(`${moduleName} TurboModule lookup failed`, error);
+    return null;
+  }
+};
 
-export const NativeAudioEngine: AudioEngineSpec =
-  Platform.OS === 'web'
-    ? unavailableModule
-    : TurboModuleRegistry.getEnforcing<AudioEngineSpec>(moduleName);
+const getNativeAudioEngineModule = (): AudioEngineSpec | null => {
+  if (Platform.OS === 'web') {
+    return null;
+  }
+  const bridgeModule = NativeModules[moduleName] as AudioEngineSpec | undefined;
+  return bridgeModule ?? getTurboModuleSafely();
+};
+
+const requireNativeAudioEngineModule = (): AudioEngineSpec => {
+  const module = getNativeAudioEngineModule();
+  if (!module) {
+    throw new Error(`${moduleName} is not available on this platform`);
+  }
+  return module;
+};
+
+export const NativeAudioEngine: AudioEngineSpec = {
+  initialize(sampleRate: number, framesPerBuffer: number): Promise<void> {
+    return requireNativeAudioEngineModule().initialize(sampleRate, framesPerBuffer);
+  },
+  shutdown(): Promise<void> {
+    return requireNativeAudioEngineModule().shutdown();
+  },
+  addNode(
+    nodeId: NodeId,
+    nodeType: string,
+    options: Record<string, number | string | boolean>,
+  ): Promise<void> {
+    return requireNativeAudioEngineModule().addNode(nodeId, nodeType, options);
+  },
+  registerClipBuffer(
+    bufferKey: string,
+    sampleRate: number,
+    channels: number,
+    frames: number,
+    channelData: ArrayBuffer[],
+  ): Promise<void> {
+    return requireNativeAudioEngineModule().registerClipBuffer(
+      bufferKey,
+      sampleRate,
+      channels,
+      frames,
+      channelData,
+    );
+  },
+  unregisterClipBuffer(bufferKey: string): Promise<void> {
+    return requireNativeAudioEngineModule().unregisterClipBuffer(bufferKey);
+  },
+  removeNode(nodeId: NodeId): Promise<void> {
+    return requireNativeAudioEngineModule().removeNode(nodeId);
+  },
+  connectNodes(source: NodeId, destination: NodeId): Promise<void> {
+    return requireNativeAudioEngineModule().connectNodes(source, destination);
+  },
+  disconnectNodes(source: NodeId, destination: NodeId): Promise<void> {
+    return requireNativeAudioEngineModule().disconnectNodes(source, destination);
+  },
+  scheduleParameterAutomation(
+    nodeId: NodeId,
+    parameter: string,
+    frame: number,
+    value: number,
+  ): Promise<void> {
+    return requireNativeAudioEngineModule().scheduleParameterAutomation(
+      nodeId,
+      parameter,
+      frame,
+      value,
+    );
+  },
+  startTransport(): Promise<void> {
+    return requireNativeAudioEngineModule().startTransport();
+  },
+  stopTransport(): Promise<void> {
+    return requireNativeAudioEngineModule().stopTransport();
+  },
+  locateTransport(frame: number): Promise<void> {
+    return requireNativeAudioEngineModule().locateTransport(frame);
+  },
+  getTransportState(): Promise<{ currentFrame: number; isPlaying: boolean }> {
+    return requireNativeAudioEngineModule().getTransportState();
+  },
+  getRenderDiagnostics(): Promise<NativeRenderDiagnostics> {
+    return requireNativeAudioEngineModule().getRenderDiagnostics();
+  },
+} as AudioEngineSpec;
 
 export const isNativeModuleAvailable = (): boolean => {
-  return Platform.OS !== 'web' && NativeModules[moduleName] != null;
+  return getNativeAudioEngineModule() != null;
 };

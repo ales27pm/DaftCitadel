@@ -49,12 +49,9 @@ const hashString = (value: string): string => {
 };
 
 const ensureArrayBuffer = (channel: Float32Array): ArrayBuffer => {
-  if (channel.byteOffset === 0 && channel.byteLength === channel.buffer.byteLength) {
-    return channel.buffer;
-  }
-  const start = channel.byteOffset;
-  const end = channel.byteOffset + channel.byteLength;
-  return channel.buffer.slice(start, end);
+  const copy = new Uint8Array(channel.byteLength);
+  copy.set(new Uint8Array(channel.buffer, channel.byteOffset, channel.byteLength));
+  return copy.buffer;
 };
 
 export class ClipBufferCache {

@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cmath>
 #include <limits>
+#include <span>
 #include <vector>
 
 namespace daft::audio {
@@ -14,23 +15,22 @@ JunoInstrumentNode::JunoInstrumentNode(std::size_t polyphony)
 void JunoInstrumentNode::prepare(double sampleRate) {
   DSPNode::prepare(sampleRate);
   sampleRate_ = sampleRate;
-  const auto normalizedSampleRate = static_cast<int>(std::llround(std::max(1.0, sampleRate_)));
-  const auto normalizedPolyphony = static_cast<int>(polyphony_);
-  engine_.initialize(normalizedSampleRate, 256, normalizedPolyphony);
-  engine_.start();
+  engine_.prepare(juno::EngineConfig{std::max(1.0, sampleRate_), 256U,
+                                     std::max<std::size_t>(1, polyphony_)});
   initialized_ = true;
   started_ = true;
 }
 
-void JunoInstrumentNode::reset() {
+void JunoInstrumentNode::reset() noexcept {
   if (!initialized_) {
     return;
   }
-  engine_.stop();
+  engine_.allNotesOff();
+  engine_.reset();
   started_ = false;
 }
 
-void JunoInstrumentNode::process(AudioBufferView buffer) {
+void JunoInstrumentNode::process(AudioBufferView buffer) noexcept {
   ensureInitialized();
 
   if (buffer.channelCount() == 0 || buffer.frameCount() == 0) {
@@ -45,7 +45,8 @@ void JunoInstrumentNode::process(AudioBufferView buffer) {
       rightScratch_.resize(buffer.frameCount());
     }
     auto* scratchRight = rightScratch_.data();
-    engine_.renderAudio(leftChannel, scratchRight, static_cast<int>(buffer.frameCount()));
+    engine_.render(std::span<float>(leftChannel, buffer.frameCount()),
+                   std::span<float>(scratchRight, buffer.frameCount()));
     auto leftData = buffer.channel(0);
     for (std::size_t frame = 0; frame < buffer.frameCount(); ++frame) {
       leftData[frame] =
@@ -54,7 +55,8 @@ void JunoInstrumentNode::process(AudioBufferView buffer) {
     return;
   }
 
-  engine_.renderAudio(leftChannel, rightChannel, static_cast<int>(buffer.frameCount()));
+  engine_.render(std::span<float>(leftChannel, buffer.frameCount()),
+                 std::span<float>(rightChannel, buffer.frameCount()));
 
   for (std::size_t index = 2; index < buffer.channelCount(); ++index) {
     const auto view = buffer.channel(index);
@@ -67,10 +69,8 @@ void JunoInstrumentNode::ensureInitialized() {
     return;
   }
 
-  const auto normalizedSampleRate = static_cast<int>(std::llround(std::max(1.0, sampleRate_)));
-  const auto normalizedPolyphony = static_cast<int>(std::max<std::size_t>(1, polyphony_));
-  engine_.initialize(normalizedSampleRate, 256, normalizedPolyphony);
-  engine_.start();
+  engine_.prepare(juno::EngineConfig{std::max(1.0, sampleRate_), 256U,
+                                     std::max<std::size_t>(1, polyphony_)});
   initialized_ = true;
   started_ = true;
 }
@@ -112,11 +112,50 @@ bool JunoInstrumentNode::toUnsigned(double value, std::size_t& out, std::size_t 
 }
 
 void JunoInstrumentNode::applyPatchParameter(const std::string& name, double value) {
-  if (name == "sublevel") {
-    engine_.setParameter("subLevel", static_cast<float>(value));
+  const auto setParameter = [this, value](juno::ParameterId parameter) {
+    engine_.setParameter(parameter, static_cast<float>(value));
+  };
+
+  if (name == "pulsewidth" || name == "pulse_width") {
+    setParameter(juno::ParameterId::kPulseWidth);
     return;
   }
-  engine_.setParameter(name, static_cast<float>(value));
+  if (name == "sublevel" || name == "sub_level") {
+    setParameter(juno::ParameterId::kSubLevel);
+    return;
+  }
+  if (name == "cutoff" || name == "cutoffhz" || name == "cutoff_hz") {
+    setParameter(juno::ParameterId::kCutoffHz);
+    return;
+  }
+  if (name == "resonance") {
+    setParameter(juno::ParameterId::kResonance);
+    return;
+  }
+  if (name == "attack" || name == "attackseconds" || name == "attack_seconds") {
+    setParameter(juno::ParameterId::kAttackSeconds);
+    return;
+  }
+  if (name == "release" || name == "releaseseconds" || name == "release_seconds") {
+    setParameter(juno::ParameterId::kReleaseSeconds);
+    return;
+  }
+  if (name == "chorus" || name == "chorusmode" || name == "chorus_mode") {
+    setParameter(juno::ParameterId::kChorusMode);
+    return;
+  }
+  if (name == "gain" || name == "outputgain" || name == "output_gain") {
+    setParameter(juno::ParameterId::kOutputGain);
+    return;
+  }
+  if (name == "lforate" || name == "lforatehz" || name == "lfo_rate" || name == "lfo_rate_hz") {
+    setParameter(juno::ParameterId::kLfoRateHz);
+    return;
+  }
+  if (name == "lfodepth" || name == "lfo_depth") {
+    setParameter(juno::ParameterId::kLfoDepth);
+    return;
+  }
 }
 
 void JunoInstrumentNode::setParameter(const std::string& name, double value) {
@@ -134,9 +173,8 @@ void JunoInstrumentNode::setParameter(const std::string& name, double value) {
     std::size_t polyphony = 1;
     if (toUnsigned(value, polyphony, 1, 128)) {
       polyphony_ = polyphony;
-      engine_.initialize(static_cast<int>(std::llround(std::max(1.0, sampleRate_))), 256,
-                        static_cast<int>(polyphony_));
-      engine_.start();
+      engine_.prepare(juno::EngineConfig{std::max(1.0, sampleRate_), 256U,
+                                         std::max<std::size_t>(1, polyphony_)});
       initialized_ = true;
       started_ = true;
     }
@@ -164,14 +202,14 @@ void JunoInstrumentNode::setParameter(const std::string& name, double value) {
 
   if (key == "start") {
     ensureInitialized();
-    engine_.start();
     started_ = true;
     return;
   }
 
   if (key == "stop") {
     started_ = false;
-    engine_.stop();
+    engine_.allNotesOff();
+    engine_.reset();
     return;
   }
 

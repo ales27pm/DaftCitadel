@@ -205,6 +205,25 @@ describe('SessionAppProvider', () => {
     expect(name).toBe('Demo Performance');
   });
 
+  it('falls back to passive environment when production bootstrap throws unexpectedly', async () => {
+    setDevFlag(false);
+    Platform.OS = 'ios';
+    const fallbackEnvironment = await createTestEnvironment('unexpected-fallback');
+    const passiveSpy = jest
+      .spyOn(environmentModule, 'createPassiveSessionEnvironment')
+      .mockResolvedValue(fallbackEnvironment);
+    const productionSpy = jest
+      .spyOn(environmentModule, 'createProductionSessionEnvironment')
+      .mockRejectedValue(new Error('Audio sample loader native module is unavailable'));
+
+    const { status, name } = await renderWithConsumer();
+
+    expect(productionSpy).toHaveBeenCalledTimes(1);
+    expect(passiveSpy).toHaveBeenCalledTimes(1);
+    expect(status).toBe('ready');
+    expect(name).toBe('Demo Performance');
+  });
+
   it('falls back to passive environment when web audio is unavailable', async () => {
     setDevFlag(false);
     Platform.OS = 'web';
