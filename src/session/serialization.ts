@@ -6,7 +6,7 @@ export interface SerializedSessionEnvelope {
   session: Session;
 }
 
-const CURRENT_SCHEMA_VERSION = 1;
+const CURRENT_SCHEMA_VERSION = 2;
 
 export const serializeSession = (session: Session): string => {
   const normalized = normalizeSession(deepClone(session));
@@ -20,7 +20,7 @@ export const serializeSession = (session: Session): string => {
 
 export const deserializeSession = (payload: string): Session => {
   const parsed = JSON.parse(payload) as SerializedSessionEnvelope;
-  if (!parsed.schemaVersion) {
+  if (!Number.isInteger(parsed.schemaVersion) || parsed.schemaVersion < 1) {
     throw new Error('Missing schema version in session payload');
   }
   if (parsed.schemaVersion > CURRENT_SCHEMA_VERSION) {

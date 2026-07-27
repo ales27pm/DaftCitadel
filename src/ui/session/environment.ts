@@ -1,7 +1,11 @@
 import { NativeModules, Platform } from 'react-native';
 import { useEffect } from 'react';
 
-import { createEmptySession, type PluginRoutingNode, type Session } from '../../session/models';
+import {
+  createEmptySession,
+  type PluginRoutingNode,
+  type Session,
+} from '../../session/models';
 import { demoSession, DEMO_SESSION_ID } from '../../session/fixtures/demoSession';
 import { InMemorySessionStorageAdapter } from '../../session/storage/memoryAdapter';
 import type { SessionStorageAdapter } from '../../session/storage';
@@ -177,9 +181,7 @@ export class NativeAudioUnavailableError extends Error {}
 
 class UnavailableAudioFileLoader implements AudioFileLoader {
   async load(filePath: string): Promise<never> {
-    throw new Error(
-      `Audio sample loader native module is unavailable for ${filePath}`,
-    );
+    throw new Error(`Audio sample loader native module is unavailable for ${filePath}`);
   }
 }
 
@@ -289,26 +291,16 @@ export const createProductionSessionEnvironment = async (
   }
 
   const audioEngine = new AudioEngine({ sampleRate, framesPerBuffer, bpm });
-  await audioEngine.init();
-  const fileLoader = options.fileLoader ?? createDefaultAudioFileLoader();
-  const pluginHost = instantiatePluginHost();
-  const resolvePluginDescriptor = pluginHost
-    ? createPluginDescriptorResolver(pluginHost)
-    : undefined;
-  const bridge = new SessionAudioBridge(audioEngine, {
-    fileLoader,
-    pluginHost: pluginHost ?? undefined,
-    resolvePluginDescriptor,
-  });
-  const storage = createSessionStorageAdapter(
-    await resolveStorageDirectory(options.storageDirectory),
-  );
-  await storage.initialize();
-  const manager = new SessionManager(storage, bridge);
-  await bootstrapSessionIfNeeded(manager, storage, sessionId);
+  let bridge: SessionAudioBridge | undefined;
+  let pluginHost: PluginHost | null = null;
+  let disposalStarted = false;
 
   const dispose = async () => {
-    if (typeof bridge.dispose === 'function') {
+    if (disposalStarted) {
+      return;
+    }
+    disposalStarted = true;
+    if (typeof bridge?.dispose === 'function') {
       try {
         await bridge.dispose();
       } catch (error) {
@@ -327,13 +319,44 @@ export const createProductionSessionEnvironment = async (
     }
   };
 
-  return {
-    manager,
-    audioBridge: bridge,
-    sessionId,
-    pluginHost: pluginHost ?? undefined,
-    dispose,
-  };
+  try {
+    await runProductionBootstrapStage('audio engine initialization', () =>
+      audioEngine.init(),
+    );
+    const fileLoader = options.fileLoader ?? createDefaultAudioFileLoader();
+    pluginHost = instantiatePluginHost();
+    const resolvePluginDescriptor = pluginHost
+      ? createPluginDescriptorResolver(pluginHost)
+      : undefined;
+    bridge = new SessionAudioBridge(audioEngine, {
+      fileLoader,
+      pluginHost: pluginHost ?? undefined,
+      resolvePluginDescriptor,
+    });
+    const storage = createSessionStorageAdapter(
+      await runProductionBootstrapStage('storage directory resolution', () =>
+        resolveStorageDirectory(options.storageDirectory),
+      ),
+    );
+    await runProductionBootstrapStage('session storage initialization', () =>
+      storage.initialize(),
+    );
+    const manager = new SessionManager(storage, bridge);
+    await runProductionBootstrapStage('persisted session restoration', () =>
+      bootstrapSessionIfNeeded(manager, storage, sessionId),
+    );
+
+    return {
+      manager,
+      audioBridge: bridge,
+      sessionId,
+      pluginHost: pluginHost ?? undefined,
+      dispose,
+    };
+  } catch (error) {
+    await dispose();
+    throw error;
+  }
 };
 
 const bootstrapSessionIfNeeded = async (
@@ -359,8 +382,7 @@ type DirectoryModule = {
   sessionDirectory?: unknown;
   getSessionDirectory?: () => string | Promise<string>;
   getDirectories?: () =>
-    | { sessionDirectory?: unknown }
-    | Promise<{ sessionDirectory?: unknown }>;
+    { sessionDirectory?: unknown } | Promise<{ sessionDirectory?: unknown }>;
 };
 
 const resolveStorageDirectory = async (override?: string): Promise<string> => {
@@ -375,8 +397,7 @@ const resolveStorageDirectory = async (override?: string): Promise<string> => {
   }
   if (Platform.OS === 'ios' || Platform.OS === 'android') {
     const directoryModule = NativeModules.DaftCitadelDirectories as
-      | DirectoryModule
-      | undefined;
+      DirectoryModule | undefined;
     const sessionDirectory = await resolveNativeSessionDirectory(directoryModule);
     if (sessionDirectory) {
       return joinPath(sessionDirectory, 'sessions');
@@ -427,6 +448,22 @@ const normalizeDirectory = (value: unknown): string | undefined => {
     return value;
   }
   return undefined;
+};
+
+const runProductionBootstrapStage = async <T>(
+  stage: string,
+  operation: () => Promise<T>,
+): Promise<T> => {
+  try {
+    return await operation();
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    const error = new Error(
+      `Production session startup failed during ${stage}: ${message}`,
+    );
+    (error as Error & { cause?: unknown }).cause = cause;
+    throw error;
+  }
 };
 
 const joinPath = (...segments: Array<string | undefined>): string => {

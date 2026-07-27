@@ -56,6 +56,27 @@ export type PluginHostEventPayloads = {
 
 const moduleName = 'PluginHostModule';
 
+const REQUIRED_PLUGIN_HOST_METHODS = [
+  'queryAvailablePlugins',
+  'instantiatePlugin',
+  'releasePlugin',
+  'loadPreset',
+  'setParameterValue',
+  'scheduleAutomation',
+  'ensureSandbox',
+  'acknowledgeCrash',
+] as const satisfies ReadonlyArray<keyof PluginHostSpec>;
+
+const hasNativePluginHostMethods = (candidate: unknown): candidate is PluginHostSpec => {
+  if (!candidate || typeof candidate !== 'object') {
+    return false;
+  }
+  const module = candidate as Record<string, unknown>;
+  return REQUIRED_PLUGIN_HOST_METHODS.every(
+    (method) => typeof module[method] === 'function',
+  );
+};
+
 const getTurboModuleSafely = (): PluginHostSpec | null => {
   try {
     return TurboModuleRegistry.get<PluginHostSpec>(moduleName);
@@ -75,7 +96,7 @@ const getNativePluginHostModule = (): PluginHostSpec | null => {
 
 const requireNativePluginHostModule = (): PluginHostSpec => {
   const module = getNativePluginHostModule();
-  if (!module) {
+  if (!hasNativePluginHostMethods(module)) {
     throw new Error(`${moduleName} is not available on this platform`);
   }
   return module;
@@ -129,7 +150,6 @@ export const NativePluginHost: PluginHostSpec = {
 
 export const isPluginHostAvailable = (): boolean => {
   const module = getNativePluginHostModule() as
-    | (PluginHostSpec & { runtimeReady?: boolean })
-    | null;
-  return module?.runtimeReady === true;
+    (PluginHostSpec & { runtimeReady?: boolean }) | null;
+  return module?.runtimeReady === true && hasNativePluginHostMethods(module);
 };

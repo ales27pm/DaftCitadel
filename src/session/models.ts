@@ -98,33 +98,31 @@ export type Juno106ParameterName =
 
 export type Juno106ParameterMap = Record<Juno106ParameterName, number>;
 
-export const JUNO106_PARAMETER_NAMES: readonly Juno106ParameterName[] =
-  Object.freeze([
-    'pulseWidth',
-    'subLevel',
-    'cutoffHz',
-    'resonance',
-    'attackSeconds',
-    'releaseSeconds',
-    'chorusMode',
-    'outputGain',
-    'lfoRateHz',
-    'lfoDepth',
-  ]);
+export const JUNO106_PARAMETER_NAMES: readonly Juno106ParameterName[] = Object.freeze([
+  'pulseWidth',
+  'subLevel',
+  'cutoffHz',
+  'resonance',
+  'attackSeconds',
+  'releaseSeconds',
+  'chorusMode',
+  'outputGain',
+  'lfoRateHz',
+  'lfoDepth',
+]);
 
-export const JUNO106_DEFAULT_PARAMETERS: Readonly<Juno106ParameterMap> =
-  Object.freeze({
-    pulseWidth: 0.5,
-    subLevel: 0.35,
-    cutoffHz: 2400,
-    resonance: 0.15,
-    attackSeconds: 0.01,
-    releaseSeconds: 0.45,
-    chorusMode: 1,
-    outputGain: 0.2,
-    lfoRateHz: 0.8,
-    lfoDepth: 0,
-  });
+export const JUNO106_DEFAULT_PARAMETERS: Readonly<Juno106ParameterMap> = Object.freeze({
+  pulseWidth: 0.5,
+  subLevel: 0.35,
+  cutoffHz: 2400,
+  resonance: 0.15,
+  attackSeconds: 0.01,
+  releaseSeconds: 0.45,
+  chorusMode: 1,
+  outputGain: 0.2,
+  lfoRateHz: 0.8,
+  lfoDepth: 0,
+});
 
 export interface Juno106PresetSnapshot {
   id: string;
@@ -363,32 +361,136 @@ export const updateSessionTimestamp = (session: Session): Session => ({
   },
 });
 
+const ROUTING_SIGNAL_TYPES: readonly RoutingSignalType[] = ['audio', 'midi', 'sidechain'];
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
+const finiteNumberOr = (value: unknown, fallback: number): number =>
+  typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+
+const normalizeRoutingSignals = (
+  value: unknown,
+  fallback: readonly RoutingSignalType[],
+): RoutingSignalType[] => {
+  if (!Array.isArray(value)) {
+    return [...fallback];
+  }
+  const signals = value.filter(
+    (candidate): candidate is RoutingSignalType =>
+      typeof candidate === 'string' &&
+      ROUTING_SIGNAL_TYPES.includes(candidate as RoutingSignalType),
+  );
+  return signals.length > 0 ? signals : [...fallback];
+};
+
+const normalizeRoutingNode = (node: RoutingNode): RoutingNode => {
+  if (node.type === 'plugin') {
+    const defaultSignals: RoutingSignalType[] =
+      node.slot === 'midiFx' ? ['midi'] : ['audio'];
+    return {
+      ...node,
+      order: Number.isInteger(node.order) && node.order >= 0 ? node.order : 0,
+      accepts: normalizeRoutingSignals(node.accepts, defaultSignals),
+      emits: normalizeRoutingSignals(node.emits, defaultSignals),
+      automation: Array.isArray(node.automation) ? node.automation : [],
+    };
+  }
+  if (node.type === 'instrument') {
+    const parameters = { ...JUNO106_DEFAULT_PARAMETERS };
+    if (isRecord(node.parameters)) {
+      JUNO106_PARAMETER_NAMES.forEach((parameter) => {
+        const value = node.parameters[parameter];
+        if (typeof value === 'number' && Number.isFinite(value)) {
+          parameters[parameter] = value;
+        }
+      });
+    }
+    return {
+      ...node,
+      parameters,
+      accepts: normalizeRoutingSignals(node.accepts, ['midi']),
+      emits: normalizeRoutingSignals(node.emits, ['audio']),
+    };
+  }
+  return node;
+};
+
 export const sortAutomationPoints = (curve: AutomationCurve): AutomationCurve => ({
   ...curve,
-  points: [...curve.points].sort((a, b) => a.time - b.time),
+  points: (Array.isArray(curve.points) ? [...curve.points] : []).sort(
+    (a, b) => a.time - b.time,
+  ),
 });
 
-export const normalizeTrack = (track: Track): Track => ({
-  ...track,
-  clips: track.clips
-    .map((clip) => ({
-      ...clip,
-      midi: clip.midi
-        ? {
-            ...clip.midi,
-            notes: [...clip.midi.notes].sort((lhs, rhs) => lhs.startBeat - rhs.startBeat),
-          }
-        : undefined,
-    }))
-    .sort((a, b) => a.start - b.start),
-  automationCurves: track.automationCurves.map(sortAutomationPoints),
-  routing: normalizeTrackRouting(track.id, track.routing),
-});
+export const normalizeTrack = (track: Track): Track => {
+  const rawClips = Array.isArray(track.clips) ? track.clips : [];
+  const rawAutomationCurves = Array.isArray(track.automationCurves)
+    ? track.automationCurves
+    : [];
+  return {
+    ...track,
+    muted: typeof track.muted === 'boolean' ? track.muted : false,
+    solo: typeof track.solo === 'boolean' ? track.solo : false,
+    volume: finiteNumberOr(track.volume, 0),
+    pan: finiteNumberOr(track.pan, 0),
+    clips: rawClips
+      .filter((candidate): candidate is Clip => isRecord(candidate))
+      .map((clip) => {
+        const midi = isRecord(clip.midi)
+          ? (clip.midi as unknown as MidiClipData)
+          : undefined;
+        return {
+          ...clip,
+          automationCurveIds: Array.isArray(clip.automationCurveIds)
+            ? clip.automationCurveIds.filter(
+                (curveId): curveId is string => typeof curveId === 'string',
+              )
+            : [],
+          midi: midi
+            ? {
+                ...midi,
+                notes: (Array.isArray(midi.notes) ? [...midi.notes] : []).sort(
+                  (lhs, rhs) => lhs.startBeat - rhs.startBeat,
+                ),
+              }
+            : undefined,
+        };
+      })
+      .sort((a, b) => a.start - b.start),
+    automationCurves: rawAutomationCurves
+      .filter((candidate): candidate is AutomationCurve => isRecord(candidate))
+      .map(sortAutomationPoints),
+    routing: normalizeTrackRouting(
+      track.id,
+      isRecord(track.routing) ? track.routing : undefined,
+    ),
+  };
+};
 
-export const normalizeSession = (session: Session): Session => ({
-  ...session,
-  tracks: session.tracks.map(normalizeTrack),
-});
+export const normalizeSession = (session: Session): Session => {
+  const now = new Date().toISOString();
+  const metadata: Record<string, unknown> = isRecord(session.metadata)
+    ? session.metadata
+    : {};
+  const tracks = Array.isArray(session.tracks) ? session.tracks : [];
+  return {
+    ...session,
+    revision: Math.max(0, Math.floor(finiteNumberOr(session.revision, 0))),
+    tracks: tracks
+      .filter((candidate): candidate is Track => isRecord(candidate))
+      .map(normalizeTrack),
+    metadata: {
+      version: Math.max(1, Math.floor(finiteNumberOr(metadata.version, 1))),
+      createdAt: typeof metadata.createdAt === 'string' ? metadata.createdAt : now,
+      updatedAt: typeof metadata.updatedAt === 'string' ? metadata.updatedAt : now,
+      sampleRate: finiteNumberOr(metadata.sampleRate, 48000),
+      bpm: finiteNumberOr(metadata.bpm, 120),
+      timeSignature:
+        typeof metadata.timeSignature === 'string' ? metadata.timeSignature : '4/4',
+    },
+  };
+};
 
 export const validateSession = (session: Session): void => {
   if (!session.id) {
@@ -499,15 +601,34 @@ const validateRoutingGraph = (graph: RoutingGraph): void => {
   });
 };
 
-const normalizeTrackRouting = (trackId: TrackID, routing: TrackRouting): TrackRouting => {
-  const graph = routing.graph ?? createDefaultTrackRoutingGraph(trackId);
-  const pluginNodes = graph.nodes.filter(
+const normalizeTrackRouting = (
+  trackId: TrackID,
+  routing: TrackRouting | undefined,
+): TrackRouting => {
+  const normalizedRouting = routing ?? {};
+  const defaultGraph = createDefaultTrackRoutingGraph(trackId);
+  const graph = isRecord(normalizedRouting.graph)
+    ? normalizedRouting.graph
+    : defaultGraph;
+  const rawNodes = Array.isArray(graph.nodes) ? graph.nodes : defaultGraph.nodes;
+  const rawConnections = Array.isArray(graph.connections)
+    ? graph.connections
+    : defaultGraph.connections;
+  const normalizedGraphNodes = rawNodes
+    .filter((candidate): candidate is RoutingNode => isRecord(candidate))
+    .map(normalizeRoutingNode);
+  const normalizedGraphConnections = rawConnections.filter(
+    (candidate): candidate is RoutingConnection => isRecord(candidate),
+  );
+  const graphNodes =
+    normalizedGraphNodes.length > 0 ? normalizedGraphNodes : defaultGraph.nodes;
+  const pluginNodes = graphNodes.filter(
     (node): node is PluginRoutingNode => node.type === 'plugin',
   );
   const sortedPluginIds = [...pluginNodes]
     .sort((a, b) => a.order - b.order)
     .map((plugin) => plugin.id);
-  const normalizedNodes = graph.nodes.map((node) => {
+  const normalizedNodes = graphNodes.map((node) => {
     if (node.type !== 'plugin') {
       return node;
     }
@@ -518,7 +639,7 @@ const normalizeTrackRouting = (trackId: TrackID, routing: TrackRouting): TrackRo
     };
   });
   const seenConnectionIds = new Set<string>();
-  const normalizedConnections = graph.connections.filter((connection) => {
+  const normalizedConnections = normalizedGraphConnections.filter((connection) => {
     if (seenConnectionIds.has(connection.id)) {
       return false;
     }
@@ -526,9 +647,10 @@ const normalizeTrackRouting = (trackId: TrackID, routing: TrackRouting): TrackRo
     return true;
   });
   return {
-    ...routing,
+    ...normalizedRouting,
     graph: {
       ...graph,
+      version: Math.max(1, Math.floor(finiteNumberOr(graph.version, 1))),
       nodes: normalizedNodes,
       connections: normalizedConnections,
     },

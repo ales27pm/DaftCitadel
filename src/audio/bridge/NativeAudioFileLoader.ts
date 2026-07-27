@@ -43,8 +43,11 @@ export class NativeAudioFileLoader implements AudioFileLoader {
   }
 }
 
-export const isNativeAudioFileLoaderAvailable = (): boolean =>
-  NativeModules[MODULE_NAME] != null;
+export const isNativeAudioFileLoaderAvailable = (): boolean => {
+  const module = NativeModules[MODULE_NAME] as
+    Partial<NativeAudioFileLoaderModule> | undefined;
+  return typeof module?.decode === 'function';
+};
 
 const getNativeLoaderModule = (): NativeAudioFileLoaderModule => {
   const module = NativeModules[MODULE_NAME] as NativeAudioFileLoaderModule | undefined;

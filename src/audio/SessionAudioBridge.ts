@@ -271,6 +271,13 @@ const DEFAULT_LOGGER: Logger = {
 const DEFAULT_TRANSPORT_POLL_INTERVAL_MS = 120;
 const DEFAULT_DIAGNOSTICS_POLL_INTERVAL_MS = 1500;
 
+const createSessionAudioStageError = (stage: string, cause: unknown): Error => {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  const error = new Error(`Session audio ${stage} failed: ${message}`);
+  (error as Error & { cause?: unknown }).cause = cause;
+  return error;
+};
+
 export interface PluginDescriptorResolver {
   (
     instanceId: string,
@@ -445,18 +452,49 @@ export class SessionAudioBridge {
       );
     }
 
-    const desiredState = await this.buildDesiredState(session, sampleRate);
+    let desiredState: SessionState;
+    try {
+      desiredState = await this.buildDesiredState(session, sampleRate);
+    } catch (error) {
+      throw createSessionAudioStageError('state preparation', error);
+    }
     this.pluginRecovery?.record({
       automationRequests: desiredState.automations,
       pluginAutomations: desiredState.pluginAutomations,
       pluginNodes: desiredState.pluginNodes,
     });
 
-    await this.graph.apply(desiredState.nodes, desiredState.connections);
-    await this.automationPublisher.applyChanges(desiredState.automations);
-    await this.applyPluginAutomations(desiredState.pluginAutomations);
-    await this.releaseStalePluginInstances(desiredState.activePluginInstances);
-    await this.reconcileClipBuffers(desiredState.clipBuffers);
+    try {
+      await this.graph.apply(desiredState.nodes, desiredState.connections);
+    } catch (error) {
+      throw createSessionAudioStageError('graph reconciliation', error);
+    }
+    try {
+      await this.automationPublisher.applyChanges(desiredState.automations);
+    } catch (error) {
+      this.logger.error(
+        'Session automation could not be applied; continuing with static node values',
+        error,
+      );
+    }
+    try {
+      await this.applyPluginAutomations(desiredState.pluginAutomations);
+    } catch (error) {
+      this.logger.error(
+        'Plugin automation could not be applied; continuing without affected automation',
+        error,
+      );
+    }
+    try {
+      await this.releaseStalePluginInstances(desiredState.activePluginInstances);
+    } catch (error) {
+      this.logger.error('Failed to release stale plugin instances', error);
+    }
+    try {
+      await this.reconcileClipBuffers(desiredState.clipBuffers);
+    } catch (error) {
+      this.logger.error('Failed to reconcile optional clip buffers', error);
+    }
 
     this.previousSessionRevision = session.revision;
     if (this.supportsTransport) {
