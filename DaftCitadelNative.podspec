@@ -21,6 +21,9 @@ Pod::Spec.new do |s|
   s.dependency 'React-Core'
 
   s.frameworks = 'AVFoundation', 'AudioToolbox', 'CoreLocation', 'NetworkExtension'
+  s.user_target_xcconfig = {
+    'OTHER_LDFLAGS' => '$(inherited) -ObjC'
+  }
 
   # Keep the development pod rooted at the repository so CocoaPods can include
   # the shared engine and platform bridges. CocoaPods silently drops source
