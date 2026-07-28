@@ -96,9 +96,10 @@ GraphApplyResult AudioEngineBridge::initializeGraphTransactions(
 
   auto result = transactionHost_->initialize(publication);
   if (result.status != GraphApplyStatus::Committed) {
-    transactionHost_.reset();
     graph_ = legacyGraph_.get();
     realtimePlane_.publishGraph(graph_, publication);
+    realtimePlane_.waitUntilRenderIdle();
+    transactionHost_.reset();
   }
   return result;
 }
@@ -156,8 +157,10 @@ bool AudioEngineBridge::invalidateGraphTransactions() noexcept {
     if (!transactionHost_->invalidate(publication)) {
       return false;
     }
-    transactionHost_.reset();
     graph_ = legacyGraph_.get();
+    realtimePlane_.publishGraph(graph_, publication);
+    realtimePlane_.waitUntilRenderIdle();
+    transactionHost_.reset();
     return true;
   } catch (...) {
     return false;
@@ -166,15 +169,16 @@ bool AudioEngineBridge::invalidateGraphTransactions() noexcept {
 
 void AudioEngineBridge::shutdown() {
   std::lock_guard<std::mutex> lock(mutex_);
+  stopRealtimePlaneLocked();
+  realtimePlane_.publishGraph(nullptr, 0U);
+  realtimePlane_.waitUntilRenderIdle();
+  graph_ = nullptr;
   if (transactionHost_) {
     const auto publication =
         publicationToken_.load(std::memory_order_acquire);
     (void)transactionHost_->invalidate(publication);
     transactionHost_.reset();
   }
-  stopRealtimePlaneLocked();
-  realtimePlane_.publishGraph(nullptr, 0U);
-  graph_ = nullptr;
   legacyGraph_.reset();
   clipBuffers_.clear();
   realtimePlane_.resetQuiescent();

@@ -101,9 +101,10 @@ GraphApplyResult AudioEngineBridge::initializeGraphTransactions(
 
   auto result = transactionHost_->initialize(generation);
   if (result.status != GraphApplyStatus::Committed) {
-    transactionHost_.reset();
     graph_ = legacyGraph_.get();
     realtimePlane_.publishGraph(graph_, generation);
+    realtimePlane_.waitUntilRenderIdle();
+    transactionHost_.reset();
   }
   return result;
 }
@@ -158,8 +159,10 @@ bool AudioEngineBridge::invalidateGraphTransactions(
     if (!transactionHost_->invalidate(generation)) {
       return false;
     }
-    transactionHost_.reset();
     graph_ = legacyGraph_.get();
+    realtimePlane_.publishGraph(graph_, generation);
+    realtimePlane_.waitUntilRenderIdle();
+    transactionHost_.reset();
     return true;
   } catch (...) {
     return false;
@@ -181,13 +184,14 @@ bool AudioEngineBridge::shutdownIfOwner(
       return false;
     }
 
+    stopRealtimePlaneLocked();
+    realtimePlane_.publishGraph(nullptr, 0U);
+    realtimePlane_.waitUntilRenderIdle();
+    graph_ = nullptr;
     if (transactionHost_) {
       (void)transactionHost_->invalidate(generation);
       transactionHost_.reset();
     }
-    stopRealtimePlaneLocked();
-    realtimePlane_.publishGraph(nullptr, 0U);
-    graph_ = nullptr;
     legacyGraph_.reset();
     clipBuffers_.clear();
     realtimePlane_.resetQuiescent();

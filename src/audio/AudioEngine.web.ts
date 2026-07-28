@@ -888,8 +888,19 @@ export class AudioEngine {
       prepared.outputGain.gain.cancelScheduledValues(this.context.currentTime);
       prepared.outputGain.gain.setValueAtTime(0, transitionStart);
       prepared.outputGain.gain.linearRampToValueAtTime(1, transitionEnd);
+      // Look ahead by one render quantum, wait for the fade to complete, then
+      // keep a 1 ms safety guard before tearing down the previous graph.
       transitionDelayMs =
         Math.ceil((transitionEnd - this.context.currentTime) * 1000) + 1;
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.debug('Web audio graph transition timing', {
+          quantumSeconds,
+          fadeSeconds,
+          transitionStart,
+          transitionEnd,
+          transitionDelayMs,
+        });
+      }
     } else {
       previousOutputGain.gain.value = 0;
       prepared.outputGain.gain.value = 1;

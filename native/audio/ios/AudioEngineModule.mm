@@ -167,13 +167,34 @@ std::string CanonicalOptionsFingerprint(NSDictionary* options,
   if (options == nil || options.count == 0) {
     return "{}";
   }
-  if (![NSJSONSerialization isValidJSONObject:options]) {
+  NSArray* rawKeys = [options allKeys];
+  for (id rawKey in rawKeys) {
+    if (![rawKey isKindOfClass:[NSString class]]) {
+      error = "Node option keys must be strings";
+      return {};
+    }
+  }
+  NSArray<NSString*>* sortedKeys =
+      [rawKeys sortedArrayUsingSelector:@selector(compare:)];
+  NSMutableDictionary* normalizedOptions =
+      [NSMutableDictionary dictionaryWithCapacity:options.count];
+  for (NSString* key in sortedKeys) {
+    const std::string normalizedKey = NormalizeKey(key);
+    NSString* fingerprintKey =
+        [NSString stringWithUTF8String:normalizedKey.c_str()];
+    if (fingerprintKey == nil) {
+      error = "Unable to normalize node option key";
+      return {};
+    }
+    normalizedOptions[fingerprintKey] = options[key];
+  }
+  if (![NSJSONSerialization isValidJSONObject:normalizedOptions]) {
     error = "Node options must contain JSON-compatible values";
     return {};
   }
   NSError* serializationError = nil;
   NSData* data =
-      [NSJSONSerialization dataWithJSONObject:options
+      [NSJSONSerialization dataWithJSONObject:normalizedOptions
                                       options:NSJSONWritingSortedKeys
                                         error:&serializationError];
   if (data == nil) {
@@ -379,6 +400,7 @@ bool ReadBoundedInteger(NSDictionary* event, NSString* key, NSInteger minimum,
   AudioEngineBridge::EngineGeneration _engineGeneration;
   BOOL _isRecoveringAudioConfiguration;
   NSUInteger _audioConfigurationNotificationSequence;
+  NSString* _audioConfigurationRecoveryError;
 }
 
 - (instancetype)init {
@@ -388,6 +410,7 @@ bool ReadBoundedInteger(NSDictionary* event, NSString* key, NSInteger minimum,
     _audioDeviceDriver = [[DaftAudioDeviceDriver alloc] init];
     _isRecoveringAudioConfiguration = NO;
     _audioConfigurationNotificationSequence = 0U;
+    _audioConfigurationRecoveryError = nil;
     __weak AudioEngineModule* weakSelf = self;
     _audioDeviceDriver.audioConfigurationChangeHandler =
         ^(NSString* notificationName) {
@@ -403,8 +426,7 @@ bool ReadBoundedInteger(NSDictionary* event, NSString* key, NSInteger minimum,
                 dispatch_time(DISPATCH_TIME_NOW,
                               50LL * NSEC_PER_MSEC),
                 [strongSelf methodQueue], ^{
-                  if (strongSelf == nil ||
-                      sequence !=
+                  if (sequence !=
                           strongSelf
                               ->_audioConfigurationNotificationSequence) {
                     return;
@@ -463,9 +485,14 @@ RCT_EXPORT_MODULE();
             ModuleLogger(),
             "Audio configuration recovery failed after %{public}@: %{public}s",
             notificationName, detail.c_str());
+        _audioConfigurationRecoveryError =
+            [NSString stringWithFormat:@"Audio configuration recovery failed: %@",
+                                       NSStringFromStdString(detail)];
         return;
       }
 
+      // A paused transport intentionally leaves the device stopped; recovery
+      // must not turn a route notification into implicit playback.
       if (transport.isPlaying) {
         AudioEngineBridge::locateTransport(
             generation, transport.currentFrame);
@@ -483,10 +510,15 @@ RCT_EXPORT_MODULE();
               notificationName,
               deviceError.localizedDescription ?:
                   @"No device error was supplied");
+          _audioConfigurationRecoveryError =
+              [NSString stringWithFormat:@"Audio device restart failed: %@",
+                                         deviceError.localizedDescription ?:
+                                             @"No device error was supplied"];
           return;
         }
       }
 
+      _audioConfigurationRecoveryError = nil;
       os_log_info(
           ModuleLogger(),
           "Recovered audio graph after %{public}@ (route epoch %llu)",
@@ -495,12 +527,16 @@ RCT_EXPORT_MODULE();
               recovery.graph.routeEpoch));
     } catch (const std::exception& exception) {
       StopTransportSilently(_engineGeneration);
+      _audioConfigurationRecoveryError =
+          [NSString stringWithUTF8String:exception.what()];
       os_log_error(
           ModuleLogger(),
           "Audio configuration recovery failed after %{public}@: %{public}s",
           notificationName, exception.what());
     } catch (...) {
       StopTransportSilently(_engineGeneration);
+      _audioConfigurationRecoveryError =
+          @"Audio configuration recovery failed";
       os_log_error(
           ModuleLogger(),
           "Audio configuration recovery failed after %{public}@",
@@ -508,6 +544,8 @@ RCT_EXPORT_MODULE();
     }
   } @catch (NSException* exception) {
     StopTransportSilently(_engineGeneration);
+    _audioConfigurationRecoveryError =
+        exception.reason ?: @"Audio configuration recovery failed";
     LogObjectiveCException(
         @"Audio configuration recovery", exception);
   } @finally {
@@ -526,6 +564,7 @@ RCT_EXPORT_MODULE();
   _engineGeneration = 0;
   self.configuredSampleRate = 0.0;
   self.configuredFramesPerBuffer = 0U;
+  _audioConfigurationRecoveryError = nil;
   ShutdownBridgeIfOwner(@"Audio engine invalidation", generation);
 }
 
@@ -579,6 +618,7 @@ RCT_EXPORT_METHOD(initialize:(double)sampleRate
     _engineGeneration = generation;
     self.configuredSampleRate = sampleRate;
     self.configuredFramesPerBuffer = framesUnsigned;
+    _audioConfigurationRecoveryError = nil;
     resolve(nil);
   } catch (const std::exception& ex) {
     os_log_error(ModuleLogger(), "Initialize failed: %{public}s", ex.what());
@@ -600,6 +640,7 @@ RCT_EXPORT_METHOD(shutdown:(RCTPromiseResolveBlock)resolve
     }
     self.configuredSampleRate = 0.0;
     self.configuredFramesPerBuffer = 0U;
+    _audioConfigurationRecoveryError = nil;
     resolve(nil);
   } catch (const std::exception& ex) {
     os_log_error(ModuleLogger(), "Shutdown failed: %{public}s", ex.what());
@@ -1308,6 +1349,11 @@ RCT_EXPORT_METHOD(getRenderDiagnostics:(RCTPromiseResolveBlock)resolve
                           ^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject) {
   const auto generation = _engineGeneration;
   if (!EnsureInitialized(generation, reject)) {
+    return;
+  }
+  if (_audioConfigurationRecoveryError != nil) {
+    reject(@"audio_configuration_recovery_failed",
+           _audioConfigurationRecoveryError, nil);
     return;
   }
   try {

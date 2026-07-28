@@ -2,6 +2,7 @@ package com.daftcitadel.audio
 
 import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioRouting
 import android.media.AudioTrack
 import android.os.Build
 import android.os.Process
@@ -11,7 +12,8 @@ import kotlin.math.max
 
 /** Owns Android device I/O while AudioEngineBridge remains device-agnostic. */
 internal class AudioTrackDeviceDriver(
-  private val renderInterleaved: (FloatArray, Int, Int) -> Unit
+  private val renderInterleaved: (FloatArray, Int, Int) -> Unit,
+  private val onAudioConfigurationChange: () -> Unit = {}
 ) {
   private val running = AtomicBoolean(false)
 
@@ -20,6 +22,13 @@ internal class AudioTrackDeviceDriver(
 
   @Volatile
   private var renderThread: Thread? = null
+
+  private val routingChangedListener =
+    AudioRouting.OnRoutingChangedListener {
+      if (running.get()) {
+        onAudioConfigurationChange()
+      }
+    }
 
   @Synchronized
   fun start(sampleRate: Int, framesPerBuffer: Int) {
@@ -62,6 +71,7 @@ internal class AudioTrackDeviceDriver(
     val renderBuffer = FloatArray(framesPerBuffer * channelCount)
     running.set(true)
     audioTrack = track
+    track.addOnRoutingChangedListener(routingChangedListener, null)
     val thread = Thread({ renderLoop(track, renderBuffer, framesPerBuffer) }, THREAD_NAME).apply {
       uncaughtExceptionHandler = Thread.UncaughtExceptionHandler { _, _ ->
         running.set(false)
@@ -75,6 +85,7 @@ internal class AudioTrackDeviceDriver(
       running.set(false)
       renderThread = null
       audioTrack = null
+      track.removeOnRoutingChangedListener(routingChangedListener)
       track.release()
       throw error
     }
@@ -92,6 +103,7 @@ internal class AudioTrackDeviceDriver(
     val track = audioTrack
     audioTrack = null
     if (track != null) {
+      runCatching { track.removeOnRoutingChangedListener(routingChangedListener) }
       runCatching { track.pause() }
       runCatching { track.flush() }
       runCatching { track.stop() }

@@ -504,10 +504,14 @@ export class SessionAudioBridge {
   }
 
   public async resetSession(): Promise<void> {
-    await this.graph.apply(
-      new Map<string, NodeConfiguration>(),
-      new Set<ConnectionKey>(),
-    );
+    try {
+      await this.graph.apply(
+        new Map<string, NodeConfiguration>(),
+        new Set<ConnectionKey>(),
+      );
+    } catch (error) {
+      this.logger.error('Failed to clear audio graph during session reset', error);
+    }
     this.previousSessionRevision = -1;
     this.pluginRecovery?.record({
       automationRequests: new Map(),

@@ -93,8 +93,13 @@ class RenderPlan final {
       std::uint64_t generation,
       std::vector<PreparedGraphNode> nodes,
       std::vector<GraphConnectionDefinition> connections,
-      GraphFailure* failure = nullptr,
+      GraphFailure* failure = nullptr
+#if defined(DAFT_AUDIO_ENABLE_GRAPH_FAULT_INJECTION)
+      ,
       GraphFailureStage injectedFailure = GraphFailureStage::None);
+#else
+      );
+#endif
 
   RenderPlan(const RenderPlan&) = delete;
   RenderPlan& operator=(const RenderPlan&) = delete;
@@ -108,23 +113,32 @@ class RenderPlan final {
   std::uint64_t generation() const noexcept { return generation_; }
   const std::string& graphHash() const noexcept { return graphHash_; }
   const std::vector<std::string>& nodeIds() const noexcept { return nodeIds_; }
+#if defined(DAFT_AUDIO_ENABLE_GRAPH_FAULT_INJECTION)
   bool shouldInjectCommitFailure() const noexcept {
     return injectCommitFailure_;
   }
+#endif
 
  private:
   RenderPlan(double sampleRate,
              std::size_t maxFramesPerBlock,
              std::uint64_t generation,
              std::string graphHash,
-             std::vector<std::string> nodeIds,
+             std::vector<std::string> nodeIds
+#if defined(DAFT_AUDIO_ENABLE_GRAPH_FAULT_INJECTION)
+             ,
              bool injectCommitFailure);
+#else
+  );
+#endif
 
   SceneGraph graph_;
   const std::uint64_t generation_;
   const std::string graphHash_;
   const std::vector<std::string> nodeIds_;
+#if defined(DAFT_AUDIO_ENABLE_GRAPH_FAULT_INJECTION)
   const bool injectCommitFailure_;
+#endif
 };
 
 }  // namespace daft::audio

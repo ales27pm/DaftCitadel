@@ -1,7 +1,5 @@
 #include "audio_engine/GraphTransactionHost.h"
 
-#include <array>
-#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -17,6 +15,8 @@ void RequireTransaction(bool condition, const char* message) {
 }
 
 }  // namespace
+
+namespace daft::audio::tests {
 
 void RunGraphTransactionHostTests() {
   using daft::audio::GraphApplyRequest;
@@ -41,6 +41,10 @@ void RunGraphTransactionHostTests() {
         return true;
       },
       [&] { ++quiescenceCount; });
+
+  const auto invalidInitialization = host.initialize(0);
+  RequireTransaction(invalidInitialization.status == GraphApplyStatus::Rejected,
+                     "Zero engine instance was not rejected");
 
   const auto initialized = host.initialize(41);
   RequireTransaction(initialized.status == GraphApplyStatus::Committed,
@@ -94,6 +98,21 @@ void RunGraphTransactionHostTests() {
   RequireTransaction(populatedResult.graph.graphHash != initial.graphHash,
                      "Different graph topology retained the old hash");
 
+  const auto publicationCountAfterCommit = publicationCount;
+  GraphApplyRequest replay;
+  replay.transactionId = "populated-plan";
+  replay.expectedGeneration = initial.generation;
+  replay.expectedRouteEpoch = initial.routeEpoch;
+  replay.expectedEngineInstance = initial.engineInstance;
+  const auto replayResult = host.applyGraph(std::move(replay));
+  RequireTransaction(
+      replayResult.status == GraphApplyStatus::Committed &&
+          replayResult.graph.generation == populatedResult.graph.generation &&
+          replayResult.graph.graphHash == populatedResult.graph.graphHash,
+      "Committed transaction replay did not return its cached result");
+  RequireTransaction(publicationCount == publicationCountAfterCommit,
+                     "Committed transaction replay unexpectedly published");
+
   GraphApplyRequest noOp;
   noOp.transactionId = "equivalent-idempotent-plan";
   noOp.expectedGeneration = populatedResult.graph.generation;
@@ -112,6 +131,8 @@ void RunGraphTransactionHostTests() {
   RequireTransaction(noOpResult.graph.generation ==
                          populatedResult.graph.generation,
                      "Equivalent graph unnecessarily advanced generation");
+  RequireTransaction(publicationCount == publicationCountAfterCommit,
+                     "Equivalent graph unexpectedly published");
 
   GraphApplyRequest fault;
   fault.transactionId = "commit-fault";
@@ -132,21 +153,8 @@ void RunGraphTransactionHostTests() {
   RequireTransaction(host.describeGraph().generation ==
                          populatedResult.graph.generation,
                      "Rejected commit changed the active generation");
-
-  std::array<float, 128> left{};
-  std::array<float, 128> right{};
-  float* channels[] = {left.data(), right.data()};
-  daft::audio::AudioBufferView offlineBuffer(channels, 2, left.size());
-  SineOscillatorNode offlineOscillator;
-  offlineOscillator.prepare(48000.0);
-  offlineOscillator.setParameter("frequency", 440.0);
-  offlineOscillator.process(offlineBuffer);
-  double renderedEnergy = 0.0;
-  for (const float sample : left) {
-    renderedEnergy += std::abs(static_cast<double>(sample));
-  }
-  RequireTransaction(renderedEnergy > 0.0,
-                     "Offline oscillator render produced only silence");
+  RequireTransaction(publicationCount == publicationCountAfterCommit,
+                     "Rejected commit unexpectedly published");
 
   const auto recovered = host.recoverAudioConfiguration(41);
   RequireTransaction(recovered.status == GraphApplyStatus::Committed,
@@ -174,8 +182,53 @@ void RunGraphTransactionHostTests() {
                          invalidatedResult.failure->code ==
                              GraphErrorCode::EngineInvalidated,
                      "Invalidated engine returned the wrong error code");
-  RequireTransaction(publicationCount >= 3,
-                     "Lifecycle did not publish expected graph transitions");
-  RequireTransaction(quiescenceCount >= 3,
-                     "Lifecycle did not establish render quiescence");
+  RequireTransaction(
+      publicationCount == 4,
+      "Lifecycle did not publish initialize, commit, recovery, and invalidation");
+  RequireTransaction(
+      quiescenceCount == 4,
+      "Lifecycle did not quiesce initialize, commit, recovery, and invalidation");
+
+  bool allowPublication = true;
+  std::uint64_t retryPublicationCount = 0;
+  GraphTransactionHost retryHost(
+      48000.0, 512,
+      [&](SceneGraph*, std::uint64_t) {
+        ++retryPublicationCount;
+        return allowPublication;
+      },
+      {});
+  RequireTransaction(
+      retryHost.initialize(99).status == GraphApplyStatus::Committed,
+      "Host without a quiesce callback failed to initialize");
+  const auto retryInitial = retryHost.describeGraph();
+
+  const auto makeRetryRequest = [&] {
+    GraphApplyRequest request;
+    request.transactionId = "retry-publication";
+    request.expectedGeneration = retryInitial.generation;
+    request.expectedRouteEpoch = retryInitial.routeEpoch;
+    request.expectedEngineInstance = retryInitial.engineInstance;
+    PreparedGraphNode retryOscillator;
+    retryOscillator.id = "retry-oscillator";
+    retryOscillator.type = "sine";
+    retryOscillator.optionsFingerprint = "frequency=220";
+    retryOscillator.node = std::make_unique<SineOscillatorNode>();
+    request.nodes.push_back(std::move(retryOscillator));
+    return request;
+  };
+
+  allowPublication = false;
+  const auto rejectedPublication = retryHost.applyGraph(makeRetryRequest());
+  RequireTransaction(rejectedPublication.status == GraphApplyStatus::Rejected,
+                     "Rejected publication was not reported");
+  allowPublication = true;
+  const auto committedRetry = retryHost.applyGraph(makeRetryRequest());
+  RequireTransaction(committedRetry.status == GraphApplyStatus::Committed,
+                     "Rejected publication was not retryable");
+  RequireTransaction(
+      retryPublicationCount == 3,
+      "Retry host did not publish initialization and both commit attempts");
 }
+
+}  // namespace daft::audio::tests

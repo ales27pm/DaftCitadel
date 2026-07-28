@@ -132,13 +132,23 @@ RenderPlan::RenderPlan(double sampleRate,
                        std::size_t maxFramesPerBlock,
                        std::uint64_t generation,
                        std::string graphHash,
-                       std::vector<std::string> nodeIds,
+                       std::vector<std::string> nodeIds
+#if defined(DAFT_AUDIO_ENABLE_GRAPH_FAULT_INJECTION)
+                       ,
                        bool injectCommitFailure)
+#else
+                       )
+#endif
     : graph_(sampleRate, maxFramesPerBlock),
       generation_(generation),
       graphHash_(std::move(graphHash)),
-      nodeIds_(std::move(nodeIds)),
+      nodeIds_(std::move(nodeIds))
+#if defined(DAFT_AUDIO_ENABLE_GRAPH_FAULT_INJECTION)
+      ,
       injectCommitFailure_(injectCommitFailure) {}
+#else
+{}
+#endif
 
 std::unique_ptr<RenderPlan> RenderPlan::Prepare(
     double sampleRate,
@@ -146,18 +156,25 @@ std::unique_ptr<RenderPlan> RenderPlan::Prepare(
     std::uint64_t generation,
     std::vector<PreparedGraphNode> nodes,
     std::vector<GraphConnectionDefinition> connections,
-    GraphFailure* failure,
+    GraphFailure* failure
+#if defined(DAFT_AUDIO_ENABLE_GRAPH_FAULT_INJECTION)
+    ,
     GraphFailureStage injectedFailure) {
+#else
+    ) {
+#endif
   if (failure != nullptr) {
     *failure = {};
   }
 
+#if defined(DAFT_AUDIO_ENABLE_GRAPH_FAULT_INJECTION)
   if (injectedFailure == GraphFailureStage::Validate) {
     SetFailure(failure, GraphFailureStage::Validate,
                GraphErrorCode::InvalidRequest, {},
                "Injected graph validation failure");
     return nullptr;
   }
+#endif
 
   if (sampleRate <= 0.0 || maxFramesPerBlock == 0) {
     SetFailure(failure, GraphFailureStage::Validate,
@@ -208,12 +225,14 @@ std::unique_ptr<RenderPlan> RenderPlan::Prepare(
     }
   }
 
+#if defined(DAFT_AUDIO_ENABLE_GRAPH_FAULT_INJECTION)
   if (injectedFailure == GraphFailureStage::Allocate) {
     SetFailure(failure, GraphFailureStage::Allocate,
                GraphErrorCode::ResourceAllocationFailed, {},
                "Injected render-plan allocation failure");
     return nullptr;
   }
+#endif
 
   const std::string graphHash = HashCanonicalGraph(nodes, connections);
   std::vector<std::string> sortedNodeIds;
@@ -226,8 +245,13 @@ std::unique_ptr<RenderPlan> RenderPlan::Prepare(
   try {
     plan.reset(new RenderPlan(
         sampleRate, maxFramesPerBlock, generation, graphHash,
-        std::move(sortedNodeIds),
+        std::move(sortedNodeIds)
+#if defined(DAFT_AUDIO_ENABLE_GRAPH_FAULT_INJECTION)
+        ,
         injectedFailure == GraphFailureStage::Commit));
+#else
+        ));
+#endif
   } catch (const std::bad_alloc&) {
     SetFailure(failure, GraphFailureStage::Allocate,
                GraphErrorCode::ResourceAllocationFailed, {},
@@ -240,12 +264,14 @@ std::unique_ptr<RenderPlan> RenderPlan::Prepare(
     return nullptr;
   }
 
+#if defined(DAFT_AUDIO_ENABLE_GRAPH_FAULT_INJECTION)
   if (injectedFailure == GraphFailureStage::Prepare) {
     SetFailure(failure, GraphFailureStage::Prepare,
                GraphErrorCode::NodePreparationFailed, {},
                "Injected node preparation failure");
     return nullptr;
   }
+#endif
 
   try {
     for (auto& node : nodes) {
@@ -269,15 +295,33 @@ std::unique_ptr<RenderPlan> RenderPlan::Prepare(
     return nullptr;
   }
 
+#if defined(DAFT_AUDIO_ENABLE_GRAPH_FAULT_INJECTION)
   if (injectedFailure == GraphFailureStage::Connect) {
     SetFailure(failure, GraphFailureStage::Connect,
                GraphErrorCode::ConnectionRejected, {},
                "Injected graph connection failure");
     return nullptr;
   }
+#endif
 
   for (const auto& connection : connections) {
-    if (!plan->graph_.connect(connection.source, connection.destination)) {
+    bool connected = false;
+    try {
+      connected =
+          plan->graph_.connect(connection.source, connection.destination);
+    } catch (const std::bad_alloc&) {
+      SetFailure(failure, GraphFailureStage::Allocate,
+                 GraphErrorCode::ResourceAllocationFailed,
+                 connection.source,
+                 "Unable to allocate graph connection resources");
+      return nullptr;
+    } catch (const std::exception& exception) {
+      SetFailure(failure, GraphFailureStage::Connect,
+                 GraphErrorCode::ConnectionRejected, connection.source,
+                 exception.what());
+      return nullptr;
+    }
+    if (!connected) {
       SetFailure(failure, GraphFailureStage::Connect,
                  GraphErrorCode::ConnectionRejected, connection.source,
                  "SceneGraph rejected the connection");

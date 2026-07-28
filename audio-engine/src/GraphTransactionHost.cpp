@@ -90,6 +90,10 @@ GraphApplyResult GraphTransactionHost::applyGraph(GraphApplyRequest request) {
                           GraphFailureStage::Validate,
                           "Graph transaction id must not be empty");
   }
+  if (lastApplyResult_.has_value() &&
+      lastApplyResult_->transactionId == request.transactionId) {
+    return *lastApplyResult_;
+  }
 
   if (request.expectedEngineInstance != engineInstance_) {
     return staleLocked(std::move(request.transactionId),
@@ -110,16 +114,16 @@ GraphApplyResult GraphTransactionHost::applyGraph(GraphApplyRequest request) {
                        "Graph generation changed before commit");
   }
 
-  if (lastApplyResult_.has_value() &&
-      lastApplyResult_->transactionId == request.transactionId) {
-    return *lastApplyResult_;
-  }
-
   GraphFailure failure;
   auto plan = RenderPlan::Prepare(
       sampleRate_, maxFramesPerBlock_, activePlan_->generation() + 1,
-      std::move(request.nodes), std::move(request.connections), &failure,
+      std::move(request.nodes), std::move(request.connections), &failure
+#if defined(DAFT_AUDIO_ENABLE_GRAPH_FAULT_INJECTION)
+      ,
       request.injectedFailure);
+#else
+      );
+#endif
   if (plan == nullptr) {
     auto result = resultLocked(GraphApplyStatus::Rejected,
                                std::move(request.transactionId),
@@ -128,13 +132,14 @@ GraphApplyResult GraphTransactionHost::applyGraph(GraphApplyRequest request) {
     return result;
   }
 
+#if defined(DAFT_AUDIO_ENABLE_GRAPH_FAULT_INJECTION)
   if (plan->shouldInjectCommitFailure()) {
     auto result = rejectedLocked(
         std::move(request.transactionId), GraphErrorCode::CommitRejected,
         GraphFailureStage::Commit, "Injected render-plan commit failure");
-    lastApplyResult_ = result;
     return result;
   }
+#endif
 
   if (plan->graphHash() == activePlan_->graphHash()) {
     auto result =
@@ -148,7 +153,6 @@ GraphApplyResult GraphTransactionHost::applyGraph(GraphApplyRequest request) {
         std::move(request.transactionId), GraphErrorCode::CommitRejected,
         GraphFailureStage::Commit,
         "Render callback rejected the prepared graph publication");
-    lastApplyResult_ = result;
     return result;
   }
 
@@ -193,6 +197,8 @@ GraphApplyResult GraphTransactionHost::recoverAudioConfiguration(
   try {
     if (quiesce_) {
       quiesce_();
+      retiredPlans_.clear();
+    } else {
       retiredPlans_.clear();
     }
   } catch (...) {
@@ -286,6 +292,7 @@ void GraphTransactionHost::retireAndQuiesceLocked(
     retiredPlans_.push_back(std::move(retired));
   }
   if (!quiesce_) {
+    retiredPlans_.clear();
     return;
   }
 

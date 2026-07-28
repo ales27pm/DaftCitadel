@@ -10,7 +10,7 @@
 
 1. Adhere to the repository-wide quality gates defined in the root AGENTS.md.
 2. Document any new platform interactions introduced within src/test-support and ensure they remain cross-platform safe.
-3. Add focused Jest coverage under src/test-support/**tests**/ for each new code path.
+3. Add focused Jest coverage under `src/test-support/__tests__/` for each new code path.
 4. Prefer composable utilities and dependency injection so that the test-support module remains testable.
 
 ### Notes

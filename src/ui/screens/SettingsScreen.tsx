@@ -39,9 +39,12 @@ export const SettingsScreen: React.FC = () => {
     [adaptive.breakpoint],
   );
   const diagnosticsAvailable = diagnostics.status === 'ready';
-  const diagnosticsSummary = diagnosticsAvailable
-    ? `${Math.round(diagnostics.renderLoad * 100)}% render load • ${diagnostics.xruns} xruns detected`
-    : 'Render load: Unavailable • XRun count: Unavailable';
+  const diagnosticsSummary =
+    diagnostics.status === 'ready'
+      ? `${Math.round(diagnostics.renderLoad * 100)}% render load • ${diagnostics.xruns} xruns detected`
+      : diagnostics.status === 'error'
+        ? diagnostics.error?.message || 'Audio diagnostics failed.'
+        : 'Render load: Unavailable • XRun count: Unavailable';
   const toggleDetails = useCallback(() => setDetailsVisible((visible) => !visible), []);
 
   return (

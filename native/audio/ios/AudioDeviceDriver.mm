@@ -111,9 +111,9 @@ void CleanupEngine(AVAudioEngine* engine, AVAudioSourceNode* sourceNode, BOOL so
 }
 
 - (void)handleAudioConfigurationChange:(NSNotification*)notification {
-  if (_engine == nil) {
-    return;
-  }
+  // Notifications can arrive on arbitrary threads. Keep this handler cheap;
+  // consumers such as AudioEngineModule re-dispatch recovery to their serial
+  // audio-control queue.
   if ([notification.name
           isEqualToString:AVAudioSessionRouteChangeNotification]) {
     NSNumber* reason =

@@ -122,6 +122,8 @@ class AudioEngineBridge {
 
   static std::unique_ptr<SceneGraph> legacyGraph_;
   static std::unique_ptr<GraphTransactionHost> transactionHost_;
+  // Non-owning alias to legacyGraph_ or transactionHost_'s SceneGraph; repoint
+  // it whenever either owner is reset.
   static SceneGraph* graph_;
   static std::mutex mutex_;
   static RealtimeControlPlane realtimePlane_;

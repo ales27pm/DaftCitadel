@@ -1,6 +1,7 @@
 #include <jni.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -28,6 +29,10 @@ using daft::audio::GraphFailureStageName;
 using daft::audio::PreparedGraphNode;
 
 namespace {
+
+constexpr std::size_t kOutputChannelCount = 2U;
+std::vector<float> gRenderScratch;
+std::size_t gRenderFrameCapacity = 0U;
 
 /**
  * @brief Converts a Java UTF-8 string to a C++ std::string.
@@ -278,6 +283,8 @@ JNIEXPORT void JNICALL
 Java_com_daftcitadel_audio_AudioEngineModule_nativeInitialize(JNIEnv* env, jobject /*thiz*/, jdouble sampleRate,
                                                              jint framesPerBuffer) {
   try {
+    std::vector<float> preparedRenderScratch(
+        static_cast<std::size_t>(framesPerBuffer) * kOutputChannelCount);
     AudioEngineBridge::initialize(env, sampleRate, static_cast<std::uint32_t>(framesPerBuffer));
     const auto graphInitialization =
         AudioEngineBridge::initializeGraphTransactions(
@@ -290,6 +297,8 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeInitialize(JNIEnv* env, jobje
       AudioEngineBridge::shutdown();
       throw std::runtime_error(detail);
     }
+    gRenderScratch = std::move(preparedRenderScratch);
+    gRenderFrameCapacity = static_cast<std::size_t>(framesPerBuffer);
   } catch (const std::exception& ex) {
     ThrowJavaException(env, "java/lang/RuntimeException", ex.what());
   }
@@ -310,8 +319,76 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeShutdown(JNIEnv* env, jobject
   try {
     (void)AudioEngineBridge::invalidateGraphTransactions();
     AudioEngineBridge::shutdown();
+    gRenderScratch.clear();
+    gRenderFrameCapacity = 0U;
   } catch (const std::exception& ex) {
     ThrowJavaException(env, "java/lang/RuntimeException", ex.what());
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeRenderInterleaved(
+    JNIEnv* env, jobject /*thiz*/, jfloatArray output, jint channelCount,
+    jint frameCount) {
+  if (output == nullptr) {
+    return;
+  }
+  const auto outputLength =
+      static_cast<std::size_t>(env->GetArrayLength(output));
+  auto* interleaved =
+      static_cast<jfloat*>(env->GetPrimitiveArrayCritical(output, nullptr));
+  if (interleaved == nullptr) {
+    return;
+  }
+
+  const bool valid =
+      channelCount > 0 &&
+      static_cast<std::size_t>(channelCount) <= kOutputChannelCount &&
+      frameCount > 0 &&
+      static_cast<std::size_t>(frameCount) <= gRenderFrameCapacity &&
+      outputLength >=
+          static_cast<std::size_t>(channelCount) *
+              static_cast<std::size_t>(frameCount);
+  if (!valid) {
+    std::fill(interleaved, interleaved + outputLength, 0.0F);
+    env->ReleasePrimitiveArrayCritical(output, interleaved, 0);
+    return;
+  }
+
+  const auto channels = static_cast<std::size_t>(channelCount);
+  const auto frames = static_cast<std::size_t>(frameCount);
+  std::fill(gRenderScratch.begin(), gRenderScratch.end(), 0.0F);
+  std::array<float*, kOutputChannelCount> planar{
+      gRenderScratch.data(),
+      gRenderScratch.data() + gRenderFrameCapacity,
+  };
+  AudioEngineBridge::render(planar.data(), channels, frames);
+  for (std::size_t frame = 0; frame < frames; ++frame) {
+    for (std::size_t channel = 0; channel < channels; ++channel) {
+      interleaved[frame * channels + channel] =
+          planar[channel][frame];
+    }
+  }
+  env->ReleasePrimitiveArrayCritical(output, interleaved, 0);
+}
+
+JNIEXPORT jobjectArray JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeRecoverAfterAudioConfigurationChange(
+    JNIEnv* env, jobject /*thiz*/) {
+  try {
+    const auto transport = AudioEngineBridge::getTransportState();
+    AudioEngineBridge::stopTransport();
+    const auto recovery =
+        AudioEngineBridge::recoverAfterAudioConfigurationChange();
+    if (recovery.status == GraphApplyStatus::Committed &&
+        transport.isPlaying) {
+      AudioEngineBridge::locateTransport(transport.currentFrame);
+      AudioEngineBridge::startTransport();
+    }
+    return EncodeGraphApplyResult(env, recovery);
+  } catch (const std::exception& ex) {
+    ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
+    return nullptr;
   }
 }
 

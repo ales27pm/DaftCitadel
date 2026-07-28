@@ -53,6 +53,9 @@ if(DAFT_AUDIO_ENGINE_ENABLE_SANITIZERS)
 endif()
 
 if(DAFT_AUDIO_ENGINE_BUILD_TESTS)
+    target_compile_definitions(daft_audio_engine
+        PUBLIC DAFT_AUDIO_ENABLE_GRAPH_FAULT_INJECTION=1
+    )
     enable_testing()
     find_package(Threads REQUIRED)
     add_executable(daft_audio_engine_tests

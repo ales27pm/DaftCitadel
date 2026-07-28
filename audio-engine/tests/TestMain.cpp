@@ -10,16 +10,15 @@ void RunInstrumentNodeTests();
 void RunRealtimeControlQueueTests();
 void RunRealtimeControlPlaneTests();
 void RunSceneGraphTests();
-}  // namespace daft::audio::tests
-
 void RunRenderPlanTests();
 void RunGraphTransactionHostTests();
+}  // namespace daft::audio::tests
 
 int main() {
-  daft::audio::tests::RunSceneGraphTests();
-  RunRenderPlanTests();
-  RunGraphTransactionHostTests();
   try {
+    daft::audio::tests::RunSceneGraphTests();
+    daft::audio::tests::RunRenderPlanTests();
+    daft::audio::tests::RunGraphTransactionHostTests();
     daft::audio::tests::RunSchedulerTests();
     daft::audio::tests::RunClipPlayerNodeTests();
     daft::audio::tests::RunPluginNodeTests();

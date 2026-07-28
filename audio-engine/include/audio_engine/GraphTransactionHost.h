@@ -20,7 +20,9 @@ struct GraphApplyRequest {
   std::uint64_t expectedEngineInstance{0};
   std::vector<PreparedGraphNode> nodes;
   std::vector<GraphConnectionDefinition> connections;
+#if defined(DAFT_AUDIO_ENABLE_GRAPH_FAULT_INJECTION)
   GraphFailureStage injectedFailure{GraphFailureStage::None};
+#endif
 };
 
 // Owns the complete graph lifecycle on the control path. The publish callback
@@ -28,6 +30,9 @@ struct GraphApplyRequest {
 // quiesce callback proves that retired plans can be destroyed safely.
 class GraphTransactionHost final {
  public:
+  // Both callbacks run while mutex_ is held. They must not re-enter this host,
+  // including through isInitialized() or describeGraph(), and must complete
+  // within the caller's expected blocking budget.
   using PublishCallback =
       std::function<bool(SceneGraph* graph, std::uint64_t engineInstance)>;
   using QuiesceCallback = std::function<void()>;
