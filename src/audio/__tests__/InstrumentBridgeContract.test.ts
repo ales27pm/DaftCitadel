@@ -12,11 +12,108 @@ const methodBody = (source: string, startMarker: string, endMarker: string): str
   return source.slice(start, end);
 };
 
-const expectRealtimeCallbackContract = (source: string): void => {
-  expect(source).not.toMatch(
-    /std::lock_guard|std::unique_lock|std::try_to_lock|pthread_mutex|@catch|\bcatch\b|\bthrow\b|os_log|__android_log_print|ThrowJavaException|\bLog\./,
-  );
-  expect(source).not.toMatch(/\bnew\s|std::vector<|malloc\(|calloc\(|realloc\(/);
+const stripNativeSourceComments = (source: string): string => {
+  let result = '';
+  let state: 'code' | 'lineComment' | 'blockComment' | 'singleQuote' | 'doubleQuote' =
+    'code';
+
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    const next = source[index + 1];
+
+    if (state === 'lineComment') {
+      if (character === '\n') {
+        state = 'code';
+        result += character;
+      } else {
+        result += ' ';
+      }
+      continue;
+    }
+
+    if (state === 'blockComment') {
+      if (character === '*' && next === '/') {
+        state = 'code';
+        result += '  ';
+        index += 1;
+      } else {
+        result += character === '\n' ? '\n' : ' ';
+      }
+      continue;
+    }
+
+    if (state === 'singleQuote' || state === 'doubleQuote') {
+      result += character;
+      if (character === '\\' && next !== undefined) {
+        result += next;
+        index += 1;
+        continue;
+      }
+      if (
+        (state === 'singleQuote' && character === "'") ||
+        (state === 'doubleQuote' && character === '"')
+      ) {
+        state = 'code';
+      }
+      continue;
+    }
+
+    if (character === '/' && next === '/') {
+      state = 'lineComment';
+      result += '  ';
+      index += 1;
+      continue;
+    }
+    if (character === '/' && next === '*') {
+      state = 'blockComment';
+      result += '  ';
+      index += 1;
+      continue;
+    }
+    if (character === "'") {
+      state = 'singleQuote';
+    } else if (character === '"') {
+      state = 'doubleQuote';
+    }
+    result += character;
+  }
+
+  return result;
+};
+
+const realtimeForbiddenPatterns: Array<{ label: string; pattern: RegExp }> = [
+  {
+    label: 'lock acquisition',
+    pattern:
+      /\bstd::(?:lock_guard|unique_lock)\s*<|\bstd::try_to_lock\b|\bpthread_mutex_\w+\s*\(/,
+  },
+  {
+    label: 'exception handling',
+    pattern:
+      /@catch\s*\(|@throw\b|\bcatch\s*\(|\bthrow(?:\s+|;)|\bThrowJavaException\s*\(/,
+  },
+  {
+    label: 'logging',
+    pattern:
+      /\bos_log(?:_[a-z_]+)?\s*\(|\b__android_log_(?:print|write|assert)\s*\(|\bNSLog\s*\(|\bLog\.(?:v|d|i|w|e|wtf)\s*\(/,
+  },
+  {
+    label: 'allocation',
+    pattern:
+      /\bnew\s+(?:[A-Za-z_:]|\()|\bstd::vector\s*<|\bstd::(?:make_unique|make_shared)\s*<|\b(?:malloc|calloc|realloc)\s*\(/,
+  },
+];
+
+const expectRealtimeCallbackContract = (name: string, source: string): void => {
+  const uncommentedSource = stripNativeSourceComments(source);
+  for (const { label, pattern } of realtimeForbiddenPatterns) {
+    const match = uncommentedSource.match(pattern);
+    if (match) {
+      throw new Error(
+        `Realtime callback contract violated for ${name}: found ${label} token "${match[0]}"`,
+      );
+    }
+  }
 };
 
 describe('instrument native bridge contract', () => {
@@ -155,6 +252,27 @@ describe('instrument native bridge contract', () => {
     expect(androidDeviceDriver).toContain('running.set(false)');
   });
 
+  it('ignores comments and similarly named identifiers in realtime callback probes', () => {
+    expect(() =>
+      expectRealtimeCallbackContract(
+        'comment probe',
+        `
+          // catch (...) { Log.e("comment only"); throw std::runtime_error("comment"); }
+          /* std::vector<float> scratch; os_log("comment only"); new ScratchBuffer(); */
+          auto catchment = 0;
+          auto throwaway = catchment;
+          auto LogState = throwaway;
+        `,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      expectRealtimeCallbackContract(
+        'diagnostic probe',
+        'throw std::runtime_error("bad");',
+      ),
+    ).toThrow(/diagnostic probe/);
+  });
+
   it('keeps native callback entry points free of locks, logging, exceptions, and allocations', () => {
     const iosBridgeRender = methodBody(
       iosBridge,
@@ -191,12 +309,16 @@ describe('instrument native bridge contract', () => {
     expect(androidJniRender).toContain('AudioEngineBridge::render(');
     expect(androidJniRender).toContain('gRenderScratch');
 
-    [
-      iosBridgeRender,
-      androidBridgeRender,
-      realtimePlaneRender,
-      iosSourceNodeRenderBlock,
-      androidJniRender,
-    ].forEach(expectRealtimeCallbackContract);
+    const realtimeCallbackEntries = [
+      { name: 'iOS bridge render', source: iosBridgeRender },
+      { name: 'Android bridge render', source: androidBridgeRender },
+      { name: 'realtime control plane render', source: realtimePlaneRender },
+      { name: 'iOS source node render block', source: iosSourceNodeRenderBlock },
+      { name: 'Android JNI render entry point', source: androidJniRender },
+    ];
+
+    realtimeCallbackEntries.forEach(({ name, source }) => {
+      expectRealtimeCallbackContract(name, source);
+    });
   });
 });

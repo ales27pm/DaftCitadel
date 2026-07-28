@@ -145,15 +145,38 @@ describe('createSessionActions', () => {
     expect(manager.getSession()?.tracks.at(-1)).toEqual(addedTrack);
   });
 
-  it('rejects new Juno session work when the rollout flag is disabled', async () => {
-    process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106 = 'false';
+  it.each(['', 'false', 'disabled', 'unexpected'])(
+    'rejects new Juno session work when the rollout flag is %p',
+    async (flagValue) => {
+      process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106 = flagValue;
+      const manager = await createManager();
+      const actions = createSessionActions(manager);
+
+      const update = actions.addJunoTrack();
+
+      await expect(update).rejects.toBeInstanceOf(SessionStorageError);
+      await expect(update).rejects.toThrow(
+        'Juno-106 instrument is disabled by EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106',
+      );
+      expect(manager.getSession()?.tracks).toHaveLength(0);
+    },
+  );
+
+  it('allows new Juno session work when the rollout flag is explicitly enabled', async () => {
+    process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106 = 'enabled';
     const manager = await createManager();
     const actions = createSessionActions(manager);
 
-    await expect(actions.addJunoTrack()).rejects.toThrow(
-      'Juno-106 instrument is disabled by EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106',
+    const updated = await actions.addJunoTrack();
+
+    expect(updated.tracks.at(-1)?.routing.graph?.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'instrument',
+          instrumentType: 'juno106',
+        }),
+      ]),
     );
-    expect(manager.getSession()?.tracks).toHaveLength(0);
   });
 
   it('adds a playable four-bar MIDI starter clip to a Juno track', async () => {
