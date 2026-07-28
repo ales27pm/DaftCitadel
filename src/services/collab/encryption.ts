@@ -66,10 +66,7 @@ function concatBytes(first: Uint8Array, second: Uint8Array): Uint8Array {
 }
 
 function encodeBase64Url(bytes: Uint8Array): string {
-  return encodeBase64(bytes)
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/g, '');
+  return encodeBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
 function deriveAuthenticationKey(

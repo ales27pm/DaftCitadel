@@ -17,10 +17,7 @@ import {
 } from '../screens';
 import { useAdaptiveLayout } from '../layout';
 import { SessionAppProvider } from '../session';
-import {
-  APP_TAB_SEQUENCE as APP_TAB_SEQUENCE_SPEC,
-  type AppTabName,
-} from './tab-spec';
+import { APP_TAB_SEQUENCE as APP_TAB_SEQUENCE_SPEC, type AppTabName } from './tab-spec';
 
 export type ArrangementStackParamList = {
   ArrangementHome: undefined;

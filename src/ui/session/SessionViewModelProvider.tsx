@@ -54,10 +54,7 @@ interface TransportController {
 
 export interface InstrumentControlsHandle {
   isAvailable: boolean;
-  sendInstrumentMidi: (
-    nodeId: string,
-    event: AudioInstrumentMidiEvent,
-  ) => Promise<void>;
+  sendInstrumentMidi: (nodeId: string, event: AudioInstrumentMidiEvent) => Promise<void>;
   setInstrumentParameter: (
     nodeId: string,
     change: InstrumentParameterChange,

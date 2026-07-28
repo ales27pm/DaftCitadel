@@ -28,9 +28,7 @@ describe('instrument native bridge contract', () => {
     'native/audio/android/src/main/java/com/daftcitadel/audio/AudioTrackDeviceDriver.kt',
   );
   const sceneGraph = readRepositoryFile('audio-engine/src/SceneGraph.cpp');
-  const controlPlane = readRepositoryFile(
-    'audio-engine/src/RealtimeControlPlane.cpp',
-  );
+  const controlPlane = readRepositoryFile('audio-engine/src/RealtimeControlPlane.cpp');
 
   const operations = [
     'sendMidiEvent',

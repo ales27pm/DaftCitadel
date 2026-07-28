@@ -70,10 +70,7 @@ export const MidiPianoRoll: React.FC<MidiPianoRollProps> = ({
       const visibleBeats = Math.ceil(windowWidth / signatureBeatWidth);
       const startBeat = Math.floor(scrollOffsetX / signatureBeatWidth);
       setGridState((previous) => {
-        if (
-          previous.startBeat === startBeat &&
-          previous.visibleBeats === visibleBeats
-        ) {
+        if (previous.startBeat === startBeat && previous.visibleBeats === visibleBeats) {
           return previous;
         }
         return { visibleBeats, startBeat };

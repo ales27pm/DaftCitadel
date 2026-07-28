@@ -188,12 +188,7 @@ export const TOKENS_BY_SCHEME: Record<'light' | 'dark', ThemeTokens> = {
 };
 
 export type ThemeIntent =
-  | 'primary'
-  | 'secondary'
-  | 'tertiary'
-  | 'success'
-  | 'warning'
-  | 'critical';
+  'primary' | 'secondary' | 'tertiary' | 'success' | 'warning' | 'critical';
 
 export const mapIntentToColor = (theme: ThemeTokens, intent: ThemeIntent): string => {
   switch (intent) {

@@ -232,6 +232,7 @@ describe('NativeAudioEngine TurboModule', () => {
     it('uploads clip buffers before configuring clip playback nodes', async () => {
       const frames = 128;
       const channel = new Float32Array(frames);
+      const registerClipBuffer = jest.spyOn(NativeAudioEngine, 'registerClipBuffer');
       for (let index = 0; index < frames; index += 1) {
         channel[index] = index / frames;
       }
@@ -239,6 +240,10 @@ describe('NativeAudioEngine TurboModule', () => {
       new Float32Array(rawBuffer).set(channel);
 
       await engine.uploadClipBuffer('intro', 48000, 1, frames, [rawBuffer]);
+      expect(registerClipBuffer).toHaveBeenCalledWith('intro', 48000, 1, frames, [
+        expect.any(String),
+      ]);
+      registerClipBuffer.mockRestore();
 
       await engine.configureNodes([
         { id: 'clip-player', type: 'clip', options: { bufferKey: 'intro' } },

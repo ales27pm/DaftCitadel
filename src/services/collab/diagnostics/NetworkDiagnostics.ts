@@ -206,8 +206,7 @@ class DefaultNetworkDiagnostics implements NetworkDiagnostics {
 
 export function createNetworkDiagnostics(): NetworkDiagnostics {
   const nativeModule = NativeModules.CollabNetworkDiagnostics as
-    | NativeDiagnosticsModule
-    | undefined;
+    NativeDiagnosticsModule | undefined;
 
   return new DefaultNetworkDiagnostics(nativeModule);
 }

@@ -44,11 +44,7 @@ export interface CollabSessionOptions<T> {
 export type CollabSessionRole = 'initiator' | 'responder';
 
 export type CollaborationConnectionState =
-  | 'idle'
-  | 'connecting'
-  | 'connected'
-  | 'reconnecting'
-  | 'disconnected';
+  'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 
 export interface CollabSessionHealthSnapshot {
   readonly role: CollabSessionRole | null;
@@ -64,21 +60,10 @@ export interface CollabSessionHealthSnapshot {
 type HealthListener = (snapshot: CollabSessionHealthSnapshot) => void;
 
 type PeerConnectionState =
-  | 'new'
-  | 'connecting'
-  | 'connected'
-  | 'disconnected'
-  | 'failed'
-  | 'closed';
+  'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed';
 
 type IceConnectionState =
-  | 'new'
-  | 'checking'
-  | 'connected'
-  | 'completed'
-  | 'failed'
-  | 'disconnected'
-  | 'closed';
+  'new' | 'checking' | 'connected' | 'completed' | 'failed' | 'disconnected' | 'closed';
 
 type ExtendedPeerConnection = RTCPeerConnection & {
   onconnectionstatechange?: () => void;

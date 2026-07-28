@@ -11,11 +11,7 @@ export interface TransportControlsHandle {
   locateFrame: (frame: number) => Promise<void>;
   locateBeats: (beats: number) => Promise<void>;
   locateStart: () => Promise<void>;
-  setLoopBeats: (
-    startBeat: number,
-    endBeat: number,
-    enabled: boolean,
-  ) => Promise<void>;
+  setLoopBeats: (startBeat: number, endBeat: number, enabled: boolean) => Promise<void>;
   isAvailable: boolean;
   isLoopAvailable: boolean;
   isPlaying: boolean;

@@ -68,10 +68,7 @@ export interface Juno106PresetRecord {
 }
 
 export type Juno106PresetValidationErrorCode =
-  | 'bounds'
-  | 'format'
-  | 'version'
-  | 'validation';
+  'bounds' | 'format' | 'version' | 'validation';
 
 export class Juno106PresetValidationError extends Error {
   constructor(

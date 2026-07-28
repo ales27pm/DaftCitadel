@@ -1,18 +1,8 @@
 import { ClockSyncService, type AutomationLane } from './Automation';
-import {
-  createWebAudioContext,
-  isWebAudioEngineAvailable,
-} from './webAudioSupport';
-import type {
-  NodeConfiguration,
-  RenderDiagnostics,
-  TransportState,
-} from './AudioEngine';
+import { createWebAudioContext, isWebAudioEngineAvailable } from './webAudioSupport';
+import type { NodeConfiguration, RenderDiagnostics, TransportState } from './AudioEngine';
 
-export type AutomationPublisher = (
-  nodeId: string,
-  lane: AutomationLane,
-) => Promise<void>;
+export type AutomationPublisher = (nodeId: string, lane: AutomationLane) => Promise<void>;
 
 type ChannelPayload = ArrayBuffer | ArrayBufferView;
 
@@ -149,9 +139,7 @@ export class AudioEngine {
 
       const options = node.options ?? {};
       const audioNode = this.context.createGain();
-      const gain = Number.isFinite(options.gain as number)
-        ? (options.gain as number)
-        : 1;
+      const gain = Number.isFinite(options.gain as number) ? (options.gain as number) : 1;
       audioNode.gain.value = gain;
 
       const entry: GenericAudioNode = {
@@ -173,18 +161,14 @@ export class AudioEngine {
               ? String(clipOptions.bufferKey)
               : undefined,
           startFrame:
-            Number.isFinite(startFrameValue as number) &&
-            (startFrameValue as number) >= 0
+            Number.isFinite(startFrameValue as number) && (startFrameValue as number) >= 0
               ? Math.max(0, Math.floor(startFrameValue as number))
               : undefined,
           endFrame:
             Number.isFinite(endFrameValue as number) && (endFrameValue as number) >= 0
               ? Math.floor(endFrameValue as number)
               : undefined,
-          gain:
-            Number.isFinite(gainValue as number)
-              ? (gainValue as number)
-              : undefined,
+          gain: Number.isFinite(gainValue as number) ? (gainValue as number) : undefined,
         };
       }
 
@@ -345,14 +329,10 @@ export class AudioEngine {
       throw new Error('sampleRate must be a positive number');
     }
     if (!Number.isInteger(channels) || channels <= 0 || channels > 64) {
-      throw new Error(
-        'channels must be a positive integer less than or equal to 64',
-      );
+      throw new Error('channels must be a positive integer less than or equal to 64');
     }
     if (!Number.isInteger(frames) || frames <= 0 || frames > 10_000_000) {
-      throw new Error(
-        'frames must be a positive integer not exceeding 10,000,000',
-      );
+      throw new Error('frames must be a positive integer not exceeding 10,000,000');
     }
     if (!Array.isArray(channelData) || channelData.length !== channels) {
       throw new Error('channelData length must equal channels');
@@ -372,9 +352,7 @@ export class AudioEngine {
       const source = ensureArrayBuffer(channel);
       const sourceFrames = source.byteLength / Float32Array.BYTES_PER_ELEMENT;
       if (!Number.isFinite(sourceFrames) || sourceFrames < frames) {
-        throw new Error(
-          `channelData[${index}] is insufficient for ${frames} frames`,
-        );
+        throw new Error(`channelData[${index}] is insufficient for ${frames} frames`);
       }
       const sourceChannel = new Float32Array(source);
       const sourceLength = sourceChannel.length;
@@ -554,9 +532,7 @@ export class AudioEngine {
       return this.transportFrame;
     }
     const elapsedFrames = this.clock.quantizeFrameToBuffer(
-      Math.floor(
-        ((this.nowMs() - this.transportStartedAtMs) / 1000) * this.sampleRate,
-      ),
+      Math.floor(((this.nowMs() - this.transportStartedAtMs) / 1000) * this.sampleRate),
     );
     return this.transportStartFrame + elapsedFrames;
   }

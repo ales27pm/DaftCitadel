@@ -52,7 +52,8 @@ const WEB_HASH_PREFIX = '#/';
 export const DEFAULT_WEB_TAB = APP_TAB_SEQUENCE_SPEC[0];
 
 export const isKnownAppTab = (value: unknown): value is AppTabName =>
-  typeof value === 'string' && (APP_TAB_SEQUENCE_SPEC as ReadonlyArray<string>).includes(value);
+  typeof value === 'string' &&
+  (APP_TAB_SEQUENCE_SPEC as ReadonlyArray<string>).includes(value);
 
 const resolveWindow = (): BrowserWindow | null => {
   const windowValue = (globalThis as { window?: unknown }).window;
@@ -79,7 +80,9 @@ export const extractTabFromState = (state: unknown): AppTabName | null => {
   return isKnownAppTab(candidate) ? candidate : null;
 };
 
-export const readWebTabFromStorage = (storage?: BrowserWindow['localStorage']): AppTabName | null => {
+export const readWebTabFromStorage = (
+  storage?: BrowserWindow['localStorage'],
+): AppTabName | null => {
   if (!storage) {
     return null;
   }
@@ -131,9 +134,7 @@ export const extractTabFromBrowserState = (
   browser: BrowserWindow | null | undefined,
   state: unknown,
 ): AppTabName | null =>
-  extractTabFromState(state) ??
-  extractTabFromHash(browser?.location?.hash ?? '') ??
-  null;
+  extractTabFromState(state) ?? extractTabFromHash(browser?.location?.hash ?? '') ?? null;
 
 export type ArrangementStackParamList = {
   ArrangementHome: undefined;
@@ -199,7 +200,9 @@ const TAB_ICON_BY_NAME: Record<AppTabName, string> = {
 const WebTabNavigator: React.FC = () => {
   const theme = useTheme();
   const browser = useMemo(() => resolveWindow(), []);
-  const [activeTab, setActiveTab] = useState<AppTabName>(() => resolveInitialWebTab(browser));
+  const [activeTab, setActiveTab] = useState<AppTabName>(() =>
+    resolveInitialWebTab(browser),
+  );
   const activeTabRef = useRef<AppTabName>(activeTab);
   const activeScreen = TAB_SCREEN_BY_NAME[activeTab];
   const ActiveScreen = activeScreen;
@@ -264,7 +267,11 @@ const WebTabNavigator: React.FC = () => {
               <Text
                 style={[
                   styles.icon,
-                  { color: selected ? theme.colors.accentPrimary : theme.colors.textSecondary },
+                  {
+                    color: selected
+                      ? theme.colors.accentPrimary
+                      : theme.colors.textSecondary,
+                  },
                 ]}
               >
                 {icon}

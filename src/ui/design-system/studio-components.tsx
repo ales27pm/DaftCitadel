@@ -118,13 +118,7 @@ export const StudioIcon: React.FC<StudioIconProps> = ({ name, color, size = 18 }
 };
 
 export type StudioTextVariant =
-  | 'caption'
-  | 'label'
-  | 'body'
-  | 'bodyLarge'
-  | 'sectionTitle'
-  | 'screenTitle'
-  | 'metric';
+  'caption' | 'label' | 'body' | 'bodyLarge' | 'sectionTitle' | 'screenTitle' | 'metric';
 
 export interface StudioTextProps extends TextProps {
   variant?: StudioTextVariant;

@@ -115,21 +115,10 @@ type ChannelMessageHandler = (data: unknown) => void;
 type RTCDataChannelState = 'connecting' | 'open' | 'closing' | 'closed';
 
 type RTCPeerConnectionState =
-  | 'new'
-  | 'connecting'
-  | 'connected'
-  | 'disconnected'
-  | 'failed'
-  | 'closed';
+  'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed';
 
 type RTCIceConnectionState =
-  | 'new'
-  | 'checking'
-  | 'connected'
-  | 'completed'
-  | 'failed'
-  | 'disconnected'
-  | 'closed';
+  'new' | 'checking' | 'connected' | 'completed' | 'failed' | 'disconnected' | 'closed';
 
 class MockRTCDataChannel {
   readonly label: string;
@@ -306,8 +295,7 @@ describe('CollabSessionService', () => {
 
     const remoteUpdates: CollabPayload<{ text: string }>[] = [];
     let resolveFirstUpdate:
-      | ((payload: CollabPayload<{ text: string }>) => void)
-      | undefined;
+      ((payload: CollabPayload<{ text: string }>) => void) | undefined;
     const firstUpdate = new Promise<CollabPayload<{ text: string }>>((resolve) => {
       resolveFirstUpdate = resolve;
     });

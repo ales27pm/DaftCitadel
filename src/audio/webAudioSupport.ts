@@ -1,15 +1,9 @@
 type AudioContextOptions = {
   sampleRate?: number;
-  latencyHint?:
-    | 'balanced'
-    | 'interactive'
-    | 'playback'
-    | number;
+  latencyHint?: 'balanced' | 'interactive' | 'playback' | number;
 };
 
-type AudioContextConstructor = new (
-  options?: AudioContextOptions,
-) => AudioContext;
+type AudioContextConstructor = new (options?: AudioContextOptions) => AudioContext;
 
 type WindowAudioConstructors = {
   AudioContext?: unknown;
@@ -31,17 +25,13 @@ const resolveAudioContextConstructor = (): AudioContextConstructor | null => {
   return null;
 };
 
-export const createWebAudioContext = (
-  sampleRate?: number,
-): AudioContext | null => {
+export const createWebAudioContext = (sampleRate?: number): AudioContext | null => {
   const constructor = resolveAudioContextConstructor();
   if (!constructor) {
     return null;
   }
   try {
-    return sampleRate == null
-      ? new constructor()
-      : new constructor({ sampleRate });
+    return sampleRate == null ? new constructor() : new constructor({ sampleRate });
   } catch (error) {
     console.warn('Failed to create AudioContext for web audio engine', error);
     return null;

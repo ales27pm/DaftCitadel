@@ -13,12 +13,7 @@ const CHECKSUM_DATA_END = 22;
 const CHECKSUM_INDEX = 23;
 
 export type Juno106SysExErrorCode =
-  | 'empty'
-  | 'bounds'
-  | 'length'
-  | 'format'
-  | 'data'
-  | 'checksum';
+  'empty' | 'bounds' | 'length' | 'format' | 'data' | 'checksum';
 
 export class Juno106SysExError extends Error {
   constructor(

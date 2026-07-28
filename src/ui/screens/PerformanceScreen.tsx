@@ -28,7 +28,9 @@ export const PerformanceScreen: React.FC = () => {
     () => ({
       transform: [
         {
-          scale: adaptive.prefersReducedMotion ? 1 : 1 + (1 - diagnostics.renderLoad) * 0.2,
+          scale: adaptive.prefersReducedMotion
+            ? 1
+            : 1 + (1 - diagnostics.renderLoad) * 0.2,
         },
       ],
     }),

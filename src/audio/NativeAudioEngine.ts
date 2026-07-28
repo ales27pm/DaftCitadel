@@ -39,7 +39,7 @@ export interface AudioEngineSpec extends TurboModule {
     sampleRate: number,
     channels: number,
     frames: number,
-    channelData: ArrayBuffer[],
+    channelData: string[],
   ): Promise<void>;
   unregisterClipBuffer(bufferKey: string): Promise<void>;
   removeNode(nodeId: NodeId): Promise<void>;
@@ -51,10 +51,7 @@ export interface AudioEngineSpec extends TurboModule {
     frame: number,
     value: number,
   ): Promise<void>;
-  sendInstrumentMidi(
-    nodeId: NodeId,
-    event: AudioInstrumentMidiEvent,
-  ): Promise<void>;
+  sendInstrumentMidi(nodeId: NodeId, event: AudioInstrumentMidiEvent): Promise<void>;
   setInstrumentParameter?(
     nodeId: NodeId,
     change: InstrumentParameterChange,
@@ -154,7 +151,7 @@ export const NativeAudioEngine: AudioEngineSpec = {
     sampleRate: number,
     channels: number,
     frames: number,
-    channelData: ArrayBuffer[],
+    channelData: string[],
   ): Promise<void> {
     return requireNativeAudioEngineModule().registerClipBuffer(
       bufferKey,
@@ -189,10 +186,7 @@ export const NativeAudioEngine: AudioEngineSpec = {
       value,
     );
   },
-  sendInstrumentMidi(
-    nodeId: NodeId,
-    event: AudioInstrumentMidiEvent,
-  ): Promise<void> {
+  sendInstrumentMidi(nodeId: NodeId, event: AudioInstrumentMidiEvent): Promise<void> {
     return requireNativeAudioEngineModule().sendInstrumentMidi(nodeId, event);
   },
   setInstrumentParameter(

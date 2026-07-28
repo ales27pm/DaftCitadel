@@ -98,7 +98,8 @@ Expected outputs for this run:
 
    - `adb logcat` or equivalent capture for app diagnostics tags.
    - Trace exports for both lifecycle and sustained scenarios.
-  - `xruns` and `p50/p95/p99` values at end of each scenario.
+
+- `xruns` and `p50/p95/p99` values at end of each scenario.
 
 ## 5) Evidence row template (per scenario)
 

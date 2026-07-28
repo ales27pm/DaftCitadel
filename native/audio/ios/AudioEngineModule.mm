@@ -97,8 +97,109 @@ NodeOptions ConvertOptions(NSDictionary* options) {
   return converted;
 }
 
+NSString* NSStringFromStdString(const std::string& value) {
+  NSString* converted = [NSString stringWithUTF8String:value.c_str()];
+  return converted ?: @"Native audio operation failed";
+}
+
 void RejectPromise(RCTPromiseRejectBlock reject, NSString* code, const std::string& message) {
-  reject(code, [NSString stringWithUTF8String:message.c_str()], nil);
+  reject(code, NSStringFromStdString(message), nil);
+}
+
+void RejectObjectiveCException(RCTPromiseRejectBlock reject, NSString* code,
+                               NSString* operation, NSException* exception) {
+  NSString* reason = exception.reason ?: @"No exception reason supplied";
+  NSString* exceptionName = exception.name ?: @"NSException";
+  NSString* message = [NSString stringWithFormat:@"%@ failed: %@", operation, reason];
+  NSError* error = [NSError errorWithDomain:@"dev.daftcitadel.audio-bridge"
+                                       code:1
+                                   userInfo:@{
+                                     NSLocalizedDescriptionKey : message,
+                                     @"operation" : operation,
+                                     @"exceptionName" : exceptionName,
+                                     @"exceptionReason" : reason,
+                                   }];
+  os_log_error(ModuleLogger(), "%{public}@ raised %{public}@: %{public}@",
+               operation, exceptionName, reason);
+  reject(code, message, error);
+}
+
+void LogObjectiveCException(NSString* operation, NSException* exception) {
+  os_log_error(ModuleLogger(), "%{public}@ raised %{public}@: %{public}@",
+               operation, exception.name ?: @"NSException",
+               exception.reason ?: @"No exception reason supplied");
+}
+
+void PerformPromiseOperation(RCTPromiseRejectBlock reject, NSString* code,
+                             NSString* operation, RCTPromiseResolveBlock resolve,
+                             void (^body)(RCTPromiseResolveBlock, RCTPromiseRejectBlock)) {
+  enum class OutcomeState { pending, resolved, rejected };
+  __block OutcomeState state = OutcomeState::pending;
+  __block id resolvedValue = nil;
+  __block NSString* rejectedCode = nil;
+  __block NSString* rejectedMessage = nil;
+  __block NSError* rejectedError = nil;
+
+  RCTPromiseResolveBlock captureResolve = ^(id value) {
+    if (state != OutcomeState::pending) {
+      os_log_error(ModuleLogger(), "%{public}@ attempted to settle more than once", operation);
+      return;
+    }
+    state = OutcomeState::resolved;
+    resolvedValue = value;
+  };
+  RCTPromiseRejectBlock captureReject = ^(NSString* failureCode, NSString* message,
+                                           NSError* error) {
+    if (state != OutcomeState::pending) {
+      os_log_error(ModuleLogger(), "%{public}@ attempted to settle more than once", operation);
+      return;
+    }
+    state = OutcomeState::rejected;
+    rejectedCode = failureCode ?: code;
+    rejectedMessage = message ?: [NSString stringWithFormat:@"%@ failed", operation];
+    rejectedError = error;
+  };
+
+  try {
+    @try {
+      body(captureResolve, captureReject);
+    } @catch (NSException* exception) {
+      RejectObjectiveCException(captureReject, code, operation, exception);
+    }
+  } catch (const std::exception& ex) {
+    os_log_error(ModuleLogger(), "%{public}@ failed: %{public}s", operation, ex.what());
+    RejectPromise(captureReject, code, ex.what());
+  } catch (...) {
+    NSString* message = [NSString stringWithFormat:@"%@ failed", operation];
+    os_log_error(ModuleLogger(), "%{public}@ failed with an unknown C++ exception", operation);
+    captureReject(code, message, nil);
+  }
+
+  if (state == OutcomeState::pending) {
+    captureReject(@"internal_error",
+                  [NSString stringWithFormat:@"%@ completed without a result", operation], nil);
+  }
+
+  @try {
+    if (state == OutcomeState::resolved) {
+      resolve(resolvedValue);
+    } else {
+      reject(rejectedCode, rejectedMessage, rejectedError);
+    }
+  } @catch (NSException* exception) {
+    LogObjectiveCException([operation stringByAppendingString:@" promise settlement"], exception);
+  }
+}
+
+void ShutdownBridgeIfOwner(NSString* operation,
+                           AudioEngineBridge::EngineGeneration generation) {
+  if (generation == 0) {
+    return;
+  }
+  if (!AudioEngineBridge::shutdownIfOwner(generation)) {
+    os_log_info(ModuleLogger(), "%{public}@ did not own generation %llu", operation,
+                static_cast<unsigned long long>(generation));
+  }
 }
 
 bool EnsureInitialized(AudioEngineBridge::EngineGeneration generation, RCTPromiseRejectBlock reject) {
@@ -211,10 +312,39 @@ RCT_EXPORT_MODULE();
   return NO;
 }
 
+- (dispatch_queue_t)methodQueue {
+  static dispatch_queue_t audioControlQueue;
+  static dispatch_once_t onceToken;
+  dispatch_once(&onceToken, ^{
+    audioControlQueue =
+        dispatch_queue_create("dev.daftcitadel.audio-control", DISPATCH_QUEUE_SERIAL);
+  });
+  return audioControlQueue;
+}
+
+- (void)invalidate {
+  @try {
+    [self.audioDeviceDriver stop];
+  } @catch (NSException* exception) {
+    LogObjectiveCException(@"Audio engine invalidation", exception);
+  }
+  const auto generation = _engineGeneration;
+  _engineGeneration = 0;
+  self.configuredSampleRate = 0.0;
+  self.configuredFramesPerBuffer = 0U;
+  ShutdownBridgeIfOwner(@"Audio engine invalidation", generation);
+}
+
+- (void)dealloc {
+  [self invalidate];
+}
+
 RCT_EXPORT_METHOD(initialize:(double)sampleRate
                   framesPerBuffer:(nonnull NSNumber*)framesPerBuffer
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"initialize_failed", @"Audio engine initialization", resolve,
+                          ^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject) {
   if (!std::isfinite(sampleRate) || sampleRate <= 0.0 || framesPerBuffer == nil) {
     RejectPromise(reject, @"invalid_arguments", "Invalid sample rate or buffer size supplied to initialize");
     return;
@@ -245,10 +375,13 @@ RCT_EXPORT_METHOD(initialize:(double)sampleRate
     os_log_error(ModuleLogger(), "Initialize failed: %{public}s", ex.what());
     RejectPromise(reject, @"initialize_failed", ex.what());
   }
+  });
 }
 
 RCT_EXPORT_METHOD(shutdown:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"shutdown_failed", @"Audio engine shutdown", resolve,
+                          ^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject) {
   try {
     [self.audioDeviceDriver stop];
     const auto generation = _engineGeneration;
@@ -263,10 +396,13 @@ RCT_EXPORT_METHOD(shutdown:(RCTPromiseResolveBlock)resolve
     os_log_error(ModuleLogger(), "Shutdown failed: %{public}s", ex.what());
     RejectPromise(reject, @"shutdown_failed", ex.what());
   }
+  });
 }
 
 RCT_EXPORT_METHOD(startTransport:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"transport_start_failed", @"Audio transport start", resolve,
+                          ^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject) {
   const auto generation = _engineGeneration;
   if (!EnsureInitialized(generation, reject)) {
     return;
@@ -304,10 +440,13 @@ RCT_EXPORT_METHOD(startTransport:(RCTPromiseResolveBlock)resolve
   }
 
   resolve(nil);
+  });
 }
 
 RCT_EXPORT_METHOD(stopTransport:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"transport_stop_failed", @"Audio transport stop", resolve,
+                          ^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject) {
   const auto generation = _engineGeneration;
   if (!EnsureInitialized(generation, reject)) {
     return;
@@ -326,11 +465,14 @@ RCT_EXPORT_METHOD(stopTransport:(RCTPromiseResolveBlock)resolve
     os_log_error(ModuleLogger(), "stopTransport failed: %{public}s", ex.what());
     RejectPromise(reject, @"transport_stop_failed", ex.what());
   }
+  });
 }
 
 RCT_EXPORT_METHOD(locateTransport:(double)frame
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"transport_locate_failed", @"Locate audio transport", resolve,
+                          ^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject) {
   const auto generation = _engineGeneration;
   if (!EnsureInitialized(generation, reject)) {
     return;
@@ -346,6 +488,7 @@ RCT_EXPORT_METHOD(locateTransport:(double)frame
     os_log_error(ModuleLogger(), "locateTransport failed: %{public}s", ex.what());
     RejectPromise(reject, @"transport_locate_failed", ex.what());
   }
+  });
 }
 
 RCT_EXPORT_METHOD(setTransportLoop:(double)startFrame
@@ -353,6 +496,8 @@ RCT_EXPORT_METHOD(setTransportLoop:(double)startFrame
                   enabled:(BOOL)enabled
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"transport_loop_failed", @"Set audio transport loop", resolve,
+                          ^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject) {
   const auto generation = _engineGeneration;
   if (!EnsureInitialized(generation, reject)) {
     return;
@@ -370,10 +515,13 @@ RCT_EXPORT_METHOD(setTransportLoop:(double)startFrame
     os_log_error(ModuleLogger(), "setTransportLoop failed: %{public}s", ex.what());
     RejectPromise(reject, @"transport_loop_failed", ex.what());
   }
+  });
 }
 
 RCT_EXPORT_METHOD(getTransportState:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"transport_state_failed", @"Read audio transport state", resolve,
+                          ^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject) {
   const auto generation = _engineGeneration;
   if (!EnsureInitialized(generation, reject)) {
     return;
@@ -390,6 +538,7 @@ RCT_EXPORT_METHOD(getTransportState:(RCTPromiseResolveBlock)resolve
     os_log_error(ModuleLogger(), "getTransportState failed: %{public}s", ex.what());
     RejectPromise(reject, @"transport_state_failed", ex.what());
   }
+  });
 }
 
 RCT_EXPORT_METHOD(addNode:(NSString*)nodeId
@@ -397,6 +546,8 @@ RCT_EXPORT_METHOD(addNode:(NSString*)nodeId
                   options:(NSDictionary*)options
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"add_node_failed", @"Add audio node", resolve,
+                          ^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject) {
   if (nodeId.length == 0 || nodeType.length == 0) {
     RejectPromise(reject, @"invalid_arguments", "nodeId and nodeType are required");
     return;
@@ -422,6 +573,7 @@ RCT_EXPORT_METHOD(addNode:(NSString*)nodeId
     return;
   }
   resolve(nil);
+  });
 }
 
 RCT_EXPORT_METHOD(registerClipBuffer:(NSString*)bufferKey
@@ -431,6 +583,8 @@ RCT_EXPORT_METHOD(registerClipBuffer:(NSString*)bufferKey
                   channelData:(NSArray*)channelData
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"register_clip_failed", @"Register clip buffer", resolve,
+                          ^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject) {
   const std::string key = Trim(bufferKey.length > 0 ? [bufferKey UTF8String] : "");
   if (key.empty()) {
     RejectPromise(reject, @"invalid_arguments", "bufferKey is required");
@@ -500,11 +654,18 @@ RCT_EXPORT_METHOD(registerClipBuffer:(NSString*)bufferKey
 
   for (NSUInteger index = 0; index < channelCountUnsigned; ++index) {
     id entry = channelData[index];
-    if (![entry isKindOfClass:[NSData class]]) {
-      RejectPromise(reject, @"invalid_arguments", "channelData entries must be ArrayBuffer instances");
+    NSData* data = nil;
+    if ([entry isKindOfClass:[NSData class]]) {
+      data = (NSData*)entry;
+    } else if ([entry isKindOfClass:[NSString class]]) {
+      data = [[NSData alloc] initWithBase64EncodedString:(NSString*)entry
+                                                options:NSDataBase64DecodingIgnoreUnknownCharacters];
+    }
+    if (data == nil) {
+      RejectPromise(reject, @"invalid_arguments",
+                    "channelData entries must be base64 Float32 PCM strings");
       return;
     }
-    NSData* data = (NSData*)entry;
     if (data.length < requiredBytes) {
       RejectPromise(reject, @"invalid_arguments", "channelData entry is smaller than the expected frame count");
       return;
@@ -522,11 +683,14 @@ RCT_EXPORT_METHOD(registerClipBuffer:(NSString*)bufferKey
     return;
   }
   resolve(nil);
+  });
 }
 
 RCT_EXPORT_METHOD(unregisterClipBuffer:(NSString*)bufferKey
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"unregister_clip_failed", @"Unregister clip buffer", resolve,
+                          ^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject) {
   NSString* trimmedKey = [bufferKey stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
   if (trimmedKey.length == 0) {
     RejectPromise(reject, @"invalid_arguments", "bufferKey is required");
@@ -543,11 +707,14 @@ RCT_EXPORT_METHOD(unregisterClipBuffer:(NSString*)bufferKey
     return;
   }
   resolve(nil);
+  });
 }
 
 RCT_EXPORT_METHOD(removeNode:(NSString*)nodeId
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"remove_node_failed", @"Remove audio node", resolve,
+                          ^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject) {
   if (nodeId.length == 0) {
     RejectPromise(reject, @"invalid_arguments", "nodeId is required");
     return;
@@ -563,12 +730,15 @@ RCT_EXPORT_METHOD(removeNode:(NSString*)nodeId
     os_log_error(ModuleLogger(), "removeNode failed: %{public}s", ex.what());
     RejectPromise(reject, @"remove_node_failed", ex.what());
   }
+  });
 }
 
 RCT_EXPORT_METHOD(connectNodes:(NSString*)source
                   destination:(NSString*)destination
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"connect_failed", @"Connect audio nodes", resolve,
+                          ^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject) {
   if (source.length == 0 || destination.length == 0) {
     RejectPromise(reject, @"invalid_arguments", "source and destination are required");
     return;
@@ -586,12 +756,15 @@ RCT_EXPORT_METHOD(connectNodes:(NSString*)source
     return;
   }
   resolve(nil);
+  });
 }
 
 RCT_EXPORT_METHOD(disconnectNodes:(NSString*)source
                   destination:(NSString*)destination
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"disconnect_failed", @"Disconnect audio nodes", resolve,
+                          ^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject) {
   if (source.length == 0 || destination.length == 0) {
     RejectPromise(reject, @"invalid_arguments", "source and destination are required");
     return;
@@ -607,6 +780,7 @@ RCT_EXPORT_METHOD(disconnectNodes:(NSString*)source
     os_log_error(ModuleLogger(), "disconnectNodes failed: %{public}s", ex.what());
     RejectPromise(reject, @"disconnect_failed", ex.what());
   }
+  });
 }
 
 RCT_EXPORT_METHOD(scheduleParameterAutomation:(NSString*)nodeId
@@ -615,6 +789,8 @@ RCT_EXPORT_METHOD(scheduleParameterAutomation:(NSString*)nodeId
                   value:(double)value
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"automation_failed", @"Schedule parameter automation", resolve,
+                          ^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject) {
   if (nodeId.length == 0 || parameter.length == 0 || frame == nil) {
     RejectPromise(reject, @"invalid_arguments", "nodeId, parameter, and frame are required");
     return;
@@ -646,12 +822,15 @@ RCT_EXPORT_METHOD(scheduleParameterAutomation:(NSString*)nodeId
     os_log_error(ModuleLogger(), "scheduleParameterAutomation failed: %{public}s", ex.what());
     RejectPromise(reject, @"automation_failed", ex.what());
   }
+  });
 }
 
 RCT_EXPORT_METHOD(sendInstrumentMidi:(NSString*)nodeId
                   event:(NSDictionary*)event
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"instrument_event_failed", @"Send instrument MIDI", resolve,
+                          ^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject) {
   if (nodeId.length == 0 || event == nil) {
     RejectPromise(reject, @"invalid_arguments", "nodeId and event are required");
     return;
@@ -718,11 +897,14 @@ RCT_EXPORT_METHOD(sendInstrumentMidi:(NSString*)nodeId
     os_log_error(ModuleLogger(), "sendInstrumentMidi failed: %{public}s", ex.what());
     RejectPromise(reject, @"instrument_event_failed", ex.what());
   }
+  });
 }
 
 RCT_EXPORT_METHOD(allNotesOff:(NSString*)nodeId
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"all_notes_off_failed", @"All notes off", resolve,
+                          ^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject) {
   if (nodeId.length == 0) {
     RejectPromise(reject, @"invalid_arguments", "nodeId is required");
     return;
@@ -738,10 +920,13 @@ RCT_EXPORT_METHOD(allNotesOff:(NSString*)nodeId
     os_log_error(ModuleLogger(), "allNotesOff failed: %{public}s", ex.what());
     RejectPromise(reject, @"all_notes_off_failed", ex.what());
   }
+  });
 }
 
 RCT_EXPORT_METHOD(getRenderDiagnostics:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(reject, @"diagnostics_failed", @"Read audio render diagnostics", resolve,
+                          ^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject) {
   const auto generation = _engineGeneration;
   if (!EnsureInitialized(generation, reject)) {
     return;
@@ -749,6 +934,7 @@ RCT_EXPORT_METHOD(getRenderDiagnostics:(RCTPromiseResolveBlock)resolve
   try {
     const auto diagnostics = AudioEngineBridge::getDiagnostics(generation);
     resolve(@{
+      @"initialized" : @(diagnostics.initialized),
       @"xruns" : @(static_cast<NSInteger>(diagnostics.xruns)),
       @"lastRenderDurationMicros" : @(diagnostics.lastRenderDurationMicros),
       @"clipBufferBytes" : @(static_cast<NSInteger>(diagnostics.clipBufferBytes)),
@@ -771,6 +957,7 @@ RCT_EXPORT_METHOD(getRenderDiagnostics:(RCTPromiseResolveBlock)resolve
     os_log_error(ModuleLogger(), "getRenderDiagnostics failed: %{public}s", ex.what());
     RejectPromise(reject, @"diagnostics_failed", ex.what());
   }
+  });
 }
 
 @end

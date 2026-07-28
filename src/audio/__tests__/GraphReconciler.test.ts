@@ -65,19 +65,14 @@ describe('GraphReconciler', () => {
       type: 'trackOutput',
       options: { gain: 0.5 },
     };
-    const connections = new Set([
-      reconciler.getConnectionKey(changed.id, OUTPUT_BUS),
-    ]);
+    const connections = new Set([reconciler.getConnectionKey(changed.id, OUTPUT_BUS)]);
 
     await reconciler.apply(new Map([[initial.id, initial]]), connections);
     configureNodes.mockClear();
     removeNodes.mockClear();
     connect.mockClear();
 
-    const result = await reconciler.apply(
-      new Map([[changed.id, changed]]),
-      connections,
-    );
+    const result = await reconciler.apply(new Map([[changed.id, changed]]), connections);
 
     expect(removeNodes).toHaveBeenCalledWith([changed.id]);
     expect(configureNodes).toHaveBeenCalledWith([changed]);
@@ -108,13 +103,10 @@ describe('GraphReconciler', () => {
     removeNodes.mockClear();
     getTransportState.mockClear();
 
-    expect(
-      reconciler.hasChanges(new Map([[changed.id, changed]]), new Set()),
-    ).toBe(false);
-    const result = await reconciler.apply(
-      new Map([[changed.id, changed]]),
-      new Set(),
+    expect(reconciler.hasChanges(new Map([[changed.id, changed]]), new Set())).toBe(
+      false,
     );
+    const result = await reconciler.apply(new Map([[changed.id, changed]]), new Set());
 
     expect(removeNodes).not.toHaveBeenCalled();
     expect(configureNodes).not.toHaveBeenCalled();
@@ -146,9 +138,7 @@ describe('GraphReconciler', () => {
       type: 'trackOutput',
       options: { gain: 0.5 },
     };
-    const connections = new Set([
-      reconciler.getConnectionKey(changed.id, OUTPUT_BUS),
-    ]);
+    const connections = new Set([reconciler.getConnectionKey(changed.id, OUTPUT_BUS)]);
 
     await reconciler.apply(new Map([[initial.id, initial]]), connections);
     connect.mockRejectedValueOnce(new Error('Connection unavailable'));
@@ -157,10 +147,7 @@ describe('GraphReconciler', () => {
       reconciler.apply(new Map([[changed.id, changed]]), connections),
     ).rejects.toThrow('Connection unavailable');
 
-    const result = await reconciler.apply(
-      new Map([[changed.id, changed]]),
-      connections,
-    );
+    const result = await reconciler.apply(new Map([[changed.id, changed]]), connections);
     expect([...result.replacedNodeIds]).toEqual([changed.id]);
   });
 
@@ -178,10 +165,7 @@ describe('GraphReconciler', () => {
     };
 
     const outputConnection = reconciler.getConnectionKey(initial.id, OUTPUT_BUS);
-    await reconciler.apply(
-      new Map([[initial.id, initial]]),
-      new Set([outputConnection]),
-    );
+    await reconciler.apply(new Map([[initial.id, initial]]), new Set([outputConnection]));
     configureNodes.mockClear();
     connect.mockClear();
     await reconciler.forceConfigureNode(recovered);
@@ -232,14 +216,12 @@ describe('GraphReconciler', () => {
     getTransportState
       .mockResolvedValueOnce({ frame: 64, isPlaying: true })
       .mockResolvedValueOnce({ frame: 72, isPlaying: false });
-    configureNodes.mockRejectedValueOnce(
-      new Error('Native graph rejected mutation'),
-    );
+    configureNodes.mockRejectedValueOnce(new Error('Native graph rejected mutation'));
     const node = { id: 'track:output', type: 'trackOutput' };
 
-    await expect(
-      reconciler.apply(new Map([[node.id, node]]), new Set()),
-    ).rejects.toThrow('Native graph rejected mutation');
+    await expect(reconciler.apply(new Map([[node.id, node]]), new Set())).rejects.toThrow(
+      'Native graph rejected mutation',
+    );
 
     expect(stopTransport).toHaveBeenCalledTimes(1);
     expect(locateTransport).toHaveBeenCalledWith(72);
@@ -267,10 +249,7 @@ describe('GraphReconciler', () => {
 
     const firstNode = { id: 'first', type: 'trackOutput' };
     const secondNode = { id: 'second', type: 'trackOutput' };
-    const first = reconciler.apply(
-      new Map([[firstNode.id, firstNode]]),
-      new Set(),
-    );
+    const first = reconciler.apply(new Map([[firstNode.id, firstNode]]), new Set());
     await firstStarted;
     const second = reconciler.forceConfigureNode(secondNode);
     await Promise.resolve();

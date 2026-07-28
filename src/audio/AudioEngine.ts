@@ -1,3 +1,5 @@
+import { Buffer } from 'buffer';
+
 import { NativeAudioEngine, isNativeModuleAvailable } from './NativeAudioEngine';
 import { AutomationLane, publishAutomationLane, ClockSyncService } from './Automation';
 import type {
@@ -143,10 +145,7 @@ export type RenderDiagnostics = {
   p99RenderDurationMicros?: number;
 };
 
-export type AutomationPublisher = (
-  nodeId: string,
-  lane: AutomationLane,
-) => Promise<void>;
+export type AutomationPublisher = (nodeId: string, lane: AutomationLane) => Promise<void>;
 
 export class AudioEngine {
   private readonly sampleRate: number;
@@ -293,7 +292,8 @@ export class AudioEngine {
         !Number.isFinite(diagnostics.realtimeQueueOverflows)) ||
       (diagnostics.realtimeCommandFailures !== undefined &&
         !Number.isFinite(diagnostics.realtimeCommandFailures)) ||
-      (diagnostics.renderCount !== undefined && !Number.isFinite(diagnostics.renderCount)) ||
+      (diagnostics.renderCount !== undefined &&
+        !Number.isFinite(diagnostics.renderCount)) ||
       (diagnostics.averageRenderDurationMicros !== undefined &&
         !Number.isFinite(diagnostics.averageRenderDurationMicros)) ||
       (diagnostics.maximumRenderDurationMicros !== undefined &&
@@ -367,12 +367,15 @@ export class AudioEngine {
       }
       return contiguousBuffer;
     });
+    const encodedChannels = normalizedChannels.map((channel) =>
+      Buffer.from(channel).toString('base64'),
+    );
     await NativeAudioEngine.registerClipBuffer(
       bufferKey,
       sampleRate,
       channels,
       frames,
-      normalizedChannels,
+      encodedChannels,
     );
   }
 

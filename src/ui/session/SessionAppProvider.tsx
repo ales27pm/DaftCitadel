@@ -78,8 +78,7 @@ const bootstrapEnvironment = async (
   shouldUseProduction: boolean,
 ): Promise<SessionEnvironment> => {
   const isWebBridgeDisabled =
-    Platform.OS === 'web' &&
-    resolveWebNativeBridgePreference() === false;
+    Platform.OS === 'web' && resolveWebNativeBridgePreference() === false;
   if (isWebBridgeDisabled) {
     if (__DEV__) {
       console.info('Forcing passive session environment due web preview setting.');
@@ -121,10 +120,21 @@ const resolveWebNativeBridgePreference = (): boolean | undefined => {
     return undefined;
   }
   const normalized = String(raw).trim().toLowerCase();
-  if (normalized === '' || normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on') {
+  if (
+    normalized === '' ||
+    normalized === '1' ||
+    normalized === 'true' ||
+    normalized === 'yes' ||
+    normalized === 'on'
+  ) {
     return true;
   }
-  if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off') {
+  if (
+    normalized === '0' ||
+    normalized === 'false' ||
+    normalized === 'no' ||
+    normalized === 'off'
+  ) {
     return false;
   }
   return undefined;

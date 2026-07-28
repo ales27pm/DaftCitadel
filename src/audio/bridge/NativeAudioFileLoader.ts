@@ -17,6 +17,8 @@ type NativeAudioFileLoaderModule = {
 };
 
 const MODULE_NAME = 'AudioSampleLoaderModule';
+const MAX_CHANNELS = 8;
+const MAX_DECODED_PCM_BYTES = 64 * 1024 * 1024;
 
 export class NativeAudioFileLoader implements AudioFileLoader {
   private readonly nativeModule: NativeAudioFileLoaderModule;
@@ -67,8 +69,16 @@ const validateDecodedPayload = (sample: NativeAudioSample, filePath: string): vo
   if (!Number.isInteger(sample.channels) || sample.channels <= 0) {
     throw new Error(`AudioSampleLoader returned invalid channel count for ${filePath}`);
   }
+  if (sample.channels > MAX_CHANNELS) {
+    throw new Error(`AudioSampleLoader returned invalid channel count for ${filePath}`);
+  }
   if (!Number.isInteger(sample.frames) || sample.frames <= 0) {
     throw new Error(`AudioSampleLoader returned invalid frame count for ${filePath}`);
+  }
+  const decodedPcmBytes =
+    sample.channels * sample.frames * Float32Array.BYTES_PER_ELEMENT;
+  if (!Number.isSafeInteger(decodedPcmBytes) || decodedPcmBytes > MAX_DECODED_PCM_BYTES) {
+    throw new Error(`Decoded audio for ${filePath} is larger than the mobile PCM budget`);
   }
   if (
     !Array.isArray(sample.channelData) ||

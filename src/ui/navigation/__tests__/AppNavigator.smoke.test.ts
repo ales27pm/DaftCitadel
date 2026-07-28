@@ -14,11 +14,13 @@ const createMockStorage = () => {
   };
 };
 
-const createMockBrowser = (options: {
-  tabFromState?: string;
-  hash?: string;
-  storedTab?: string;
-} = {}) => {
+const createMockBrowser = (
+  options: {
+    tabFromState?: string;
+    hash?: string;
+    storedTab?: string;
+  } = {},
+) => {
   const storage = createMockStorage();
   const pushState = jest.fn();
   const replaceState = jest.fn();
@@ -40,7 +42,10 @@ const createMockBrowser = (options: {
     addEventListener: (_: 'popstate', listener: (event: { state?: unknown }) => void) => {
       listeners.push(listener);
     },
-    removeEventListener: (_: 'popstate', listener: (event: { state?: unknown }) => void) => {
+    removeEventListener: (
+      _: 'popstate',
+      listener: (event: { state?: unknown }) => void,
+    ) => {
       const index = listeners.indexOf(listener);
       if (index >= 0) {
         listeners.splice(index, 1);
@@ -75,7 +80,11 @@ describe('Web tab helpers', () => {
     const mockStorage = createMockStorage();
     mockStorage.setItem('daftcitadel:web.activeTab', 'Arrangement');
     const mockBrowser = {
-      history: { state: { tab: 'Unknown' }, pushState: jest.fn(), replaceState: jest.fn() },
+      history: {
+        state: { tab: 'Unknown' },
+        pushState: jest.fn(),
+        replaceState: jest.fn(),
+      },
       location: { hash: '#/also-unknown' },
       localStorage: mockStorage,
     };
@@ -106,10 +115,12 @@ describe('Web tab helpers', () => {
       tabFromState: 'Settings',
       hash: '#/Mixer',
     });
-    expect(WebNavigator.extractTabFromBrowserState(mockBrowser, { tab: 'Performance' })).toBe(
-      'Performance',
+    expect(
+      WebNavigator.extractTabFromBrowserState(mockBrowser, { tab: 'Performance' }),
+    ).toBe('Performance');
+    expect(WebNavigator.extractTabFromBrowserState(mockBrowser, { tab: 'Unknown' })).toBe(
+      'Mixer',
     );
-    expect(WebNavigator.extractTabFromBrowserState(mockBrowser, { tab: 'Unknown' })).toBe('Mixer');
     expect(WebNavigator.extractTabFromBrowserState(mockBrowser, {})).toBe('Mixer');
   });
 

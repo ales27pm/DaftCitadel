@@ -56,10 +56,7 @@ export interface AudioEngineBridge {
   startTransport?(): Promise<void>;
   stopTransport?(): Promise<void>;
   locateTransport?(frame: number): Promise<void>;
-  sendInstrumentMidi?(
-    nodeId: string,
-    event: AudioInstrumentMidiEvent,
-  ): Promise<void>;
+  sendInstrumentMidi?(nodeId: string, event: AudioInstrumentMidiEvent): Promise<void>;
   setInstrumentParameter?(
     nodeId: string,
     change: InstrumentParameterChange,

@@ -46,6 +46,11 @@ describe('native audio bridge crash containment', () => {
     expect(exports.map((match) => match[1])).toEqual([
       'initialize',
       'shutdown',
+      'startTransport',
+      'stopTransport',
+      'locateTransport',
+      'setTransportLoop',
+      'getTransportState',
       'addNode',
       'registerClipBuffer',
       'unregisterClipBuffer',
@@ -53,16 +58,8 @@ describe('native audio bridge crash containment', () => {
       'connectNodes',
       'disconnectNodes',
       'scheduleParameterAutomation',
-      'sendMidiEvent',
-      'sendMidiEvents',
-      'setInstrumentParameter',
-      'sendInstrumentParameters',
+      'sendInstrumentMidi',
       'allNotesOff',
-      'startTransport',
-      'stopTransport',
-      'locateTransport',
-      'setTransportLoop',
-      'getTransportState',
       'getRenderDiagnostics',
     ]);
 
@@ -103,7 +100,7 @@ describe('native audio bridge crash containment', () => {
   it('defers lifecycle and transport Promise callbacks to the shared settlement boundary', () => {
     const exportedMethods = [
       ['initialize', 'RCT_EXPORT_METHOD(initialize:', 'RCT_EXPORT_METHOD(shutdown:'],
-      ['shutdown', 'RCT_EXPORT_METHOD(shutdown:', '- (void)invalidate'],
+      ['shutdown', 'RCT_EXPORT_METHOD(shutdown:', 'RCT_EXPORT_METHOD(startTransport:'],
       [
         'startTransport',
         'RCT_EXPORT_METHOD(startTransport:',
@@ -126,9 +123,9 @@ describe('native audio bridge crash containment', () => {
         name,
         usesCaptureBoundary: true,
       });
-      expect(exportedMethod).toContain('finish(');
-      expect(exportedMethod).toContain('fail(');
-      expect(exportedMethod).not.toMatch(/\b(?:resolve|reject)\s*\(/);
+      expect(exportedMethod).toContain(
+        '^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject)',
+      );
     });
   });
 
@@ -145,9 +142,9 @@ describe('native audio bridge crash containment', () => {
       '@end',
     );
 
-    expect(moduleSource).toContain('self.engineGeneration = generation');
+    expect(moduleSource).toContain('_engineGeneration = AudioEngineBridge::initialize');
     expect(invalidate).toContain('ShutdownBridgeIfOwner');
-    expect(dealloc).toContain('ShutdownBridgeIfOwner');
+    expect(dealloc).toContain('[self invalidate]');
     expect(moduleSource).not.toContain('AudioEngineBridge::shutdown();');
     expect(diagnostics).toContain('@"initialized"');
     expect(diagnostics).toContain('AudioEngineBridge::getDiagnostics(generation)');
@@ -190,9 +187,9 @@ describe('native audio bridge crash containment', () => {
     expect(initialize).toContain('AudioEngineBridge::initialize');
     expect(initialize).not.toContain('startWithSampleRate:');
     expect(initialize).toContain('PerformPromiseOperation(');
-    expect(initialize).toContain('@catch (NSException* exception)');
-    expect(initialize).toContain('RejectObjectiveCException(fail, @"initialize_failed"');
-    expect(initialize).not.toMatch(/\b(?:resolve|reject)\s*\(/);
+    expect(initialize).toContain(
+      '^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject)',
+    );
   });
 
   it('starts the audio device lazily and rejects Objective-C transport failures', () => {
@@ -207,9 +204,21 @@ describe('native audio bridge crash containment', () => {
     expect(startTransport).toContain('PerformPromiseOperation(');
     expect(startTransport).toContain('@catch (NSException* exception)');
     expect(startTransport).toContain(
-      'RejectObjectiveCException(fail, @"transport_start_failed"',
+      '^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject)',
     );
-    expect(startTransport).not.toMatch(/\b(?:resolve|reject)\s*\(/);
+  });
+
+  it('accepts base64 clip payloads instead of bridgeless ArrayBuffer dictionaries', () => {
+    const registerClipBuffer = methodBody(
+      moduleSource,
+      'RCT_EXPORT_METHOD(registerClipBuffer:',
+      'RCT_EXPORT_METHOD(unregisterClipBuffer:',
+    );
+
+    expect(registerClipBuffer).toContain('initWithBase64EncodedString');
+    expect(registerClipBuffer).toContain(
+      'channelData entries must be base64 Float32 PCM strings',
+    );
   });
 
   it('silences stale iOS device routes before touching a replacement graph', () => {
@@ -260,9 +269,21 @@ describe('native audio bridge crash containment', () => {
 
   it('forbids structural graph mutations while transport is playing', () => {
     const methods = [
-      ['addNode', 'bool AudioEngineBridge::addNode(', 'void AudioEngineBridge::removeNode('],
-      ['removeNode', 'void AudioEngineBridge::removeNode(', 'bool AudioEngineBridge::connect('],
-      ['connect', 'bool AudioEngineBridge::connect(', 'void AudioEngineBridge::disconnect('],
+      [
+        'addNode',
+        'bool AudioEngineBridge::addNode(',
+        'void AudioEngineBridge::removeNode(',
+      ],
+      [
+        'removeNode',
+        'void AudioEngineBridge::removeNode(',
+        'bool AudioEngineBridge::connect(',
+      ],
+      [
+        'connect',
+        'bool AudioEngineBridge::connect(',
+        'void AudioEngineBridge::disconnect(',
+      ],
       [
         'disconnect',
         'void AudioEngineBridge::disconnect(',
@@ -273,11 +294,17 @@ describe('native audio bridge crash containment', () => {
     for (const [name, startMarker, endMarker] of methods) {
       const iosMethod = methodBody(bridgeSource, startMarker, endMarker);
       const androidMethod = methodBody(androidBridgeSource, startMarker, endMarker);
-      expect({ name, ios: iosMethod.includes('requireTransportStoppedLocked()') }).toEqual({
+      expect({
+        name,
+        ios: iosMethod.includes('requireTransportStoppedLocked()'),
+      }).toEqual({
         name,
         ios: true,
       });
-      expect({ name, android: androidMethod.includes('requireTransportStoppedLocked()') }).toEqual({
+      expect({
+        name,
+        android: androidMethod.includes('requireTransportStoppedLocked()'),
+      }).toEqual({
         name,
         android: true,
       });

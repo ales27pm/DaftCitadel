@@ -235,7 +235,7 @@ const audioEngineModule = {
     sampleRate: number,
     channels: number,
     frames: number,
-    channelData: Array<ArrayBuffer | ArrayBufferView>,
+    channelData: Array<string | ArrayBuffer | ArrayBufferView>,
   ) => {
     const key = bufferKey.trim();
     if (!key) {
@@ -255,7 +255,12 @@ const audioEngineModule = {
     }
     const floatChannels = channelData.map((payload, index) => {
       let source: ArrayBuffer;
-      if (isArrayBufferLike(payload)) {
+      if (typeof payload === 'string') {
+        const decoded = Buffer.from(payload, 'base64');
+        const copy = new Uint8Array(decoded.byteLength);
+        copy.set(decoded);
+        source = copy.buffer;
+      } else if (isArrayBufferLike(payload)) {
         source = payload;
       } else if (ArrayBuffer.isView(payload)) {
         const view = payload as ArrayBufferView;
@@ -264,7 +269,7 @@ const audioEngineModule = {
         source = copy.buffer;
       } else {
         throw new Error(
-          `channelData[${index}] must be an ArrayBuffer or ArrayBufferView`,
+          `channelData[${index}] must be base64, an ArrayBuffer, or an ArrayBufferView`,
         );
       }
       const view = new Float32Array(source);
@@ -389,6 +394,8 @@ const audioEngineModule = {
     nextPoints.sort((lhs, rhs) => lhs.frame - rhs.frame);
     parameterMap.set(trimmedParam, nextPoints);
   },
+  sendInstrumentMidi: async () => undefined,
+  allNotesOff: async () => undefined,
   getRenderDiagnostics: async () => ({
     xruns: audioEngineState.diagnostics.xruns,
     lastRenderDurationMicros: audioEngineState.diagnostics.lastRenderDurationMicros,
@@ -555,6 +562,8 @@ export class NativeEventEmitter extends MockNativeEventEmitter {
 }
 
 export const TurboModuleRegistry = {
+  get: <T>(name: string): T | null =>
+    (NativeModules[name] as T | undefined) ?? null,
   getEnforcing: <T>(name: string): T => NativeModules[name] as T,
 };
 
