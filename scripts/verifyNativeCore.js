@@ -26,6 +26,9 @@ const sourceFiles = [
   'audio-engine/src/DSPNode.cpp',
   'audio-engine/src/Scheduler.cpp',
   'audio-engine/src/SceneGraph.cpp',
+  'audio-engine/src/RenderPlan.cpp',
+  'audio-engine/src/GraphTransactionHost.cpp',
+  'audio-engine/src/SceneGraphRealtimeBatch.cpp',
   'audio-engine/src/RealtimeControlPlane.cpp',
   'audio-engine/src/Automation.cpp',
   'audio-engine/src/Clock.cpp',
@@ -41,8 +44,11 @@ const sourceFiles = [
   'audio-engine/tests/ClipPlayerNodeTests.cpp',
   'audio-engine/tests/PluginNodeTests.cpp',
   'audio-engine/tests/SceneGraphTests.cpp',
+  'audio-engine/tests/RenderPlanTests.cpp',
+  'audio-engine/tests/GraphTransactionHostTests.cpp',
   'audio-engine/tests/JunoCoreTests.cpp',
   'audio-engine/tests/InstrumentNodeTests.cpp',
+  'audio-engine/tests/NodeFactoryTests.cpp',
   'audio-engine/tests/RealtimeControlQueueTests.cpp',
   'audio-engine/tests/RealtimeControlPlaneTests.cpp',
 ].map((file) => path.join(rootDir, file));
@@ -56,6 +62,7 @@ const compileArgs = [
   '-Wextra',
   '-Wpedantic',
   '-pthread',
+  '-DDAFT_AUDIO_ENABLE_GRAPH_FAULT_INJECTION=1',
   `-I${path.join(rootDir, 'audio-engine/include')}`,
 ];
 

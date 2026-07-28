@@ -1,0 +1,88 @@
+name: Issue 70 validation
+
+on:
+  pull_request:
+    paths:
+      - 'audio-engine/**'
+      - 'native/audio/**'
+      - 'src/audio/**'
+      - 'src/session/**'
+      - 'src/ui/**'
+      - 'scripts/verifyNativeCore.js'
+      - 'scripts/nativeDev*.js'
+      - 'scripts/__tests__/nativeDevSupervisor.test.js'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/issue-70-validation.yml'
+  push:
+    branches:
+      - main
+      - 'codex/issue-70-*'
+    paths:
+      - 'audio-engine/**'
+      - 'native/audio/**'
+      - 'src/audio/**'
+      - 'src/session/**'
+      - 'src/ui/**'
+      - 'scripts/verifyNativeCore.js'
+      - 'scripts/nativeDev*.js'
+      - 'scripts/__tests__/nativeDevSupervisor.test.js'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/issue-70-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  issue-70-validation:
+    name: TypeScript, Jest, and native audio core
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test JavaScript and native dev supervisor
+        run: npm run test:ci
+
+      - name: Check diff hygiene
+        run: git diff --check
+
+      - name: Test native audio core
+        run: npm run native:core:test
+
+      - name: Test native audio core with sanitizers
+        run: npm run native:core:test:sanitize
+
+      - name: Test direct native audio core verifier
+        run: npm run native:core:test:direct
+
+      - name: Test direct native audio core verifier with sanitizers
+        run: npm run native:core:test:direct:sanitize

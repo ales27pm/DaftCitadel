@@ -66,6 +66,7 @@ const setTrackVolume = jest.fn(async () => undefined);
 const setJunoParameter = jest.fn(async () => undefined);
 const applyJunoPreset = jest.fn(async () => undefined);
 const scrollTo = jest.fn();
+let originalJuno106FeatureFlag: string | undefined;
 
 const instrumentParameters = {
   pulseWidth: 0.5,
@@ -164,6 +165,8 @@ const findAccessibleText = (
 describe('PerformanceScreen Juno looper', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    originalJuno106FeatureFlag = process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106;
+    delete process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106;
     useSessionViewModel.mockReturnValue({
       status: 'ready',
       sessionName: 'Night Drive',
@@ -263,6 +266,14 @@ describe('PerformanceScreen Juno looper', () => {
     duplicateJunoMidiScene.mockResolvedValue({ tracks: [] });
   });
 
+  afterEach(() => {
+    if (originalJuno106FeatureFlag === undefined) {
+      delete process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106;
+    } else {
+      process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106 = originalJuno106FeatureFlag;
+    }
+  });
+
   it('switches explicitly between the scene launcher and instrument workspace', async () => {
     const renderer = await renderScreen();
     const scenesTab = renderer.root.findByProps({ accessibilityLabel: 'Scenes' });
@@ -311,6 +322,43 @@ describe('PerformanceScreen Juno looper', () => {
 
     expect(header.props.accessible).toBe(false);
     expect(header.props.contentFit).toBe('cover');
+    renderer.unmount();
+  });
+
+  it('disables Juno scene launcher controls when the rollout flag is disabled', async () => {
+    process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106 = 'false';
+    const renderer = await renderScreen();
+
+    expect(
+      renderer.root.findByProps({ testID: 'performance-scenes-panel' }).props.role,
+    ).toBe('tabpanel');
+    expect(renderedText(renderer)).toContain(
+      'Juno-106 scenes are disabled for this build.',
+    );
+    expect(renderer.root.findAllByProps({ testID: 'juno-scene-pad-grid' })).toHaveLength(
+      0,
+    );
+    expect(renderer.root.findAllByProps({ testID: 'juno-add-scene-pad' })).toHaveLength(
+      0,
+    );
+    expect(renderer.root.findAllByProps({ testID: 'add-juno-scene-part' })).toHaveLength(
+      0,
+    );
+    expect(renderer.root.findAllByProps({ testID: 'duplicate-juno-scene' })).toHaveLength(
+      0,
+    );
+    expect(createJunoMidiScene).not.toHaveBeenCalled();
+    expect(addJunoScenePart).not.toHaveBeenCalled();
+    expect(duplicateJunoMidiScene).not.toHaveBeenCalled();
+
+    await act(async () => {
+      renderer.root.findByProps({ accessibilityLabel: 'Instrument' }).props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(renderedText(renderer)).toContain('Juno-106 is disabled for this build.');
+    expect(renderer.root.findAllByProps({ testID: 'add-juno-button' })).toHaveLength(0);
+    expect(addJunoTrack).not.toHaveBeenCalled();
     renderer.unmount();
   });
 

@@ -12,9 +12,114 @@ const methodBody = (source: string, startMarker: string, endMarker: string): str
   return source.slice(start, end);
 };
 
+const stripNativeSourceComments = (source: string): string => {
+  let result = '';
+  let state: 'code' | 'lineComment' | 'blockComment' | 'singleQuote' | 'doubleQuote' =
+    'code';
+
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    const next = source[index + 1];
+
+    if (state === 'lineComment') {
+      if (character === '\n') {
+        state = 'code';
+        result += character;
+      } else {
+        result += ' ';
+      }
+      continue;
+    }
+
+    if (state === 'blockComment') {
+      if (character === '*' && next === '/') {
+        state = 'code';
+        result += '  ';
+        index += 1;
+      } else {
+        result += character === '\n' ? '\n' : ' ';
+      }
+      continue;
+    }
+
+    if (state === 'singleQuote' || state === 'doubleQuote') {
+      result += character;
+      if (character === '\\' && next !== undefined) {
+        result += next;
+        index += 1;
+        continue;
+      }
+      if (
+        (state === 'singleQuote' && character === "'") ||
+        (state === 'doubleQuote' && character === '"')
+      ) {
+        state = 'code';
+      }
+      continue;
+    }
+
+    if (character === '/' && next === '/') {
+      state = 'lineComment';
+      result += '  ';
+      index += 1;
+      continue;
+    }
+    if (character === '/' && next === '*') {
+      state = 'blockComment';
+      result += '  ';
+      index += 1;
+      continue;
+    }
+    if (character === "'") {
+      state = 'singleQuote';
+    } else if (character === '"') {
+      state = 'doubleQuote';
+    }
+    result += character;
+  }
+
+  return result;
+};
+
+const realtimeForbiddenPatterns: Array<{ label: string; pattern: RegExp }> = [
+  {
+    label: 'lock acquisition',
+    pattern:
+      /\bstd::(?:lock_guard|unique_lock|scoped_lock|shared_lock)\s*<|\bstd::try_to_lock\b|\bpthread_mutex_\w+\s*\(|@synchronized\s*\(/,
+  },
+  {
+    label: 'exception handling',
+    pattern:
+      /@catch\s*\(|@throw\b|@try\b|\bcatch\s*\(|\bthrow(?:\s+|;)|\bThrowJavaException\s*\(/,
+  },
+  {
+    label: 'logging',
+    pattern:
+      /\bos_log(?:_[a-z_]+)?\s*\(|\b__android_log_(?:print|write|assert)\s*\(|\b(?:ALOG[VDIWEF]|NSLog)\s*\(|\bLog\.(?:v|d|i|w|e|wtf)\s*\(/,
+  },
+  {
+    label: 'allocation',
+    pattern:
+      /\bnew\s+(?:[A-Za-z_:]|\()|\bstd::vector\s*<|\bstd::(?:make_unique|make_shared)\s*<|\b(?:malloc|calloc|realloc)\s*\(/,
+  },
+];
+
+const expectRealtimeCallbackContract = (name: string, source: string): void => {
+  const uncommentedSource = stripNativeSourceComments(source);
+  for (const { label, pattern } of realtimeForbiddenPatterns) {
+    const match = uncommentedSource.match(pattern);
+    if (match) {
+      throw new Error(
+        `Realtime callback contract violated for ${name}: found ${label} token "${match[0]}"`,
+      );
+    }
+  }
+};
+
 describe('instrument native bridge contract', () => {
   const iosModule = readRepositoryFile('native/audio/ios/AudioEngineModule.mm');
   const iosBridge = readRepositoryFile('audio-engine/platform/ios/AudioEngineBridge.mm');
+  const iosDeviceDriver = readRepositoryFile('native/audio/ios/AudioDeviceDriver.mm');
   const androidBridge = readRepositoryFile(
     'audio-engine/platform/android/AudioEngineBridge.cpp',
   );
@@ -145,5 +250,75 @@ describe('instrument native bridge contract', () => {
     expect(renderLoop).not.toMatch(/\btry\b|\bcatch\b|runCatching|Log\./);
     expect(androidDeviceDriver).toContain('uncaughtExceptionHandler =');
     expect(androidDeviceDriver).toContain('running.set(false)');
+  });
+
+  it('ignores comments and similarly named identifiers in realtime callback probes', () => {
+    expect(() =>
+      expectRealtimeCallbackContract(
+        'comment probe',
+        `
+          // catch (...) { Log.e("comment only"); throw std::runtime_error("comment"); }
+          /* std::vector<float> scratch; @try { ALOGE("comment"); } */
+          auto catchment = 0;
+          auto throwaway = catchment;
+          auto LogState = throwaway;
+        `,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      expectRealtimeCallbackContract(
+        'diagnostic probe',
+        'throw std::runtime_error("bad");',
+      ),
+    ).toThrow(/diagnostic probe/);
+  });
+
+  it('keeps native callback entry points free of locks, logging, exceptions, and allocations', () => {
+    const iosBridgeRender = methodBody(
+      iosBridge,
+      'void AudioEngineBridge::render(EngineGeneration generation',
+      'void AudioEngineBridge::startTransport(',
+    );
+    const androidBridgeRender = methodBody(
+      androidBridge,
+      'void AudioEngineBridge::render(float** outputs',
+      'void AudioEngineBridge::startTransport()',
+    );
+    const realtimePlaneRender = methodBody(
+      controlPlane,
+      'void RealtimeControlPlane::render(',
+      'void RealtimeControlPlane::waitUntilRenderIdle()',
+    );
+    const iosSourceNodeRenderBlock = methodBody(
+      iosDeviceDriver,
+      'AVAudioSourceNodeRenderBlock renderBlock =',
+      'phase = @"source-node-creation";',
+    );
+    const androidJniRender = methodBody(
+      androidJni,
+      'Java_com_daftcitadel_audio_AudioEngineModule_nativeRenderInterleaved',
+      'JNIEXPORT jobjectArray JNICALL\nJava_com_daftcitadel_audio_AudioEngineModule_nativeRecoverAfterAudioConfigurationChange',
+    );
+
+    expect(iosBridgeRender).toContain('realtimePlane_.render(view, generation)');
+    expect(androidBridgeRender).toContain('realtimePlane_.render(view, publication)');
+    expect(realtimePlaneRender).toContain('commandQueue_.tryPop(command)');
+    expect(realtimePlaneRender).toContain('graph->render(outputBuffer)');
+    expect(iosSourceNodeRenderBlock).toContain('AudioEngineBridge::render(');
+    expect(iosSourceNodeRenderBlock).toContain('thread_local PlanarBuffer planar{}');
+    expect(androidJniRender).toContain('AudioEngineBridge::render(');
+    expect(androidJniRender).toContain('gRenderScratch');
+
+    const realtimeCallbackEntries = [
+      { name: 'iOS bridge render', source: iosBridgeRender },
+      { name: 'Android bridge render', source: androidBridgeRender },
+      { name: 'realtime control plane render', source: realtimePlaneRender },
+      { name: 'iOS source node render block', source: iosSourceNodeRenderBlock },
+      { name: 'Android JNI render entry point', source: androidJniRender },
+    ];
+
+    realtimeCallbackEntries.forEach(({ name, source }) => {
+      expectRealtimeCallbackContract(name, source);
+    });
   });
 });

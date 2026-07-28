@@ -125,9 +125,12 @@ describe('JunoPerformancePanel', () => {
   const sendInstrumentMidi = jest.fn(async () => undefined);
   const setInstrumentParameter = jest.fn(async () => undefined);
   const allNotesOff = jest.fn(async () => undefined);
+  let originalJuno106FeatureFlag: string | undefined;
 
   beforeEach(() => {
     jest.clearAllMocks();
+    originalJuno106FeatureFlag = process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106;
+    delete process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106;
     useSessionActions.mockReturnValue({
       addJunoTrack,
       applyJunoPreset,
@@ -139,6 +142,27 @@ describe('JunoPerformancePanel', () => {
       setInstrumentParameter,
       allNotesOff,
     });
+  });
+
+  afterEach(() => {
+    if (originalJuno106FeatureFlag === undefined) {
+      delete process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106;
+    } else {
+      process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106 = originalJuno106FeatureFlag;
+    }
+  });
+
+  it('hides Juno creation when the rollout flag is disabled', async () => {
+    process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106 = 'false';
+
+    const renderer = await renderPanel([]);
+
+    expect(renderedText(renderer)).toContain('Juno-106 is disabled for this build.');
+    expect(
+      renderer.root.findAll((candidate) => candidate.props.testID === 'add-juno-button'),
+    ).toHaveLength(0);
+    expect(addJunoTrack).not.toHaveBeenCalled();
+    renderer.unmount();
   });
 
   it('offers Add Juno for a fresh session', async () => {
