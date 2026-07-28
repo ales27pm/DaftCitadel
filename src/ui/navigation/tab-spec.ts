@@ -40,20 +40,20 @@ export const APP_TABS: ReadonlyArray<{
 }> = [
   {
     name: 'Arrangement',
-    label: 'ARRANGE',
+    label: 'Arrangement',
     icon: 'arrangement',
     accessibilityLabel: 'Arrangement',
   },
-  { name: 'Mixer', label: 'MIXER', icon: 'mixer', accessibilityLabel: 'Mixer' },
+  { name: 'Mixer', label: 'Mixer', icon: 'mixer', accessibilityLabel: 'Mixer' },
   {
     name: 'Performance',
-    label: 'PERFORM',
+    label: 'Performance',
     icon: 'performance',
     accessibilityLabel: 'Performance',
   },
   {
     name: 'Settings',
-    label: 'SETTINGS',
+    label: 'Settings',
     icon: 'settings',
     accessibilityLabel: 'Settings',
   },

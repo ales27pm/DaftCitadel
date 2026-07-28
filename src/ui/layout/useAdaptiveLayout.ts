@@ -36,7 +36,9 @@ export const resolveBreakpoint = (width: number): LayoutBreakpoint => {
 
 export const useAdaptiveLayout = (): AdaptiveLayoutState => {
   const { height, width } = useWindowDimensions();
-  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+  // Default conservatively so motion never starts before the asynchronous
+  // platform preference has resolved.
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(true);
   const [screenReaderEnabled, setScreenReaderEnabled] = useState(false);
 
   useEffect(() => {

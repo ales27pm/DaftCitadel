@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Image } from 'expo-image';
 import { Pressable, StyleSheet, View, type ViewStyle } from 'react-native';
 
 import type { MidiNoteEvent, Session } from '../../session';
 import {
   StatusBadge,
+  StudioAlertText,
   StudioButton,
   StudioIcon,
   StudioPanel,
@@ -48,6 +50,13 @@ interface PendingNote {
 }
 
 type TakeMode = 'idle' | 'armed-record' | 'armed-overdub' | 'recording' | 'overdubbing';
+type LooperActionErrorLocation = 'grid' | 'selection';
+
+interface LooperActionError {
+  location: LooperActionErrorLocation;
+  message: string;
+}
+
 type PadState =
   | 'ADD SCENE'
   | 'ARMED'
@@ -123,6 +132,12 @@ const styles = StyleSheet.create({
   levelButton: { minWidth: 44, paddingHorizontal: 10 },
   error: { gap: 4 },
   unavailable: { gap: 6 },
+  emptyIllustration: {
+    alignSelf: 'stretch',
+    aspectRatio: 16 / 9,
+    borderRadius: 10,
+    maxHeight: 180,
+  },
 });
 
 const clamp = (value: number, minimum: number, maximum: number): number =>
@@ -227,7 +242,7 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
   const [launchingSceneId, setLaunchingSceneId] = useState<string>();
   const [takeMode, setTakeMode] = useState<TakeMode>('idle');
   const [takeNoteCount, setTakeNoteCount] = useState(0);
-  const [actionError, setActionError] = useState<string>();
+  const [actionError, setActionError] = useState<LooperActionError>();
   const [isAddingScene, setIsAddingScene] = useState(false);
   const [isAddingPart, setIsAddingPart] = useState(false);
   const [isDuplicatingScene, setIsDuplicatingScene] = useState(false);
@@ -369,7 +384,11 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
   );
 
   const handleSceneLaunch = useCallback(
-    async (scene: LoopScene, forcePlay = false) => {
+    async (
+      scene: LoopScene,
+      forcePlay = false,
+      errorLocation: LooperActionErrorLocation = 'grid',
+    ) => {
       if (takeMode !== 'idle') {
         return;
       }
@@ -385,7 +404,10 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
       try {
         await configureAndPlayScene(scene);
       } catch (error) {
-        setActionError(formatError(error, 'Unable to launch this scene.'));
+        setActionError({
+          location: errorLocation,
+          message: formatError(error, 'Unable to launch this scene.'),
+        });
       } finally {
         setLaunchingSceneId(undefined);
       }
@@ -413,7 +435,10 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
         setSelectedLoopId(`${newest.trackId}:${newest.clipId}`);
       }
     } catch (error) {
-      setActionError(formatError(error, 'Unable to add a scene.'));
+      setActionError({
+        location: 'grid',
+        message: formatError(error, 'Unable to add a scene.'),
+      });
     } finally {
       setIsAddingScene(false);
     }
@@ -446,7 +471,10 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
         setSelectedLoopId(`${newPart.trackId}:${newPart.clipId}`);
       }
     } catch (error) {
-      setActionError(formatError(error, 'Unable to add a part to this scene.'));
+      setActionError({
+        location: 'selection',
+        message: formatError(error, 'Unable to add a part to this scene.'),
+      });
     } finally {
       setIsAddingPart(false);
     }
@@ -479,7 +507,10 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
         setSelectedLoopId(`${newest.trackId}:${newest.clipId}`);
       }
     } catch (error) {
-      setActionError(formatError(error, 'Unable to duplicate this scene.'));
+      setActionError({
+        location: 'selection',
+        message: formatError(error, 'Unable to duplicate this scene.'),
+      });
     } finally {
       setIsDuplicatingScene(false);
     }
@@ -506,7 +537,10 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
         setTakeMode(overdub ? 'overdubbing' : 'recording');
       } catch (error) {
         setTakeMode('idle');
-        setActionError(formatError(error, 'Unable to arm loop recording.'));
+        setActionError({
+          location: 'selection',
+          message: formatError(error, 'Unable to arm loop recording.'),
+        });
       }
     },
     [configureAndPlayScene, safeBpm, selectedLoop, selectedScene, takeMode],
@@ -608,7 +642,10 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
       activeNotesRef.current.clear();
       await configureAndPlayScene(selectedScene);
     } catch (error) {
-      setActionError(formatError(error, 'Unable to save this loop take.'));
+      setActionError({
+        location: 'selection',
+        message: formatError(error, 'Unable to save this loop take.'),
+      });
     }
   }, [
     captureNoteOff,
@@ -637,7 +674,10 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
       );
       previousLayerRef.current = null;
     } catch (error) {
-      setActionError(formatError(error, 'Unable to undo the last loop layer.'));
+      setActionError({
+        location: 'selection',
+        message: formatError(error, 'Unable to undo the last loop layer.'),
+      });
     }
   }, [selectedLoop, sessionActions, takeMode]);
 
@@ -653,7 +693,10 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
     try {
       await sessionActions.clearMidiClip(selectedLoop.track.id, selectedLoop.clipId);
     } catch (error) {
-      setActionError(formatError(error, 'Unable to clear this loop.'));
+      setActionError({
+        location: 'selection',
+        message: formatError(error, 'Unable to clear this loop.'),
+      });
     }
   }, [safeBpm, selectedLoop, sessionActions, takeMode]);
 
@@ -669,7 +712,10 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
           clamp(selectedLoop.track.volumeDb + direction, -60, 12),
         );
       } catch (error) {
-        setActionError(formatError(error, 'Unable to change part level.'));
+        setActionError({
+          location: 'selection',
+          message: formatError(error, 'Unable to change part level.'),
+        });
       }
     },
     [selectedLoop, sessionActions],
@@ -687,6 +733,35 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
   };
   const sceneActionPending =
     isAddingScene || isAddingPart || isDuplicatingScene || launchingSceneId !== undefined;
+
+  const renderActionError = (
+    location: LooperActionErrorLocation,
+  ): React.ReactElement | null => {
+    if (!actionError || actionError.location !== location) {
+      return null;
+    }
+    return (
+      <StudioPanel
+        padding={12}
+        style={styles.error}
+        testID={`looper-${location}-action-error`}
+        variant="subtle"
+      >
+        <StudioText variant="label" tone="critical" weight="bold">
+          Looper action failed
+        </StudioText>
+        <StudioAlertText
+          announcement={`Looper action failed. ${actionError.message}`}
+          selectable
+          testID={`looper-${location}-action-error-announcement`}
+          tone="critical"
+          variant="caption"
+        >
+          {actionError.message}
+        </StudioAlertText>
+      </StudioPanel>
+    );
+  };
 
   if (status !== 'ready') {
     return null;
@@ -735,22 +810,27 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
             const active =
               selected &&
               (state === 'PLAYING' || state === 'RECORDING' || state === 'OVERDUB');
-            const disabled = sceneActionPending || takeMode !== 'idle';
+            const nativeAutoPlayUnavailable =
+              Boolean(scene) && autoPlayScenes && !transportControls.isLoopAvailable;
+            const disabled =
+              sceneActionPending || takeMode !== 'idle' || nativeAutoPlayUnavailable;
             return (
               <Pressable
                 key={scene?.id ?? `empty-scene-${index}`}
                 accessibilityHint={
                   scene
-                    ? autoPlayScenes
-                      ? 'Selects this scene and starts its native transport loop'
-                      : 'Selects this scene; use Launch to start its native transport loop'
+                    ? nativeAutoPlayUnavailable
+                      ? 'Unavailable while Auto-play scenes requires native loop transport'
+                      : autoPlayScenes
+                        ? 'Selects this scene and starts its native transport loop'
+                        : 'Selects this scene; use Launch to start its native transport loop'
                     : 'Creates a new one-bar Juno scene'
                 }
                 accessibilityLabel={
                   scene
                     ? `${scene.name}, ${scene.parts.length} ${
                         scene.parts.length === 1 ? 'part' : 'parts'
-                      }`
+                      }, ${state.toLowerCase()}`
                     : `Add scene ${index + 1}`
                 }
                 accessibilityRole="button"
@@ -821,6 +901,7 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
             );
           })}
         </View>
+        {renderActionError('grid')}
 
         {selectedScene && selectedLoop ? (
           <StudioPanel padding={12} style={styles.selectedPanel} variant="subtle">
@@ -867,7 +948,9 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
                 icon="play"
                 label="Launch scene"
                 onPress={() => {
-                  handleSceneLaunch(selectedScene, true).catch(() => undefined);
+                  handleSceneLaunch(selectedScene, true, 'selection').catch(
+                    () => undefined,
+                  );
                 }}
                 testID="launch-juno-scene"
                 variant="primary"
@@ -990,11 +1073,15 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
                 }
                 label={selectedLoop.track.muted ? 'Unmute part' : 'Mute part'}
                 onPress={() => {
+                  setActionError(undefined);
                   sessionActions
                     .setTrackMuted(selectedLoop.track.id, !selectedLoop.track.muted)
-                    .catch((error) =>
-                      setActionError(formatError(error, 'Unable to update mute.')),
-                    );
+                    .catch((error) => {
+                      setActionError({
+                        location: 'selection',
+                        message: formatError(error, 'Unable to update mute.'),
+                      });
+                    });
                 }}
                 testID="loop-mute"
                 variant={selectedLoop.track.muted ? 'primary' : 'secondary'}
@@ -1006,11 +1093,15 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
                 }
                 label={selectedLoop.track.solo ? 'Unsolo part' : 'Solo part'}
                 onPress={() => {
+                  setActionError(undefined);
                   sessionActions
                     .setTrackSolo(selectedLoop.track.id, !selectedLoop.track.solo)
-                    .catch((error) =>
-                      setActionError(formatError(error, 'Unable to update solo.')),
-                    );
+                    .catch((error) => {
+                      setActionError({
+                        location: 'selection',
+                        message: formatError(error, 'Unable to update solo.'),
+                      });
+                    });
                 }}
                 testID="loop-solo"
                 variant={selectedLoop.track.solo ? 'primary' : 'secondary'}
@@ -1039,14 +1130,33 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
                 />
               </View>
             </View>
+            {renderActionError('selection')}
           </StudioPanel>
-        ) : (
-          <StudioPanel padding={12} style={styles.unavailable} variant="subtle">
+        ) : scenes.length === 0 ? (
+          <StudioPanel
+            padding={12}
+            style={styles.unavailable}
+            testID="juno-scene-launcher-empty"
+            variant="subtle"
+          >
+            <Image
+              accessible={false}
+              contentFit="contain"
+              source={require('../../../assets/ui/scene-launcher-empty.webp')}
+              style={styles.emptyIllustration}
+              testID="juno-scene-launcher-empty-illustration"
+            />
             <StudioText variant="label" weight="bold">
               Tap an Add Scene pad to start.
             </StudioText>
             <StudioText variant="caption" tone="secondary">
               Daft Citadel will create a routed Juno part and a persisted one-bar scene.
+            </StudioText>
+          </StudioPanel>
+        ) : (
+          <StudioPanel padding={12} style={styles.unavailable} variant="subtle">
+            <StudioText variant="label" weight="bold">
+              Selecting scene…
             </StudioText>
           </StudioPanel>
         )}
@@ -1059,23 +1169,6 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
         status={status}
         tracks={tracks}
       />
-
-      {actionError ? (
-        <StudioPanel
-          accessibilityLabel="Looper error"
-          accessibilityRole="alert"
-          padding={12}
-          style={styles.error}
-          variant="subtle"
-        >
-          <StudioText variant="label" tone="critical" weight="bold">
-            Looper action failed
-          </StudioText>
-          <StudioText selectable variant="caption" tone="critical">
-            {actionError}
-          </StudioText>
-        </StudioPanel>
-      ) : null}
     </>
   );
 };

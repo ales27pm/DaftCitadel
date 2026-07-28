@@ -1,5 +1,5 @@
 import * as WebNavigator from '../AppNavigator.web';
-import { APP_TAB_SEQUENCE as SHARED_TAB_SEQUENCE } from '../tab-spec';
+import { APP_TABS, APP_TAB_SEQUENCE as SHARED_TAB_SEQUENCE } from '../tab-spec';
 
 const createMockStorage = () => {
   const store = new Map<string, string>();
@@ -61,6 +61,11 @@ describe('AppNavigator parity', () => {
 
   it('includes the settings tab in all route lists', () => {
     expect(WebNavigator.APP_TAB_SEQUENCE).toContain('Settings');
+  });
+
+  it('defines a distinct icon and accessibility label for every native tab', () => {
+    expect(new Set(APP_TABS.map((tab) => tab.icon)).size).toBe(APP_TABS.length);
+    expect(APP_TABS.every((tab) => tab.accessibilityLabel.length > 0)).toBe(true);
   });
 });
 

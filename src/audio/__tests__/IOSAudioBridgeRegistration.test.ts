@@ -13,7 +13,10 @@ describe('iOS audio bridge registration', () => {
     ) as { newArchEnabled?: string };
 
     expect(podfileProperties.newArchEnabled).toBe('true');
-    expect(header).toContain('@interface AudioEngineModule : NSObject <RCTBridgeModule>');
+    expect(header).toContain(
+      '@interface AudioEngineModule : NSObject <RCTBridgeModule, RCTInvalidating>',
+    );
+    expect(header).toContain('#import <React/RCTInvalidating.h>');
     expect(header).not.toMatch(/#import\s+<ReactCommon\/RCTTurboModule\.h>/);
     expect(header).not.toMatch(
       /@interface\s+AudioEngineModule[^{\n]*<[^>]*RCTTurboModule/,

@@ -117,6 +117,27 @@ class AudioEngineModule(private val reactContext: ReactApplicationContext) :
     return value.toLong()
   }
 
+  private fun requireBoundedInteger(
+    request: ReadableMap,
+    key: String,
+    minimum: Int,
+    maximum: Int
+  ): Int {
+    require(request.hasKey(key) && request.getType(key) == ReadableType.Number) {
+      "$key must be numeric"
+    }
+    val value = request.getDouble(key)
+    require(
+      value.isFinite() &&
+        value >= minimum.toDouble() &&
+        value <= maximum.toDouble() &&
+        value == value.toInt().toDouble()
+    ) {
+      "$key must be an integer between $minimum and $maximum"
+    }
+    return value.toInt()
+  }
+
   private fun canonicalJsonValue(value: Any?): String = when (value) {
     null -> "null"
     is Boolean -> value.toString()
@@ -697,6 +718,58 @@ override fun getName(): String = NAME
   }
 
   @ReactMethod
+  fun sendInstrumentMidi(nodeId: String, event: ReadableMap?, promise: Promise) {
+    val sanitizedNodeId = nodeId.trim()
+    if (sanitizedNodeId.isEmpty() || event == null) {
+      promise.reject("invalid_arguments", "nodeId and event are required")
+      return
+    }
+
+    try {
+      val type = requireBoundedInteger(event, "type", 0, 5)
+      val channel = requireBoundedInteger(event, "channel", 0, 15)
+      val data1 = requireBoundedInteger(event, "data1", 0, 127)
+      val data2 = requireBoundedInteger(event, "data2", 0, 127)
+      val frameOffset =
+        if (event.hasKey("frameOffset")) {
+          requireSafeCounter(event, "frameOffset")
+        } else {
+          0L
+        }
+
+      nativeSendInstrumentMidi(
+        sanitizedNodeId,
+        type,
+        channel,
+        data1,
+        data2,
+        frameOffset
+      )
+      promise.resolve(null)
+    } catch (error: IllegalArgumentException) {
+      promise.reject("invalid_arguments", error)
+    } catch (error: Exception) {
+      promise.reject("instrument_event_failed", error)
+    }
+  }
+
+  @ReactMethod
+  fun allNotesOff(nodeId: String, promise: Promise) {
+    val sanitizedNodeId = nodeId.trim()
+    if (sanitizedNodeId.isEmpty()) {
+      promise.reject("invalid_arguments", "nodeId is required")
+      return
+    }
+
+    try {
+      nativeAllNotesOff(sanitizedNodeId)
+      promise.resolve(null)
+    } catch (error: Exception) {
+      promise.reject("all_notes_off_failed", error)
+    }
+  }
+
+  @ReactMethod
   fun startTransport(promise: Promise) {
     val configuration = deviceConfiguration
     if (configuration == null) {
@@ -927,6 +1000,15 @@ private external fun nativeDisconnectNodes(source: String, destination: String)
  * @param value The value to apply to the parameter at the specified frame.
  */
 private external fun nativeScheduleAutomation(nodeId: String, parameter: String, frame: Long, value: Double)
+private external fun nativeSendInstrumentMidi(
+  nodeId: String,
+  type: Int,
+  channel: Int,
+  data1: Int,
+  data2: Int,
+  frameOffset: Long
+)
+private external fun nativeAllNotesOff(nodeId: String)
 private external fun nativeStartTransport()
 private external fun nativeStopTransport()
 private external fun nativeLocateTransport(frame: Long)

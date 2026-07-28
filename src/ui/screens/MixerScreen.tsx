@@ -1,76 +1,353 @@
-import React, { useCallback, useMemo } from 'react';
-import { SafeAreaView, ScrollView, View, StyleSheet, ViewStyle } from 'react-native';
+import React, { useCallback, useMemo, useState } from 'react';
+import { StyleSheet, View, type LayoutChangeEvent, type ViewStyle } from 'react-native';
 
 import {
-  NeonButton,
-  NeonSurface,
-  NeonText,
-  NeonToolbar,
-  ThemeIntent,
+  ScreenScaffold,
+  ScreenState,
+  StatusBadge,
+  StudioButton,
+  StudioPanel,
+  StudioText,
+  type StudioTone,
+  useTheme,
 } from '../design-system';
-import { useAdaptiveLayout } from '../layout';
-import { TrackViewModel, useSessionViewModel } from '../session';
+import { type LayoutBreakpoint, useAdaptiveLayout } from '../layout';
+import { type TrackViewModel, useSessionActions, useSessionViewModel } from '../session';
 
-const channelStyles = StyleSheet.create({
-  container: { margin: 12, flexBasis: '45%' },
-  meterShell: {
-    marginTop: 16,
-    height: 180,
-    width: 24,
-    borderRadius: 12,
-    backgroundColor: '#1C1F2E',
-    overflow: 'hidden',
-    justifyContent: 'flex-end',
+const MIN_TRACK_VOLUME_DB = -60;
+const MAX_TRACK_VOLUME_DB = 12;
+const TRACK_VOLUME_STEP_DB = 1;
+const MIN_TRACK_PAN = -1;
+const MAX_TRACK_PAN = 1;
+const TRACK_PAN_STEP = 0.1;
+
+type MixerActions = Pick<
+  ReturnType<typeof useSessionActions>,
+  'setTrackMuted' | 'setTrackPan' | 'setTrackSolo' | 'setTrackVolume'
+>;
+
+interface ParameterControlProps {
+  accessibilityLabel: string;
+  disabled: boolean;
+  label: string;
+  maximum: number;
+  minimum: number;
+  onChange: (value: number) => Promise<void>;
+  step: number;
+  testID: string;
+  value: number;
+  valueText: string;
+}
+
+interface MixerChannelProps {
+  actions: MixerActions;
+  track: TrackViewModel;
+  width: ViewStyle['width'];
+}
+
+interface MixerWidthInput {
+  columns: number;
+  contentWidth: number;
+  gap: number;
+}
+
+const styles = StyleSheet.create({
+  alertHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
   },
-  meterFill: {
+  channelBody: {
+    alignItems: 'stretch',
+    flexDirection: 'row',
+  },
+  channelControls: {
+    flex: 1,
+    minWidth: 0,
+  },
+  channelHeader: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  fill: {
     width: '100%',
-    borderRadius: 12,
-    backgroundColor: '#50E3C2',
   },
-  pluginRow: {
-    marginTop: 12,
-    borderRadius: 8,
-    backgroundColor: '#16182A',
-    padding: 8,
+  flexContent: {
+    flex: 1,
+    minWidth: 0,
   },
-  pluginPill: {
-    marginTop: 6,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 6,
-    backgroundColor: '#20233B',
+  meterColumn: {
+    alignItems: 'center',
   },
-});
-
-const screenStyles = StyleSheet.create({
-  safeArea: { flex: 1 },
-  alertContainer: {
-    marginHorizontal: 16,
-    marginTop: 12,
-    gap: 12,
+  meterShell: {
+    borderWidth: 1,
+    justifyContent: 'flex-end',
+    overflow: 'hidden',
   },
-  retryButton: {
-    marginTop: 8,
-    alignSelf: 'flex-start',
+  parameterRow: {
+    alignItems: 'stretch',
+    flexDirection: 'row',
+  },
+  safeContent: {
+    alignSelf: 'stretch',
+  },
+  toggleButton: {
+    alignSelf: 'stretch',
+    flex: 1,
+  },
+  toggleRow: {
+    flexDirection: 'row',
   },
 });
 
-const MixerChannel: React.FC<{ track: TrackViewModel }> = ({ track }) => {
-  const meterFillStyle = useMemo(
+const clampFinite = (
+  value: number,
+  minimum: number,
+  maximum: number,
+  fallback: number,
+): number => {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(maximum, Math.max(minimum, value));
+};
+
+const clampAndRound = (value: number, minimum: number, maximum: number): number =>
+  Number(clampFinite(value, minimum, maximum, minimum).toFixed(2));
+
+export const clampMixerMeterLevel = (value: number): number =>
+  clampFinite(value, 0, 1, 0);
+
+export const resolveMixerColumnCount = (breakpoint: LayoutBreakpoint): number => {
+  if (breakpoint === 'desktop') {
+    return 3;
+  }
+  if (breakpoint === 'tablet') {
+    return 2;
+  }
+  return 1;
+};
+
+export const resolveMixerChannelWidth = ({
+  columns,
+  contentWidth,
+  gap,
+}: MixerWidthInput): number => {
+  const availableWidth = Math.max(0, contentWidth - gap * Math.max(0, columns - 1));
+  return availableWidth / Math.max(1, columns);
+};
+
+const formatPan = (pan: number): string => {
+  if (Math.abs(pan) < 0.005) {
+    return 'Center';
+  }
+  const direction = pan < 0 ? 'left' : 'right';
+  return `${Math.round(Math.abs(pan) * 100)}% ${direction}`;
+};
+
+const describeError = (error: unknown, fallback: string): string =>
+  error instanceof Error && error.message.trim() ? error.message : fallback;
+
+const ParameterControl: React.FC<ParameterControlProps> = ({
+  accessibilityLabel,
+  disabled,
+  label,
+  maximum,
+  minimum,
+  onChange,
+  step,
+  testID,
+  value,
+  valueText,
+}) => {
+  const theme = useTheme();
+  const safeValue = clampFinite(value, minimum, maximum, minimum);
+  const accessibilityPercent = Math.round(
+    ((safeValue - minimum) / (maximum - minimum)) * 100,
+  );
+  const minimumTouchWidth = theme.spacing.xxl + theme.spacing.xs;
+  const adjust = useCallback(
+    (direction: -1 | 1) => {
+      if (disabled) {
+        return;
+      }
+      const nextValue = clampAndRound(safeValue + direction * step, minimum, maximum);
+      onChange(nextValue).catch(() => undefined);
+    },
+    [disabled, maximum, minimum, onChange, safeValue, step],
+  );
+  const decrementDisabled = disabled || safeValue <= minimum;
+  const incrementDisabled = disabled || safeValue >= maximum;
+  const buttonStyle = useMemo<ViewStyle>(
     () => ({
-      height: 180 * track.meterLevel,
+      alignSelf: 'stretch',
+      minWidth: minimumTouchWidth,
+      paddingHorizontal: theme.spacing.sm,
     }),
-    [track.meterLevel],
+    [minimumTouchWidth, theme.spacing.sm],
+  );
+  const valueStyle = useMemo<ViewStyle>(
+    () => ({
+      alignItems: 'center',
+      backgroundColor: theme.colors.surfaceVariant,
+      borderColor: theme.colors.border,
+      borderRadius: theme.radii.md,
+      borderWidth: 1,
+      flex: 1,
+      justifyContent: 'center',
+      minHeight: minimumTouchWidth,
+      paddingHorizontal: theme.spacing.sm,
+    }),
+    [
+      minimumTouchWidth,
+      theme.colors.border,
+      theme.colors.surfaceVariant,
+      theme.radii.md,
+      theme.spacing.sm,
+    ],
   );
 
-  const statusLabel = useMemo(() => {
+  return (
+    <View style={{ gap: theme.spacing.xs }}>
+      <StudioText variant="caption" tone="muted" weight="bold">
+        {label.toUpperCase()}
+      </StudioText>
+      <View style={[styles.parameterRow, { gap: theme.spacing.sm }]}>
+        <StudioButton
+          compact
+          label="−"
+          variant="secondary"
+          accessibilityLabel={`Decrease ${accessibilityLabel}`}
+          accessibilityHint={`Decreases ${label.toLowerCase()} by ${step}.`}
+          disabled={decrementDisabled}
+          onPress={() => adjust(-1)}
+          style={buttonStyle}
+        />
+        <View
+          accessible
+          accessibilityActions={[{ name: 'decrement' }, { name: 'increment' }]}
+          accessibilityHint="Swipe up or down to adjust, or use the adjacent buttons."
+          accessibilityLabel={accessibilityLabel}
+          accessibilityRole="adjustable"
+          accessibilityState={{ disabled }}
+          accessibilityValue={{
+            min: 0,
+            max: 100,
+            now: accessibilityPercent,
+            text: valueText,
+          }}
+          onAccessibilityAction={({ nativeEvent }) => {
+            if (nativeEvent.actionName === 'decrement') {
+              adjust(-1);
+            } else if (nativeEvent.actionName === 'increment') {
+              adjust(1);
+            }
+          }}
+          style={valueStyle}
+          testID={testID}
+        >
+          <StudioText variant="label" weight="bold">
+            {valueText}
+          </StudioText>
+        </View>
+        <StudioButton
+          compact
+          label="+"
+          variant="secondary"
+          accessibilityLabel={`Increase ${accessibilityLabel}`}
+          accessibilityHint={`Increases ${label.toLowerCase()} by ${step}.`}
+          disabled={incrementDisabled}
+          onPress={() => adjust(1)}
+          style={buttonStyle}
+        />
+      </View>
+    </View>
+  );
+};
+
+const MixerChannel: React.FC<MixerChannelProps> = ({ actions, track, width }) => {
+  const theme = useTheme();
+  const [actionError, setActionError] = useState<string>();
+  const [isUpdating, setIsUpdating] = useState(false);
+  const meterLevel = clampMixerMeterLevel(track.meterLevel);
+  const meterPercent = Math.round(meterLevel * 100);
+  const volumeDb = clampFinite(
+    track.volumeDb,
+    MIN_TRACK_VOLUME_DB,
+    MAX_TRACK_VOLUME_DB,
+    0,
+  );
+  const pan = clampFinite(track.pan, MIN_TRACK_PAN, MAX_TRACK_PAN, 0);
+  const meterHeight = theme.spacing.xxl * 4;
+  const meterWidth = theme.spacing.lg;
+
+  const runAction = useCallback(
+    async (fallbackMessage: string, operation: () => Promise<unknown>) => {
+      setActionError(undefined);
+      setIsUpdating(true);
+      try {
+        await operation();
+      } catch (error) {
+        console.error('Failed to update mixer track', {
+          error,
+          trackId: track.id,
+        });
+        setActionError(describeError(error, fallbackMessage));
+      } finally {
+        setIsUpdating(false);
+      }
+    },
+    [track.id],
+  );
+
+  const setVolume = useCallback(
+    (nextVolumeDb: number) =>
+      runAction('Unable to update track volume.', () =>
+        actions.setTrackVolume(
+          track.id,
+          clampAndRound(nextVolumeDb, MIN_TRACK_VOLUME_DB, MAX_TRACK_VOLUME_DB),
+        ),
+      ),
+    [actions, runAction, track.id],
+  );
+  const setPan = useCallback(
+    (nextPan: number) =>
+      runAction('Unable to update track pan.', () =>
+        actions.setTrackPan(
+          track.id,
+          clampAndRound(nextPan, MIN_TRACK_PAN, MAX_TRACK_PAN),
+        ),
+      ),
+    [actions, runAction, track.id],
+  );
+  const toggleMuted = useCallback(
+    () =>
+      runAction('Unable to update track mute.', () =>
+        actions.setTrackMuted(track.id, !track.muted),
+      ),
+    [actions, runAction, track.id, track.muted],
+  );
+  const toggleSolo = useCallback(
+    () =>
+      runAction('Unable to update track solo.', () =>
+        actions.setTrackSolo(track.id, !track.solo),
+      ),
+    [actions, runAction, track.id, track.solo],
+  );
+
+  const status = useMemo<{
+    icon: 'engine' | 'mute' | 'solo';
+    label: string;
+    tone: StudioTone;
+  }>(() => {
     if (track.muted) {
-      return 'Muted';
+      return { icon: 'mute', label: 'Muted', tone: 'warning' };
     }
     if (track.solo) {
-      return 'Solo';
+      return { icon: 'solo', label: 'Solo', tone: 'magenta' };
     }
-    return 'Live';
+    return { icon: 'engine', label: 'Live', tone: 'mint' };
   }, [track.muted, track.solo]);
 
   const pluginBadges = useMemo(() => {
@@ -78,72 +355,247 @@ const MixerChannel: React.FC<{ track: TrackViewModel }> = ({ track }) => {
       return null;
     }
     return (
-      <View style={channelStyles.pluginRow}>
-        <NeonText variant="body" intent="secondary" weight="medium">
-          Inserts
-        </NeonText>
+      <View
+        style={{
+          backgroundColor: theme.colors.surfaceVariant,
+          borderRadius: theme.radii.md,
+          gap: theme.spacing.sm,
+          padding: theme.spacing.sm,
+        }}
+      >
+        <StudioText variant="caption" tone="muted" weight="bold">
+          INSERTS
+        </StudioText>
         {track.plugins.map((plugin) => {
-          let intent: ThemeIntent = 'secondary';
-          let statusText = plugin.status;
-          if (plugin.status === 'crashed') {
-            intent = 'critical';
-            statusText = 'crashed';
+          let tone: StudioTone = 'secondary';
+          if (plugin.status === 'active') {
+            tone = 'success';
+          } else if (plugin.status === 'crashed') {
+            tone = 'critical';
           } else if (plugin.status === 'bypassed') {
-            intent = 'warning';
-            statusText = 'bypassed';
+            tone = 'warning';
           }
           return (
-            <View key={plugin.id} style={channelStyles.pluginPill}>
-              <NeonText variant="body" weight="medium">
-                {plugin.label} • {plugin.slot.toUpperCase()}
-              </NeonText>
-              <NeonText variant="caption" intent={intent}>
-                {statusText}
-              </NeonText>
+            <View
+              key={plugin.id}
+              style={[
+                styles.alertHeader,
+                {
+                  backgroundColor: theme.colors.surfaceElevated,
+                  borderRadius: theme.radii.sm,
+                  gap: theme.spacing.sm,
+                  minHeight: theme.spacing.xxl,
+                  paddingHorizontal: theme.spacing.md,
+                  paddingVertical: theme.spacing.sm,
+                },
+              ]}
+            >
+              <View style={styles.flexContent}>
+                <StudioText variant="label" weight="medium" numberOfLines={1}>
+                  {plugin.label}
+                </StudioText>
+                <StudioText variant="caption" tone="secondary">
+                  {plugin.slot.toUpperCase()}
+                </StudioText>
+              </View>
+              <StatusBadge label={plugin.status} tone={tone} />
             </View>
           );
         })}
       </View>
     );
-  }, [track.plugins]);
+  }, [
+    theme.colors.surfaceElevated,
+    theme.colors.surfaceVariant,
+    theme.radii.md,
+    theme.radii.sm,
+    theme.spacing.md,
+    theme.spacing.sm,
+    theme.spacing.xxl,
+    track.plugins,
+  ]);
 
   return (
-    <NeonSurface style={channelStyles.container}>
-      <NeonText variant="title" weight="medium">
-        {track.name}
-      </NeonText>
-      <NeonText variant="body" intent="secondary">
-        {statusLabel} • {track.volumeDb.toFixed(1)} dB • Pan {track.pan.toFixed(2)}
-      </NeonText>
-      <View accessibilityLabel={`${track.name} level`} style={channelStyles.meterShell}>
-        <View style={[channelStyles.meterFill, meterFillStyle]} />
+    <StudioPanel
+      accessibilityLabel={`${track.name} mixer channel`}
+      style={{ gap: theme.spacing.lg, width }}
+      testID={`mixer-channel-${track.id}`}
+    >
+      <View style={[styles.channelHeader, { gap: theme.spacing.md }]}>
+        <View style={styles.flexContent}>
+          <StudioText variant="sectionTitle" weight="bold" numberOfLines={1}>
+            {track.name}
+          </StudioText>
+          <StudioText variant="caption" tone="secondary">
+            {volumeDb.toFixed(1)} dB · Pan {formatPan(pan)}
+          </StudioText>
+        </View>
+        <StatusBadge icon={status.icon} label={status.label} tone={status.tone} />
       </View>
+
+      <View style={[styles.channelBody, { gap: theme.spacing.lg }]}>
+        <View style={[styles.meterColumn, { gap: theme.spacing.xs }]}>
+          <StudioText variant="caption" tone="muted" weight="bold">
+            LEVEL
+          </StudioText>
+          <View
+            accessible
+            accessibilityLabel={`${track.name} level meter`}
+            accessibilityRole="progressbar"
+            accessibilityValue={{
+              min: 0,
+              max: 100,
+              now: meterPercent,
+              text: `${meterPercent}%`,
+            }}
+            style={[
+              styles.meterShell,
+              {
+                backgroundColor: theme.colors.surfaceVariant,
+                borderColor: theme.colors.border,
+                borderRadius: theme.radii.pill,
+                height: meterHeight,
+                width: meterWidth,
+              },
+            ]}
+            testID={`mixer-meter-${track.id}`}
+          >
+            <View
+              importantForAccessibility="no-hide-descendants"
+              style={[
+                styles.fill,
+                {
+                  backgroundColor: theme.colors.accentPrimary,
+                  borderRadius: theme.radii.pill,
+                  height: meterHeight * meterLevel,
+                },
+              ]}
+            />
+          </View>
+          <StudioText variant="caption" tone="mint" weight="bold">
+            {meterPercent}%
+          </StudioText>
+        </View>
+
+        <View style={[styles.channelControls, { gap: theme.spacing.md }]}>
+          <ParameterControl
+            accessibilityLabel={`${track.name} volume`}
+            disabled={isUpdating}
+            label="Volume"
+            maximum={MAX_TRACK_VOLUME_DB}
+            minimum={MIN_TRACK_VOLUME_DB}
+            onChange={setVolume}
+            step={TRACK_VOLUME_STEP_DB}
+            testID={`mixer-volume-${track.id}`}
+            value={volumeDb}
+            valueText={`${volumeDb.toFixed(1)} dB`}
+          />
+          <ParameterControl
+            accessibilityLabel={`${track.name} pan`}
+            disabled={isUpdating}
+            label="Pan"
+            maximum={MAX_TRACK_PAN}
+            minimum={MIN_TRACK_PAN}
+            onChange={setPan}
+            step={TRACK_PAN_STEP}
+            testID={`mixer-pan-${track.id}`}
+            value={pan}
+            valueText={formatPan(pan)}
+          />
+          <View style={[styles.toggleRow, { gap: theme.spacing.sm }]}>
+            <StudioButton
+              compact
+              label={track.muted ? 'Unmute' : 'Mute'}
+              icon="mute"
+              variant={track.muted ? 'primary' : 'secondary'}
+              accessibilityHint={
+                track.muted ? 'Restores this track to the mix.' : 'Silences this track.'
+              }
+              accessibilityLabel={`${track.name} mute`}
+              accessibilityState={{ disabled: isUpdating, selected: track.muted }}
+              disabled={isUpdating}
+              onPress={() => {
+                toggleMuted().catch(() => undefined);
+              }}
+              style={styles.toggleButton}
+            />
+            <StudioButton
+              compact
+              label={track.solo ? 'Unsolo' : 'Solo'}
+              icon="solo"
+              variant={track.solo ? 'primary' : 'secondary'}
+              accessibilityHint={
+                track.solo
+                  ? 'Returns this track to the normal mix.'
+                  : 'Auditions this track on its own.'
+              }
+              accessibilityLabel={`${track.name} solo`}
+              accessibilityState={{ disabled: isUpdating, selected: track.solo }}
+              disabled={isUpdating}
+              onPress={() => {
+                toggleSolo().catch(() => undefined);
+              }}
+              style={styles.toggleButton}
+            />
+          </View>
+        </View>
+      </View>
+
+      {actionError ? (
+        <StudioText accessibilityRole="alert" variant="caption" tone="critical">
+          {actionError}
+        </StudioText>
+      ) : null}
       {pluginBadges}
-    </NeonSurface>
+    </StudioPanel>
   );
 };
 
 export const MixerScreen: React.FC = () => {
   const adaptive = useAdaptiveLayout();
+  const theme = useTheme();
+  const [safeContentWidth, setSafeContentWidth] = useState<number>();
+  const sessionActions = useSessionActions();
   const { status, tracks, diagnostics, refresh, pluginAlerts, retryPlugin } =
     useSessionViewModel();
+  const columns = resolveMixerColumnCount(adaptive.breakpoint);
+  const channelGap = theme.spacing.lg;
+  const channelWidth: ViewStyle['width'] =
+    safeContentWidth === undefined
+      ? '100%'
+      : resolveMixerChannelWidth({
+          columns,
+          contentWidth: safeContentWidth,
+          gap: channelGap,
+        });
+  const safeRenderLoad = clampMixerMeterLevel(diagnostics.renderLoad);
+  const renderLoadPercent = Math.round(safeRenderLoad * 100);
+  const safeXRuns = Number.isFinite(diagnostics.xruns)
+    ? Math.max(0, Math.round(diagnostics.xruns))
+    : 0;
+  const diagnosticsTone: StudioTone =
+    diagnostics.status === 'ready'
+      ? 'mint'
+      : diagnostics.status === 'error'
+        ? 'critical'
+        : diagnostics.status === 'unavailable'
+          ? 'warning'
+          : 'secondary';
+
   const channelListStyle = useMemo<ViewStyle>(
     () => ({
-      paddingHorizontal: adaptive.breakpoint === 'phone' ? 12 : 32,
       flexDirection: 'row',
       flexWrap: 'wrap',
+      gap: channelGap,
     }),
-    [adaptive.breakpoint],
+    [channelGap],
   );
-  const diagnosticsCardStyle = useMemo(() => ({ margin: 16 }), []);
-  const statusTextStyle = useMemo(() => ({ marginTop: 8 }), []);
-  const alertContainerStyle = useMemo(
-    () => [
-      screenStyles.alertContainer,
-      { paddingHorizontal: adaptive.breakpoint === 'phone' ? 16 : 32 },
-    ],
-    [adaptive.breakpoint],
-  );
+  const handleSafeContentLayout = useCallback((event: LayoutChangeEvent) => {
+    const nextWidth = Math.max(0, event.nativeEvent.layout.width);
+    setSafeContentWidth((currentWidth) =>
+      currentWidth === nextWidth ? currentWidth : nextWidth,
+    );
+  }, []);
 
   const handleRefresh = useCallback(() => {
     refresh().catch(() => undefined);
@@ -152,7 +604,10 @@ export const MixerScreen: React.FC = () => {
   const handleRetryPlugin = useCallback(
     (instanceId: string) => {
       retryPlugin(instanceId).catch((error) => {
-        console.error('Failed to retry plugin instantiation', error);
+        console.error('Failed to retry plugin instantiation', {
+          error,
+          instanceId,
+        });
       });
     },
     [retryPlugin],
@@ -166,23 +621,33 @@ export const MixerScreen: React.FC = () => {
       const timestamp = new Date(alert.timestamp).toLocaleTimeString();
       const title = alert.descriptor?.name ?? alert.instanceId;
       const recovered = alert.recovered === true;
-      const intent: ThemeIntent = recovered ? 'success' : 'critical';
+      const tone: StudioTone = recovered ? 'success' : 'critical';
       const actionLabel = recovered ? 'Recovered' : 'Retry';
       return (
-        <NeonSurface
+        <StudioPanel
           key={`${alert.instanceId}:${alert.timestamp}`}
-          intent={intent}
           accessibilityRole="alert"
+          style={{
+            borderColor: recovered
+              ? theme.colors.statusSuccess
+              : theme.colors.statusCritical,
+            gap: theme.spacing.sm,
+          }}
+          variant="raised"
         >
-          <NeonText variant="body" weight="medium">
-            {title}
-          </NeonText>
-          <NeonText variant="caption" intent="secondary">
-            {timestamp} • {alert.reason}
-          </NeonText>
-          <NeonButton
+          <View style={[styles.alertHeader, { gap: theme.spacing.sm }]}>
+            <StudioText variant="body" weight="bold">
+              {title}
+            </StudioText>
+            <StatusBadge label={recovered ? 'Recovered' : 'Plugin alert'} tone={tone} />
+          </View>
+          <StudioText variant="caption" tone="secondary">
+            {timestamp} · {alert.reason}
+          </StudioText>
+          <StudioButton
+            compact
             label={actionLabel}
-            intent={recovered ? 'secondary' : 'primary'}
+            variant={recovered ? 'secondary' : 'primary'}
             disabled={recovered}
             onPress={() => handleRetryPlugin(alert.instanceId)}
             accessibilityHint={
@@ -190,70 +655,101 @@ export const MixerScreen: React.FC = () => {
                 ? 'Plugin already recovered'
                 : 'Retry instantiating the crashed plugin'
             }
-            style={screenStyles.retryButton}
           />
-        </NeonSurface>
+        </StudioPanel>
       );
     });
-  }, [handleRetryPlugin, pluginAlerts]);
+  }, [
+    handleRetryPlugin,
+    pluginAlerts,
+    theme.colors.statusCritical,
+    theme.colors.statusSuccess,
+    theme.spacing.sm,
+  ]);
 
   const renderChannels = () => {
     if (status === 'loading' || status === 'idle') {
       return (
-        <NeonSurface style={diagnosticsCardStyle}>
-          <NeonText variant="body">Preparing mixer channels...</NeonText>
-        </NeonSurface>
+        <StudioPanel>
+          <StudioText variant="body">Preparing mixer channels...</StudioText>
+        </StudioPanel>
       );
     }
     if (status === 'error') {
       return (
-        <NeonSurface style={diagnosticsCardStyle}>
-          <NeonText variant="body" intent="critical">
+        <StudioPanel>
+          <StudioText accessibilityRole="alert" variant="body" tone="critical">
             Mixer data unavailable.
-          </NeonText>
-        </NeonSurface>
+          </StudioText>
+        </StudioPanel>
       );
     }
     if (tracks.length === 0) {
       return (
-        <NeonSurface style={diagnosticsCardStyle}>
-          <NeonText variant="body">No tracks routed to the mixer yet.</NeonText>
-        </NeonSurface>
+        <ScreenState
+          illustrationSource={require('../../../assets/ui/mixer-routing-empty.webp')}
+          kind="empty"
+          message="Add an instrument in Performance to route its output into the mixer."
+          title="No tracks routed to the mixer yet."
+        />
       );
     }
     return (
-      <View style={channelListStyle}>
+      <View style={channelListStyle} testID="mixer-channel-list">
         {tracks.map((track) => (
-          <MixerChannel key={track.id} track={track} />
+          <MixerChannel
+            key={track.id}
+            actions={sessionActions}
+            track={track}
+            width={channelWidth}
+          />
         ))}
       </View>
     );
   };
 
   return (
-    <SafeAreaView style={screenStyles.safeArea}>
-      <ScrollView contentInsetAdjustmentBehavior="automatic">
-        <NeonToolbar
-          title="Mixer"
-          actions={[{ label: 'Refresh', onPress: handleRefresh, intent: 'secondary' }]}
+    <ScreenScaffold
+      actions={
+        <StudioButton
+          compact
+          label="Refresh"
+          variant="secondary"
+          onPress={handleRefresh}
         />
-        {pluginAlertToasts && (
-          <View style={alertContainerStyle}>{pluginAlertToasts}</View>
-        )}
-        <NeonSurface style={diagnosticsCardStyle}>
-          <NeonText variant="title" weight="medium">
-            Audio Engine Diagnostics
-          </NeonText>
-          <NeonText variant="body" style={statusTextStyle}>
-            XRuns detected: {diagnostics.xruns}
-          </NeonText>
-          <NeonText variant="body" intent="secondary">
-            Render load: {(diagnostics.renderLoad * 100).toFixed(0)}% • Status:{' '}
-            {diagnostics.status}
-          </NeonText>
-        </NeonSurface>
+      }
+      contentContainerStyle={{ gap: theme.spacing.lg }}
+      detail={`${tracks.length} ${tracks.length === 1 ? 'channel' : 'channels'}`}
+      title="Mixer"
+    >
+      <View
+        onLayout={handleSafeContentLayout}
+        style={[styles.safeContent, { gap: theme.spacing.lg }]}
+        testID="mixer-safe-content"
+      >
+        {pluginAlertToasts ? (
+          <View style={{ gap: theme.spacing.md }}>{pluginAlertToasts}</View>
+        ) : null}
+        {diagnostics.status !== 'unavailable' ? (
+          <StudioPanel
+            accessibilityLabel="Audio engine diagnostics"
+            style={{ gap: theme.spacing.sm }}
+            variant="subtle"
+          >
+            <View style={[styles.alertHeader, { gap: theme.spacing.md }]}>
+              <StudioText accessibilityRole="header" variant="sectionTitle" weight="bold">
+                Audio Engine Diagnostics
+              </StudioText>
+              <StatusBadge label={diagnostics.status} tone={diagnosticsTone} />
+            </View>
+            <StudioText variant="body">XRuns detected: {safeXRuns}</StudioText>
+            <StudioText variant="body" tone="secondary">
+              Render load: {renderLoadPercent}% · Status: {diagnostics.status}
+            </StudioText>
+          </StudioPanel>
+        ) : null}
         {renderChannels()}
-      </ScrollView>
-    </SafeAreaView>
+      </View>
+    </ScreenScaffold>
   );
 };

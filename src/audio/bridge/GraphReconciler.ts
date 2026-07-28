@@ -15,6 +15,16 @@ type TransportSnapshot = {
   isPlaying: boolean;
 };
 
+let reconcilerInstanceSequence = 0;
+
+const createTransactionNamespace = (): string => {
+  reconcilerInstanceSequence += 1;
+  const randomNonce = Math.random().toString(36).slice(2, 10);
+  return `${Date.now().toString(36)}-${reconcilerInstanceSequence.toString(
+    36,
+  )}-${randomNonce}`;
+};
+
 export type GraphReconciliationResult = {
   removedNodeIds: ReadonlySet<string>;
   replacedNodeIds: ReadonlySet<string>;
@@ -43,6 +53,8 @@ export class GraphReconciler {
   private structuralMutationTail: Promise<void> = Promise.resolve();
 
   private transactionSequence = 0;
+
+  private readonly transactionNamespace = createTransactionNamespace();
 
   private lastCommittedGraph: NativeGraphDescription | null = null;
 
@@ -184,20 +196,72 @@ export class GraphReconciler {
     let expected = await this.audioEngine.describeGraph();
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const transactionId = this.nextTransactionId(attempt);
-      this.logger.debug('Applying complete native graph transaction', {
-        transactionId,
-        attempt,
-        nodeCount: nativeNodes.length,
-        connectionCount: nativeConnections.length,
-      });
-      const result = await this.audioEngine.applyGraph({
+      const request = {
         transactionId,
         expectedGeneration: expected.generation,
         expectedRouteEpoch: expected.routeEpoch,
         expectedEngineInstance: expected.engineInstance,
         nodes: nativeNodes,
         connections: nativeConnections,
+      };
+      this.logger.debug('Applying complete native graph transaction', {
+        transactionId,
+        attempt,
+        nodeCount: nativeNodes.length,
+        connectionCount: nativeConnections.length,
       });
+      let result: NativeGraphApplyResult;
+      try {
+        result = await this.audioEngine.applyGraph(request);
+      } catch (error) {
+        this.logger.warn('Replaying graph transaction after native response failure', {
+          transactionId,
+          error,
+        });
+        try {
+          result = await this.audioEngine.applyGraph(request);
+        } catch (replayError) {
+          let observedGraph:
+            | {
+                generation: number;
+                graphHash: string;
+                nodeCount: number;
+                nodeIds: string[];
+                nodeIdsTruncated: boolean;
+                routeEpoch: number;
+                engineInstance: number;
+              }
+            | undefined;
+          let observationError: unknown;
+          try {
+            const graph = await this.audioEngine.describeGraph();
+            const maximumLoggedNodeIds = 16;
+            observedGraph = {
+              generation: graph.generation,
+              graphHash: graph.graphHash,
+              nodeCount: graph.nodeIds.length,
+              nodeIds: graph.nodeIds.slice(0, maximumLoggedNodeIds),
+              nodeIdsTruncated: graph.nodeIds.length > maximumLoggedNodeIds,
+              routeEpoch: graph.routeEpoch,
+              engineInstance: graph.engineInstance,
+            };
+          } catch (graphObservationError) {
+            observationError = graphObservationError;
+          }
+          this.logger.error('Native graph transaction replay failed', {
+            transactionId,
+            error,
+            replayError,
+            observedGraph,
+            observationError,
+          });
+          throw replayError;
+        }
+      }
+
+      if (result.transactionId !== transactionId) {
+        throw new Error('Native graph transaction response id does not match request');
+      }
 
       if (result.status === 'committed') {
         this.validateCommittedGraph(result.graph, expected, nodes);
@@ -222,11 +286,7 @@ export class GraphReconciler {
     expected: NativeGraphDescription,
     nodes: ReadonlyMap<NodeId, NodeConfiguration>,
   ): void {
-    const expectedNodeIds = [...nodes.keys()].sort();
-    if (
-      committed.nodeIds.length !== expectedNodeIds.length ||
-      committed.nodeIds.some((nodeId, index) => nodeId !== expectedNodeIds[index])
-    ) {
+    if (!this.nodeIdentityMatches(committed, nodes)) {
       throw new Error('Committed native graph node identity does not match request');
     }
     if (
@@ -241,6 +301,17 @@ export class GraphReconciler {
     ) {
       throw new Error('Committed native graph generation is not monotonic');
     }
+  }
+
+  private nodeIdentityMatches(
+    graph: NativeGraphDescription,
+    nodes: ReadonlyMap<NodeId, NodeConfiguration>,
+  ): boolean {
+    const expectedNodeIds = [...nodes.keys()].sort();
+    return (
+      graph.nodeIds.length === expectedNodeIds.length &&
+      graph.nodeIds.every((nodeId, index) => nodeId === expectedNodeIds[index])
+    );
   }
 
   private async nativeGraphMatchesLastCommit(
@@ -298,7 +369,7 @@ export class GraphReconciler {
 
   private nextTransactionId(attempt: number): string {
     this.transactionSequence += 1;
-    return `graph-${Date.now().toString(36)}-${this.transactionSequence.toString(
+    return `graph-${this.transactionNamespace}-${this.transactionSequence.toString(
       36,
     )}-${attempt}`;
   }

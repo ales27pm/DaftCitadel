@@ -3,7 +3,7 @@ import {
   AudioFileLoader,
   AudioFileData,
 } from '../SessionAudioBridge';
-import { AudioEngine } from '../AudioEngine';
+import { AudioEngine, OUTPUT_BUS } from '../AudioEngine';
 import { AutomationLane, ClockSyncService } from '../Automation';
 import {
   AutomationCurve,
@@ -11,6 +11,7 @@ import {
   RoutingGraph,
   Session,
   Track,
+  createDefaultJunoTrack,
   createDefaultTrackRoutingGraph,
   PluginRoutingNode,
 } from '../../session/models';
@@ -425,6 +426,21 @@ describe('SessionAudioBridge', () => {
   const sampleRate = 48000;
   const framesPerBuffer = 256;
   const frames = sampleRate;
+  const activeBridges = new Set<SessionAudioBridge>();
+
+  const createBridge = (
+    ...args: ConstructorParameters<typeof SessionAudioBridge>
+  ): SessionAudioBridge => {
+    const bridge = new SessionAudioBridge(...args);
+    activeBridges.add(bridge);
+    return bridge;
+  };
+
+  afterEach(async () => {
+    const bridges = [...activeBridges];
+    activeBridges.clear();
+    await Promise.all(bridges.map((bridge) => bridge.dispose()));
+  });
 
   it('rebuilds routing graph and schedules clip playback when session revisions advance', async () => {
     const { loader, loadMock } = createLoader(sampleRate, frames);
@@ -439,7 +455,7 @@ describe('SessionAudioBridge', () => {
       uploadClipBuffer,
     } = createMockEngine(clock);
 
-    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    const bridge = createBridge(engine, { fileLoader: loader });
     const session = createSession();
 
     await bridge.applySessionUpdate({ ...session, revision: 1 });
@@ -523,11 +539,75 @@ describe('SessionAudioBridge', () => {
     expect(connect).toHaveBeenCalledWith(pluginNodeId, trackOutput.id);
   });
 
+  it('filters Juno MIDI routing while preserving sidechain routing', async () => {
+    const { loader } = createLoader(sampleRate, frames);
+    const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
+    const { engine, applyGraph } = createMockEngine(clock);
+    const bridge = createBridge(engine, {
+      fileLoader: loader,
+      diagnosticsPollIntervalMs: 0,
+      transportPollIntervalMs: 0,
+    });
+    const track = createDefaultJunoTrack('juno-track');
+    track.routing.graph?.connections.push({
+      id: 'juno-track:sidechain',
+      from: { nodeId: 'juno-track:input:midi' },
+      to: { nodeId: 'juno-track:instrument:juno106' },
+      signal: 'sidechain',
+      enabled: true,
+    });
+
+    await bridge.applySessionUpdate(
+      createSession({
+        revision: 2,
+        tracks: [track],
+      }),
+    );
+
+    expect(applyGraph).toHaveBeenCalledTimes(1);
+    expect(applyGraph.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        nodes: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'juno-track:input:midi',
+            type: 'gain',
+          }),
+          expect.objectContaining({
+            id: 'juno-track:instrument:juno106',
+            type: 'juno106',
+            options: expect.objectContaining({
+              cutoffHz: 2400,
+              polyphony: 8,
+            }),
+          }),
+          expect.objectContaining({
+            id: 'juno-track:output:main',
+            type: 'gain',
+          }),
+        ]),
+        connections: [
+          {
+            source: 'juno-track:input:midi',
+            destination: 'juno-track:instrument:juno106',
+          },
+          {
+            source: 'juno-track:instrument:juno106',
+            destination: 'juno-track:output:main',
+          },
+          {
+            source: 'juno-track:output:main',
+            destination: OUTPUT_BUS,
+          },
+        ],
+      }),
+    );
+  });
+
   it('throws when a track is missing a routing graph', async () => {
     const { loader } = createLoader(sampleRate, frames);
     const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
     const { engine } = createMockEngine(clock);
-    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    const bridge = createBridge(engine, { fileLoader: loader });
 
     const trackWithoutGraph = {
       id: 'track-missing',
@@ -565,7 +645,7 @@ describe('SessionAudioBridge', () => {
     const { engine, configureNodes, uploadClipBuffer, publishAutomation } =
       createMockEngine(clock);
 
-    const bridge = new SessionAudioBridge(engine, { fileLoader: failingLoader, logger });
+    const bridge = createBridge(engine, { fileLoader: failingLoader, logger });
 
     await bridge.applySessionUpdate(createSession({ revision: 3 }));
 
@@ -583,7 +663,7 @@ describe('SessionAudioBridge', () => {
     const { loader: zeroChannelLoader } = createLoader(sampleRate, frames, {
       channels: 0,
     });
-    const bridgeWithZeroChannel = new SessionAudioBridge(engine, {
+    const bridgeWithZeroChannel = createBridge(engine, {
       fileLoader: zeroChannelLoader,
       logger,
     });
@@ -600,7 +680,7 @@ describe('SessionAudioBridge', () => {
     const { loader } = createLoader(sampleRate, frames);
     const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
     const { engine, publishAutomation } = createMockEngine(clock);
-    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    const bridge = createBridge(engine, { fileLoader: loader });
 
     const automationCurveA: AutomationCurve = {
       id: 'curve-1',
@@ -660,7 +740,7 @@ describe('SessionAudioBridge', () => {
     const { loader } = createLoader(sampleRate, frames);
     const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
     const { engine, connect, disconnect, removeNodes } = createMockEngine(clock);
-    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    const bridge = createBridge(engine, { fileLoader: loader });
 
     const sessionWithClip = createSession({ revision: 6 });
     await bridge.applySessionUpdate(sessionWithClip);
@@ -696,7 +776,7 @@ describe('SessionAudioBridge', () => {
     const { loader } = createLoader(sampleRate, frames);
     const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
     const { engine, publishAutomation } = createMockEngine(clock);
-    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    const bridge = createBridge(engine, { fileLoader: loader });
 
     const automationCurve: AutomationCurve = {
       id: 'curve-clear',
@@ -751,7 +831,7 @@ describe('SessionAudioBridge', () => {
     });
     const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
     const { engine, uploadClipBuffer } = createMockEngine(clock);
-    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    const bridge = createBridge(engine, { fileLoader: loader });
 
     await bridge.applySessionUpdate(createSession({ revision: 9 }));
 
@@ -777,7 +857,7 @@ describe('SessionAudioBridge', () => {
     const { engine, configureNodes } = createMockEngine(clock);
     const { host, loadPlugin, releasePlugin } = createPluginHostMock();
     const descriptorResolver = jest.fn().mockResolvedValue(mockDescriptor);
-    const bridge = new SessionAudioBridge(engine, {
+    const bridge = createBridge(engine, {
       fileLoader: loader,
       pluginHost: host,
       resolvePluginDescriptor: descriptorResolver,
@@ -872,7 +952,7 @@ describe('SessionAudioBridge', () => {
       .fn()
       .mockResolvedValueOnce(mockDescriptor)
       .mockRejectedValueOnce(new Error('resolver failure'));
-    const bridge = new SessionAudioBridge(engine, {
+    const bridge = createBridge(engine, {
       fileLoader: loader,
       pluginHost: hostMock.host,
       resolvePluginDescriptor: descriptorResolver,
@@ -976,7 +1056,7 @@ describe('SessionAudioBridge', () => {
       .mockResolvedValueOnce(mockDescriptor)
       .mockResolvedValue(nextDescriptor);
 
-    const bridge = new SessionAudioBridge(engine, {
+    const bridge = createBridge(engine, {
       fileLoader: loader,
       pluginHost: hostMock.host,
       resolvePluginDescriptor: descriptorResolver,
@@ -1063,7 +1143,7 @@ describe('SessionAudioBridge', () => {
     const { engine } = createMockEngine(clock);
     const { host, scheduleAutomation } = createPluginHostMock();
     const descriptorResolver = jest.fn().mockResolvedValue(mockDescriptor);
-    const bridge = new SessionAudioBridge(engine, {
+    const bridge = createBridge(engine, {
       fileLoader: loader,
       pluginHost: host,
       resolvePluginDescriptor: descriptorResolver,
@@ -1156,7 +1236,7 @@ describe('SessionAudioBridge', () => {
     const { engine, configureNodes } = createMockEngine(clock);
     const hostMock = createPluginHostMock();
     const descriptorResolver = jest.fn().mockResolvedValue(mockDescriptor);
-    const bridge = new SessionAudioBridge(engine, {
+    const bridge = createBridge(engine, {
       fileLoader: loader,
       pluginHost: hostMock.host,
       resolvePluginDescriptor: descriptorResolver,
@@ -1279,7 +1359,7 @@ describe('SessionAudioBridge', () => {
       latencySamples: 32,
     });
     const descriptorResolver = jest.fn().mockResolvedValue(mockDescriptor);
-    const bridge = new SessionAudioBridge(engine, {
+    const bridge = createBridge(engine, {
       fileLoader: loader,
       pluginHost: hostMock.host,
       resolvePluginDescriptor: descriptorResolver,
@@ -1352,7 +1432,7 @@ describe('SessionAudioBridge', () => {
       latencySamples: 32,
     });
     const descriptorResolver = jest.fn().mockResolvedValue(mockDescriptor);
-    const bridge = new SessionAudioBridge(engine, {
+    const bridge = createBridge(engine, {
       fileLoader: loader,
       pluginHost: hostMock.host,
       resolvePluginDescriptor: descriptorResolver,
@@ -1410,7 +1490,7 @@ describe('SessionAudioBridge', () => {
     const { loader } = createLoader(sampleRate, frames);
     const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
     const { engine, uploadClipBuffer, releaseClipBuffer } = createMockEngine(clock);
-    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    const bridge = createBridge(engine, { fileLoader: loader });
 
     await bridge.applySessionUpdate(
       createSession({
@@ -1442,7 +1522,7 @@ describe('SessionAudioBridge', () => {
     const { loader } = createLoader(sampleRate, frames);
     const clock = new ClockSyncService(sampleRate, framesPerBuffer, 120);
     const { engine, uploadClipBuffer, releaseClipBuffer } = createMockEngine(clock);
-    const bridge = new SessionAudioBridge(engine, { fileLoader: loader });
+    const bridge = createBridge(engine, { fileLoader: loader });
 
     await bridge.applySessionUpdate(
       createSession({
@@ -1504,7 +1584,7 @@ describe('SessionAudioBridge', () => {
       const { engine, getTransportState, startTransport } = createMockEngine(clock);
       getTransportState.mockResolvedValue({ frame: 0, isPlaying: false });
 
-      const bridge = new SessionAudioBridge(engine, {
+      const bridge = createBridge(engine, {
         fileLoader: loader,
         transportPollIntervalMs: 10,
         diagnosticsPollIntervalMs: 0,
@@ -1540,7 +1620,7 @@ describe('SessionAudioBridge', () => {
         clipBufferBytes: 4096,
       });
 
-      const bridge = new SessionAudioBridge(engine, {
+      const bridge = createBridge(engine, {
         fileLoader: loader,
         transportPollIntervalMs: 0,
         diagnosticsPollIntervalMs: 10,
@@ -1572,7 +1652,7 @@ describe('SessionAudioBridge', () => {
       );
       const { engine, getTransportState, getRenderDiagnostics } = createMockEngine(clock);
 
-      const bridge = new SessionAudioBridge(engine, {
+      const bridge = createBridge(engine, {
         fileLoader: loader,
         transportPollIntervalMs: 10,
         diagnosticsPollIntervalMs: 10,
@@ -1613,7 +1693,7 @@ describe('SessionAudioBridge', () => {
 
       getRenderDiagnostics.mockRejectedValue(pollingError);
 
-      const bridge = new SessionAudioBridge(engine, {
+      const bridge = createBridge(engine, {
         fileLoader: loader,
         transportPollIntervalMs: 0,
         diagnosticsPollIntervalMs: 10,

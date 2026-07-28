@@ -1,22 +1,67 @@
-import React, { PropsWithChildren, useMemo } from 'react';
+import React, { PropsWithChildren } from 'react';
 import {
   AccessibilityProps,
-  Pressable,
   PressableProps,
   StyleProp,
-  StyleSheet,
-  Text,
-  TextProps,
   View,
   ViewProps,
   ViewStyle,
-  Platform,
 } from 'react-native';
 
-import { ThemeIntent, mapIntentToColor } from './tokens';
-import { createTextStyle, TypographyVariant } from './typography';
+import { ThemeIntent } from './tokens';
+import { TypographyVariant } from './typography';
+import {
+  StudioButton,
+  StudioHeader,
+  StudioPanel,
+  StudioText,
+  type StudioTextProps,
+} from './studio-components';
 import { useTheme } from './theme';
 
+const toneForIntent = (intent: ThemeIntent): NonNullable<StudioTextProps['tone']> => {
+  switch (intent) {
+    case 'secondary':
+      return 'secondary';
+    case 'tertiary':
+      return 'cyan';
+    case 'success':
+      return 'success';
+    case 'warning':
+      return 'warning';
+    case 'critical':
+      return 'critical';
+    case 'primary':
+    default:
+      return 'primary';
+  }
+};
+
+const variantForTypography = (
+  variant: TypographyVariant,
+): NonNullable<StudioTextProps['variant']> => {
+  switch (variant) {
+    case 'caption':
+      return 'caption';
+    case 'bodyLarge':
+      return 'bodyLarge';
+    case 'title':
+      return 'sectionTitle';
+    case 'headline':
+      return 'screenTitle';
+    case 'body':
+    default:
+      return 'body';
+  }
+};
+
+/**
+ * Compatibility adapters for the original Neon API.
+ *
+ * New surfaces should use the Studio primitives directly. Keeping these adapters
+ * lets existing editors inherit the calmer Studio hierarchy while they are
+ * migrated incrementally.
+ */
 export interface NeonSurfaceProps extends ViewProps, AccessibilityProps {
   elevation?: keyof ReturnType<typeof useTheme>['elevation'];
   intent?: ThemeIntent;
@@ -26,57 +71,24 @@ export interface NeonSurfaceProps extends ViewProps, AccessibilityProps {
 export const NeonSurface: React.FC<PropsWithChildren<NeonSurfaceProps>> = ({
   children,
   style,
-  elevation = 'md',
   intent = 'primary',
-  glow = 0.8,
+  elevation: _elevation,
+  glow: _glow,
   ...rest
-}) => {
-  const theme = useTheme();
+}) => (
+  <StudioPanel
+    variant={intent === 'critical' ? 'critical' : 'default'}
+    style={style}
+    {...rest}
+  >
+    {children}
+  </StudioPanel>
+);
 
-  const accentStyle = useMemo(() => {
-    const accent = mapIntentToColor(theme, intent);
-    const base: ViewStyle = {
-      borderColor: accent,
-      borderWidth: 1,
-    };
-
-    if (Platform.OS === 'android') {
-      base.elevation = theme.elevation[elevation];
-    } else {
-      base.shadowColor = accent;
-      base.shadowOpacity = 0.7;
-      base.shadowRadius = theme.elevation[elevation] * glow;
-      base.shadowOffset = { width: 0, height: 0 };
-    }
-
-    return base;
-  }, [elevation, glow, intent, theme]);
-
-  const containerStyle: StyleProp<ViewStyle> = useMemo(
-    () => [
-      {
-        backgroundColor: theme.colors.surface,
-        padding: theme.spacing.md,
-        borderRadius: theme.radii.lg,
-      },
-      style,
-    ],
-    [style, theme.colors.surface, theme.radii.lg, theme.spacing.md],
-  );
-
-  return (
-    <View
-      accessible
-      accessibilityRole="summary"
-      style={[containerStyle, accentStyle]}
-      {...rest}
-    >
-      {children}
-    </View>
-  );
-};
-
-export interface NeonTextProps extends TextProps {
+export interface NeonTextProps extends Omit<
+  React.ComponentProps<typeof StudioText>,
+  'variant' | 'tone' | 'weight'
+> {
   variant?: TypographyVariant;
   intent?: ThemeIntent;
   weight?: keyof ReturnType<typeof useTheme>['typography']['weights'];
@@ -87,21 +99,17 @@ export const NeonText: React.FC<PropsWithChildren<NeonTextProps>> = ({
   variant = 'body',
   intent = 'primary',
   weight = 'regular',
-  style,
   ...rest
-}) => {
-  const theme = useTheme();
-  const textStyle = useMemo(
-    () => [createTextStyle(theme, variant, intent, weight), style],
-    [intent, style, theme, variant, weight],
-  );
-
-  return (
-    <Text accessibilityRole="text" style={textStyle} {...rest}>
-      {children}
-    </Text>
-  );
-};
+}) => (
+  <StudioText
+    tone={toneForIntent(intent)}
+    variant={variantForTypography(variant)}
+    weight={weight}
+    {...rest}
+  >
+    {children}
+  </StudioText>
+);
 
 export interface NeonButtonProps extends AccessibilityProps, PressableProps {
   label: string;
@@ -118,60 +126,22 @@ export const NeonButton: React.FC<NeonButtonProps> = ({
   intent = 'primary',
   style,
   ...rest
-}) => {
-  const theme = useTheme();
-
-  const buttonEffectStyle = useMemo(
-    () => ({
-      shadowColor: mapIntentToColor(theme, intent),
-      shadowOpacity: disabled ? theme.opacity.disabled : 1,
-      shadowRadius: theme.elevation.md,
-      transform: [
-        {
-          scale: disabled ? 0.98 : 1,
-        },
-      ],
-    }),
-    [disabled, intent, theme],
-  );
-
-  const baseStyle: StyleProp<ViewStyle> = [
-    {
-      backgroundColor: mapIntentToColor(theme, intent),
-      paddingVertical: theme.spacing.sm,
-      paddingHorizontal: theme.spacing.lg,
-      borderRadius: theme.radii.md,
-      alignItems: 'center',
-      justifyContent: 'center',
-      opacity: disabled ? theme.opacity.disabled : 1,
-    },
-    style,
-  ];
-
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ disabled }}
-      onPress={onPress}
-      disabled={disabled}
-      {...rest}
-    >
-      <View style={[baseStyle, buttonEffectStyle]}>
-        <NeonText
-          variant="bodyLarge"
-          weight="medium"
-          intent="primary"
-          style={{ color: theme.colors.surface }}
-        >
-          {label}
-        </NeonText>
-      </View>
-    </Pressable>
-  );
-};
+}) => (
+  <StudioButton
+    disabled={disabled}
+    label={label}
+    onPress={onPress}
+    style={style}
+    variant={
+      intent === 'primary' ? 'primary' : intent === 'critical' ? 'danger' : 'secondary'
+    }
+    {...rest}
+  />
+);
 
 export interface NeonToolbarProps extends ViewProps {
   title: string;
+  stackActions?: boolean;
   actions?: Array<{
     label: string;
     onPress: () => void;
@@ -182,52 +152,52 @@ export interface NeonToolbarProps extends ViewProps {
 
 export const NeonToolbar: React.FC<NeonToolbarProps> = ({
   title,
+  stackActions = false,
   actions,
   style,
   ...rest
 }) => {
   const theme = useTheme();
-  const toolbarStyles = useMemo(
-    () =>
-      StyleSheet.create({
-        container: {
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: theme.spacing.md,
-        },
-        actionRow: {
-          flexDirection: 'row',
-        },
-      }),
-    [theme.spacing.md],
-  );
-
-  const actionSpacing = useMemo(
-    () =>
-      actions?.map((_, index) => ({ marginLeft: index === 0 ? 0 : theme.spacing.sm })) ??
-      [],
-    [actions, theme.spacing.sm],
-  );
+  const actionViews = actions?.length ? (
+    <View
+      style={{
+        alignItems: 'center',
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: theme.spacing.sm,
+      }}
+    >
+      {actions.map((action) => (
+        <NeonButton
+          key={action.label}
+          accessibilityLabel={action.label}
+          disabled={action.disabled}
+          intent={action.intent ?? 'secondary'}
+          label={action.label}
+          onPress={action.onPress}
+        />
+      ))}
+    </View>
+  ) : undefined;
 
   return (
-    <View accessibilityRole="header" style={[toolbarStyles.container, style]} {...rest}>
-      <NeonText variant="title" weight="bold">
-        {title}
-      </NeonText>
-      <View style={toolbarStyles.actionRow}>
-        {actions?.map((action, index) => (
-          <View key={action.label} style={actionSpacing[index]}>
-            <NeonButton
-              label={action.label}
-              onPress={action.onPress}
-              intent={action.intent ?? 'secondary'}
-              disabled={action.disabled}
-              accessibilityLabel={action.label}
-            />
-          </View>
-        ))}
-      </View>
+    <View
+      style={[
+        {
+          gap: theme.spacing.md,
+          paddingHorizontal: theme.spacing.md,
+          paddingVertical: theme.spacing.md,
+        },
+        style,
+      ]}
+      {...rest}
+    >
+      <StudioHeader
+        actions={stackActions ? undefined : actionViews}
+        title={title}
+        compact
+      />
+      {stackActions ? actionViews : null}
     </View>
   );
 };

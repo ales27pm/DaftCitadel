@@ -25,8 +25,12 @@ export class AutomationPublisher {
   ) {}
 
   async applyChanges(requests: Map<AutomationKey, AutomationRequest>): Promise<void> {
-    this.queue = this.queue.then(() => this.processRequests(requests));
-    return this.queue;
+    const operation = this.queue.then(() => this.processRequests(requests));
+    // A failed native publication must reject its caller without poisoning the
+    // serialized queue. Otherwise every later retry skips processRequests and
+    // replays the first rejection forever.
+    this.queue = operation.catch(() => undefined);
+    return operation;
   }
 
   private async processRequests(

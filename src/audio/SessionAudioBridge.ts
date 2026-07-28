@@ -682,7 +682,7 @@ export class SessionAudioBridge {
         );
 
         graph.connections.forEach((connection) => {
-          if (connection.enabled === false) {
+          if (connection.enabled === false || connection.signal === 'midi') {
             return;
           }
           connections.add(

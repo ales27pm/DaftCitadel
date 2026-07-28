@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, type PressableProps, StyleSheet, View } from 'react-native';
 
-import { ThemeProvider, useTheme } from '../design-system';
+import { StudioIcon, StudioText, useTheme } from '../design-system';
 import {
   ArrangementScreen,
   MixerScreen,
@@ -9,6 +9,7 @@ import {
   SettingsScreen,
 } from '../screens';
 import { SessionAppProvider } from '../session';
+import { StudioThemeProvider } from '../settings';
 import {
   APP_TAB_SEQUENCE as APP_TAB_SEQUENCE_SPEC,
   APP_TABS,
@@ -28,6 +29,9 @@ type BrowserLocation = {
 type BrowserWindow = {
   history?: BrowserHistory;
   location?: BrowserLocation;
+  document?: {
+    getElementById?: (id: string) => { focus?: () => void } | null;
+  };
   localStorage?: {
     getItem: (key: string) => string | null;
     setItem: (key: string, value: string) => void;
@@ -49,7 +53,7 @@ type BrowserPopState = {
 const WEB_TAB_STORAGE_KEY = 'daftcitadel:web.activeTab';
 const WEB_HASH_PREFIX = '#/';
 
-export const DEFAULT_WEB_TAB = APP_TAB_SEQUENCE_SPEC[0];
+export const DEFAULT_WEB_TAB: AppTabName = 'Performance';
 
 export const isKnownAppTab = (value: unknown): value is AppTabName =>
   typeof value === 'string' &&
@@ -142,7 +146,10 @@ export type ArrangementStackParamList = {
 
 export const APP_TAB_SEQUENCE = APP_TAB_SEQUENCE_SPEC;
 
-const TAB_SCREEN_BY_NAME: Record<AppTabName, React.ComponentType> = {
+const TAB_SCREEN_BY_NAME: Record<
+  AppTabName,
+  React.ComponentType<{ isActive?: boolean }>
+> = {
   Arrangement: ArrangementScreen,
   Mixer: MixerScreen,
   Performance: PerformanceScreen,
@@ -159,7 +166,7 @@ const styles = StyleSheet.create({
     minHeight: 0,
   },
   tabBar: {
-    minHeight: 84,
+    minHeight: 76,
     flexDirection: 'row',
     alignItems: 'stretch',
     justifyContent: 'center',
@@ -178,24 +185,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   tabLabel: {
-    fontSize: 9,
-    letterSpacing: 1,
-  },
-  icon: {
-    fontSize: 18,
-    lineHeight: 20,
+    fontSize: 12,
+    lineHeight: 16,
   },
   tabText: {
     marginTop: 2,
   },
 });
 
-const TAB_ICON_BY_NAME: Record<AppTabName, string> = {
-  Arrangement: '≋',
-  Mixer: '☷',
-  Performance: '▦',
-  Settings: '⚙',
+type WebPressableProps = PressableProps & {
+  onKeyDown?: (event: React.KeyboardEvent) => void;
 };
+
+const WebPressable = Pressable as React.ComponentType<WebPressableProps>;
 
 const WebTabNavigator: React.FC = () => {
   const theme = useTheme();
@@ -204,8 +206,6 @@ const WebTabNavigator: React.FC = () => {
     resolveInitialWebTab(browser),
   );
   const activeTabRef = useRef<AppTabName>(activeTab);
-  const activeScreen = TAB_SCREEN_BY_NAME[activeTab];
-  const ActiveScreen = activeScreen;
   const dynamicStyles = useMemo(
     () => ({
       tabBar: {
@@ -225,6 +225,34 @@ const WebTabNavigator: React.FC = () => {
     }
     setActiveTab(tabName);
     persistWebTab(browser, tabName, 'push');
+  };
+
+  const handleTabKeyDown = (tabName: AppTabName, event: React.KeyboardEvent): void => {
+    const currentIndex = APP_TAB_SEQUENCE.indexOf(tabName);
+    const lastIndex = APP_TAB_SEQUENCE.length - 1;
+    let nextIndex: number | undefined;
+    switch (event.key) {
+      case 'ArrowRight':
+      case 'ArrowDown':
+        nextIndex = currentIndex === lastIndex ? 0 : currentIndex + 1;
+        break;
+      case 'ArrowLeft':
+      case 'ArrowUp':
+        nextIndex = currentIndex === 0 ? lastIndex : currentIndex - 1;
+        break;
+      case 'Home':
+        nextIndex = 0;
+        break;
+      case 'End':
+        nextIndex = lastIndex;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    const nextTab = APP_TAB_SEQUENCE[nextIndex];
+    handleTabPress(nextTab);
+    browser?.document?.getElementById?.(`app-tab-${nextTab}`)?.focus?.();
   };
 
   useEffect(() => {
@@ -248,35 +276,50 @@ const WebTabNavigator: React.FC = () => {
   return (
     <View style={[styles.root, dynamicStyles.root]}>
       <View style={styles.screen}>
-        <ActiveScreen />
+        {APP_TAB_SEQUENCE.map((tabName) => {
+          const Screen = TAB_SCREEN_BY_NAME[tabName];
+          const selected = tabName === activeTab;
+          return (
+            <View
+              key={tabName}
+              aria-hidden={!selected}
+              importantForAccessibility={selected ? 'auto' : 'no-hide-descendants'}
+              style={[styles.screen, { display: selected ? 'flex' : 'none' }]}
+            >
+              <Screen isActive={selected} />
+            </View>
+          );
+        })}
       </View>
-      <View style={[styles.tabBar, dynamicStyles.tabBar]}>
+      <View
+        accessibilityLabel="Primary navigation"
+        accessibilityRole="tablist"
+        style={[styles.tabBar, dynamicStyles.tabBar]}
+      >
         {APP_TAB_SEQUENCE.map((tabName) => {
           const selected = tabName === activeTab;
           const spec = APP_TABS.find((entry) => entry.name === tabName) ?? APP_TABS[0];
-          const icon = TAB_ICON_BY_NAME[tabName];
           return (
-            <Pressable
+            <WebPressable
               key={tabName}
               accessibilityLabel={spec.accessibilityLabel}
               accessibilityRole="tab"
               accessibilityState={{ selected }}
+              nativeID={`app-tab-${tabName}`}
+              onKeyDown={(event) => handleTabKeyDown(tabName, event)}
               onPress={() => handleTabPress(tabName)}
               style={styles.tab}
+              tabIndex={selected ? 0 : -1}
             >
-              <Text
-                style={[
-                  styles.icon,
-                  {
-                    color: selected
-                      ? theme.colors.accentPrimary
-                      : theme.colors.textSecondary,
-                  },
-                ]}
-              >
-                {icon}
-              </Text>
-              <Text
+              <StudioIcon
+                color={selected ? theme.colors.accentPrimary : theme.colors.textSecondary}
+                name={spec.icon}
+                size={20}
+              />
+              <StudioText
+                selectable={false}
+                variant="caption"
+                weight={selected ? 'bold' : 'medium'}
                 style={[
                   styles.tabLabel,
                   styles.tabText,
@@ -284,8 +327,8 @@ const WebTabNavigator: React.FC = () => {
                 ]}
               >
                 {spec.label}
-              </Text>
-            </Pressable>
+              </StudioText>
+            </WebPressable>
           );
         })}
       </View>
@@ -294,9 +337,9 @@ const WebTabNavigator: React.FC = () => {
 };
 
 export const AppNavigator: React.FC = () => (
-  <ThemeProvider>
+  <StudioThemeProvider>
     <SessionAppProvider>
       <WebTabNavigator />
     </SessionAppProvider>
-  </ThemeProvider>
+  </StudioThemeProvider>
 );

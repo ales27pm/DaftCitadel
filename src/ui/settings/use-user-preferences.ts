@@ -1,9 +1,14 @@
 import { useCallback, useSyncExternalStore } from 'react';
 
-import { userPreferencesStore, type UserPreferences } from './user-preferences';
+import {
+  DEFAULT_USER_PREFERENCES,
+  userPreferencesStore,
+  type UserPreferences,
+} from './user-preferences';
 
 export interface UserPreferencesHandle {
   preferences: UserPreferences;
+  resetAppearance: () => void;
   setPreference: <Key extends keyof UserPreferences>(
     key: Key,
     value: UserPreferences[Key],
@@ -22,5 +27,13 @@ export const useUserPreferences = (): UserPreferencesHandle => {
     },
     [],
   );
-  return { preferences, setPreference };
+  const resetAppearance = useCallback(() => {
+    userPreferencesStore.update({
+      accentPalette: DEFAULT_USER_PREFERENCES.accentPalette,
+      glowIntensity: DEFAULT_USER_PREFERENCES.glowIntensity,
+      interfaceDensity: DEFAULT_USER_PREFERENCES.interfaceDensity,
+      studioSurface: DEFAULT_USER_PREFERENCES.studioSurface,
+    });
+  }, []);
+  return { preferences, resetAppearance, setPreference };
 };

@@ -1,26 +1,68 @@
 import React, { useCallback, useMemo } from 'react';
-import { SafeAreaView, ScrollView, View } from 'react-native';
+import { View } from 'react-native';
+import { useNavigation, type NavigationProp } from '@react-navigation/native';
 
 import { MidiPianoRoll, WaveformEditor } from '../editors';
 import {
-  NeonSurface,
-  NeonText,
-  NeonToolbar,
-  type NeonToolbarProps,
+  ScreenScaffold,
+  ScreenState,
+  StudioButton,
+  StudioPanel,
+  StudioText,
+  TransportBar,
+  useTheme,
 } from '../design-system';
 import { useAdaptiveLayout } from '../layout';
+import type { AppTabParamList } from '../navigation/tab-spec';
 import {
+  useProjectedTransport,
   useSessionViewModel,
   useTransportControls,
-  useProjectedTransport,
 } from '../session';
+
+export const resolveArrangementWaveformWidth = (
+  viewportWidth: number,
+  horizontalPadding: number,
+): number => Math.max(160, Math.min(640, viewportWidth - horizontalPadding * 2 - 32));
+
+const formatDiagnostics = (
+  diagnostics: ReturnType<typeof useSessionViewModel>['diagnostics'],
+): string => {
+  if (diagnostics.status === 'ready') {
+    const renderPercent = Number.isFinite(diagnostics.renderLoad)
+      ? `${Math.round(diagnostics.renderLoad * 100)}%`
+      : 'Unavailable';
+    const clipBytes = diagnostics.clipBufferBytes ?? 0;
+    const clipInfo =
+      clipBytes > 0 ? ` · Clip buffers ${(clipBytes / 1024).toFixed(0)} KB` : '';
+    return `${diagnostics.xruns} XRuns · ${renderPercent} render load${clipInfo}`;
+  }
+  if (diagnostics.status === 'error') {
+    return `Diagnostics error · ${diagnostics.error?.message ?? 'Unknown failure'}`;
+  }
+  if (diagnostics.status === 'unavailable') {
+    return 'Audio diagnostics unavailable';
+  }
+  return 'Gathering audio diagnostics';
+};
 
 export const ArrangementScreen: React.FC = () => {
   const adaptive = useAdaptiveLayout();
-  const { status, tracks, transport, refresh, diagnostics, pluginAlerts } =
-    useSessionViewModel();
-  const { projectedRatio } = useProjectedTransport(transport);
+  const theme = useTheme();
+  const navigation = useNavigation<NavigationProp<AppTabParamList>>();
+  const {
+    diagnostics,
+    error,
+    pluginAlerts,
+    refresh,
+    sessionName,
+    status,
+    tracks,
+    transport,
+  } = useSessionViewModel();
   const transportControls = useTransportControls();
+  const { projectedRatio } = useProjectedTransport(transport);
+
   const arrangementTrack = useMemo(
     () => tracks.find((track) => track.waveform.length > 0) ?? tracks[0],
     [tracks],
@@ -29,225 +71,197 @@ export const ArrangementScreen: React.FC = () => {
     () => tracks.find((track) => track.midiNotes.length > 0) ?? arrangementTrack,
     [arrangementTrack, tracks],
   );
+  const contentWidth = Math.min(
+    adaptive.maxContentWidth,
+    adaptive.width - adaptive.contentPadding * 2,
+  );
+  const waveformWidth = resolveArrangementWaveformWidth(contentWidth, theme.spacing.md);
   const waveform = arrangementTrack?.waveform ?? new Float32Array(0);
-  const playhead = transport ? projectedRatio : 0.25;
-  const safeAreaStyle = useMemo(() => ({ flex: 1 }), []);
-  const contentHorizontalPadding = adaptive.breakpoint === 'phone' ? 16 : 32;
-  const contentStyle = useMemo(
-    () => ({
-      paddingHorizontal: contentHorizontalPadding,
-      paddingBottom: adaptive.breakpoint === 'desktop' ? 48 : 24,
-    }),
-    [adaptive.breakpoint, contentHorizontalPadding],
-  );
-  const alertsContainerStyle = useMemo(
-    () => ({
-      paddingHorizontal: contentHorizontalPadding,
-      marginBottom: 12,
-    }),
-    [contentHorizontalPadding],
-  );
-  const waveformCardStyle = useMemo(() => ({ marginBottom: 24 }), []);
-  const summaryStyle = useMemo(() => ({ marginTop: 12 }), []);
-  const automationStyle = useMemo(() => ({ marginTop: 8 }), []);
-  const diagnosticsStyle = useMemo(() => ({ marginTop: 12 }), []);
-  const alertSurfaceStyle = useMemo(() => ({ marginBottom: 12 }), []);
-  const diagnosticsSummary = useMemo(() => {
-    if (diagnostics.status === 'ready') {
-      const renderPercent = Number.isFinite(diagnostics.renderLoad)
-        ? `${Math.round(diagnostics.renderLoad * 100)}%`
-        : '0%';
-      const clipBytes = diagnostics.clipBufferBytes ?? 0;
-      const clipInfo =
-        clipBytes > 0 ? ` • Clip buffers: ${(clipBytes / 1024).toFixed(0)} KB` : '';
-      return `XRuns: ${diagnostics.xruns} • Render load: ${renderPercent}${clipInfo}`;
-    }
-    if (diagnostics.status === 'error') {
-      return `Diagnostics error: ${diagnostics.error?.message ?? 'Unknown failure.'}`;
-    }
-    if (diagnostics.status === 'unavailable') {
-      return 'Audio diagnostics unavailable.';
-    }
-    return 'Gathering audio diagnostics...';
-  }, [diagnostics]);
-  const diagnosticsIntent =
-    diagnostics.status === 'error' ? 'critical' : ('secondary' as const);
-  const pluginAlertViews = useMemo(
-    () =>
-      pluginAlerts.map((alert) => {
-        const label = alert.descriptor?.name ?? alert.instanceId;
-        const timestamp = new Date(alert.timestamp).toLocaleString('en-US', {
-          timeZone: 'UTC',
-        });
-        const recoveryNote = alert.recovered ? ' • Recovered' : '';
-        return (
-          <NeonSurface
-            key={`${alert.instanceId}:${alert.timestamp}`}
-            intent="critical"
-            style={alertSurfaceStyle}
-          >
-            <NeonText variant="body" weight="medium" intent="critical">
-              Plugin crash: {label}
-            </NeonText>
-            <NeonText variant="caption" intent="secondary">
-              {timestamp} • {alert.reason}
-              {recoveryNote}
-            </NeonText>
-          </NeonSurface>
-        );
-      }),
-    [alertSurfaceStyle, pluginAlerts],
-  );
-  const totalBars = transport?.totalBars ?? 4;
+  const playhead = transport ? projectedRatio : 0;
   const midiNotes = midiSourceTrack?.midiNotes ?? [];
+  const totalBars = transport?.totalBars ?? 4;
+  const diagnosticsSummary = useMemo(() => formatDiagnostics(diagnostics), [diagnostics]);
   const automationSummary = useMemo(() => {
     if (!arrangementTrack) {
-      return 'No automation lanes in this session yet.';
+      return 'No automation lanes yet';
     }
     if (arrangementTrack.automationCurves.length === 0) {
-      return 'Automation curves are not configured for this track.';
+      return 'No automation configured';
     }
     return arrangementTrack.automationCurves
-      .map((curve) => `${curve.parameter} (${curve.points.length} pts)`)
-      .join(' • ');
+      .map((curve) => `${curve.parameter} (${curve.points.length} points)`)
+      .join(' · ');
   }, [arrangementTrack]);
 
   const handlePlay = useCallback(() => {
-    transportControls.play().catch((error) => {
-      console.error('Failed to start transport playback', error);
+    transportControls.play().catch((transportError) => {
+      console.error('Failed to start transport playback', transportError);
     });
   }, [transportControls]);
 
   const handleStop = useCallback(() => {
-    transportControls.stop().catch((error) => {
-      console.error('Failed to stop transport playback', error);
+    transportControls.stop().catch((transportError) => {
+      console.error('Failed to stop transport playback', transportError);
     });
   }, [transportControls]);
 
   const handleRewind = useCallback(() => {
-    transportControls.locateStart().catch((error) => {
-      console.error('Failed to rewind transport', error);
+    transportControls.locateStart().catch((transportError) => {
+      console.error('Failed to rewind transport', transportError);
     });
   }, [transportControls]);
 
   const handleRefresh = useCallback(() => {
-    refresh().catch((error) => {
-      console.error('Failed to refresh session data', error);
+    refresh().catch((refreshError) => {
+      console.error('Failed to refresh session data', refreshError);
     });
   }, [refresh]);
 
-  const toolbarActions = useMemo<NonNullable<NeonToolbarProps['actions']>>(
-    () => [
-      {
-        label: 'Play',
-        onPress: handlePlay,
-        intent: 'primary',
-        disabled:
-          tracks.length === 0 || !transportControls.isAvailable || transport?.isPlaying,
-      },
-      {
-        label: 'Stop',
-        onPress: handleStop,
-        intent: 'secondary',
-        disabled: !transportControls.isAvailable || !transport?.isPlaying,
-      },
-      {
-        label: 'Rewind',
-        onPress: handleRewind,
-        intent: 'secondary',
-        disabled: tracks.length === 0 || !transportControls.isAvailable,
-      },
-      {
-        label: 'Refresh',
-        onPress: handleRefresh,
-        intent: 'secondary',
-      },
-    ],
-    [
-      handlePlay,
-      handleRefresh,
-      handleRewind,
-      handleStop,
-      transport?.isPlaying,
-      transportControls.isAvailable,
-      tracks.length,
-    ],
+  const openPerformance = useCallback(() => {
+    navigation.navigate('Performance');
+  }, [navigation]);
+
+  const headerAction = (
+    <StudioButton
+      compact
+      icon="refresh"
+      label="Refresh"
+      onPress={handleRefresh}
+      variant="ghost"
+    />
   );
 
-  const renderContent = () => {
+  const renderState = () => {
     if (status === 'loading' || status === 'idle') {
       return (
-        <NeonSurface>
-          <NeonText variant="body">Loading arrangement...</NeonText>
-        </NeonSurface>
+        <ScreenState
+          kind="loading"
+          message="Loading tracks, clips, and transport state."
+          title="Preparing arrangement"
+        />
       );
     }
     if (status === 'error') {
       return (
-        <NeonSurface>
-          <NeonText variant="body" intent="critical">
-            Failed to load session data.
-          </NeonText>
-        </NeonSurface>
+        <ScreenState
+          actionLabel="Try again"
+          kind="error"
+          message={error?.message ?? 'The session could not be loaded.'}
+          onAction={handleRefresh}
+          title="Arrangement unavailable"
+        />
       );
     }
     if (!arrangementTrack) {
       return (
-        <NeonSurface>
-          <NeonText variant="title" weight="medium">
-            Start with an instrument
-          </NeonText>
-          <NeonText variant="body" intent="secondary">
-            Add a Juno track from Performance before starting playback.
-          </NeonText>
-        </NeonSurface>
+        <ScreenState
+          actionLabel="Open Performance"
+          illustrationSource={require('../../../assets/ui/signal-flow-empty-state.webp')}
+          kind="empty"
+          message="Add a Juno-106 instrument, then return here to arrange clips and MIDI."
+          onAction={openPerformance}
+          title="Start with an instrument"
+        />
       );
     }
 
     return (
-      <View style={contentStyle}>
-        <NeonSurface style={waveformCardStyle}>
-          <NeonText variant="headline" weight="bold">
-            Waveform Overview
-          </NeonText>
-          <NeonText variant="body" intent="secondary" style={summaryStyle}>
-            {`${arrangementTrack.name} • ${arrangementTrack.clips.length} clips • ${transport?.bpm ?? 0} BPM ${transport?.timeSignature ?? ''}`}
-          </NeonText>
+      <>
+        <StudioPanel style={{ gap: theme.spacing.md }}>
+          <View style={{ gap: theme.spacing.xs }}>
+            <StudioText accessibilityRole="header" variant="sectionTitle" weight="bold">
+              Waveform overview
+            </StudioText>
+            <StudioText selectable tone="secondary">
+              {`${arrangementTrack.name} · ${arrangementTrack.clips.length} clips · ${
+                transport
+                  ? `${Math.round(transport.bpm)} BPM ${transport.timeSignature}`
+                  : 'Transport unavailable'
+              }`}
+            </StudioText>
+          </View>
           <WaveformEditor
-            waveform={waveform}
-            width={adaptive.breakpoint === 'phone' ? 320 : 640}
+            height={adaptive.breakpoint === 'phone' ? 112 : 152}
             playhead={playhead}
+            waveform={waveform}
+            width={waveformWidth}
           />
-          <NeonText variant="body" style={automationStyle}>
-            Automation: {automationSummary}
-          </NeonText>
-          <NeonText variant="body" intent={diagnosticsIntent} style={diagnosticsStyle}>
-            {diagnosticsSummary}
-          </NeonText>
-        </NeonSurface>
-        <NeonSurface>
-          <NeonText variant="title" weight="medium">
-            MIDI Piano Roll
-          </NeonText>
-          <MidiPianoRoll
-            notes={midiNotes}
-            totalBars={totalBars}
-            pixelsPerBeat={adaptive.breakpoint === 'phone' ? 48 : 64}
-          />
-        </NeonSurface>
-      </View>
+          <View style={{ gap: theme.spacing.xs }}>
+            <StudioText selectable tone="secondary">
+              {`Automation · ${automationSummary}`}
+            </StudioText>
+            <StudioText
+              selectable
+              tone={diagnostics.status === 'error' ? 'critical' : 'muted'}
+            >
+              {diagnosticsSummary}
+            </StudioText>
+          </View>
+        </StudioPanel>
+
+        <StudioPanel style={{ gap: theme.spacing.md }}>
+          <View style={{ gap: theme.spacing.xs }}>
+            <StudioText accessibilityRole="header" variant="sectionTitle" weight="bold">
+              MIDI piano roll
+            </StudioText>
+            <StudioText selectable tone="secondary">
+              {midiNotes.length > 0
+                ? `${midiNotes.length} notes across ${totalBars} bars`
+                : 'Record or add MIDI in Performance to populate this track.'}
+            </StudioText>
+          </View>
+          {midiNotes.length > 0 ? (
+            <MidiPianoRoll
+              notes={midiNotes}
+              pixelsPerBeat={adaptive.breakpoint === 'phone' ? 48 : 64}
+              style={{ height: adaptive.breakpoint === 'phone' ? 280 : 360 }}
+              timeSignature={transport?.timeSignature}
+              totalBars={totalBars}
+            />
+          ) : null}
+        </StudioPanel>
+      </>
     );
   };
 
   return (
-    <SafeAreaView style={safeAreaStyle}>
-      <ScrollView contentInsetAdjustmentBehavior="automatic">
-        <NeonToolbar title="Arrangement" actions={toolbarActions} />
-        {pluginAlertViews.length > 0 && (
-          <View style={alertsContainerStyle}>{pluginAlertViews}</View>
-        )}
-        <View accessibilityRole="summary">{renderContent()}</View>
-      </ScrollView>
-    </SafeAreaView>
+    <ScreenScaffold actions={headerAction} title="Arrangement">
+      {status === 'ready' && arrangementTrack ? (
+        <TransportBar
+          bpm={transport?.bpm}
+          compact={adaptive.breakpoint === 'phone'}
+          isAvailable={transportControls.isAvailable && tracks.length > 0}
+          isPlaying={Boolean(transport?.isPlaying)}
+          onPlay={handlePlay}
+          onRewind={handleRewind}
+          onStop={handleStop}
+          positionBeats={transport?.playheadBeats}
+          sessionName={sessionName}
+          timeSignature={transport?.timeSignature}
+        />
+      ) : null}
+
+      {pluginAlerts.map((alert) => {
+        const label = alert.descriptor?.name ?? alert.instanceId;
+        const recovery = alert.recovered ? ' · Recovered' : '';
+        return (
+          <StudioPanel
+            key={`${alert.instanceId}:${alert.timestamp}`}
+            accessibilityRole="alert"
+            style={{ gap: theme.spacing.xs }}
+            variant="critical"
+          >
+            <StudioText variant="label" tone="critical" weight="bold">
+              {`Plugin crash · ${label}`}
+            </StudioText>
+            <StudioText selectable tone="critical">
+              {`${alert.reason}${recovery}`}
+            </StudioText>
+          </StudioPanel>
+        );
+      })}
+
+      {renderState()}
+    </ScreenScaffold>
   );
 };

@@ -75,10 +75,11 @@ const createHarness = () => {
 
 const rejectedResult = (
   graph: NativeGraphDescription,
+  transactionId: string,
   status: 'stale' | 'rejected' = 'rejected',
 ): NativeGraphApplyResult => ({
   status,
-  transactionId: `tx-${status}`,
+  transactionId,
   graph,
   failure: {
     stage: status === 'stale' ? 'route' : 'connect',
@@ -90,6 +91,27 @@ const rejectedResult = (
 });
 
 describe('GraphReconciler', () => {
+  it('uses distinct transaction ids for reconciler instances created together', async () => {
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+    const random = jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    try {
+      const first = createHarness();
+      const second = createHarness();
+      const firstNode = { id: 'first:output', type: 'trackOutput' };
+      const secondNode = { id: 'second:output', type: 'trackOutput' };
+
+      await first.reconciler.apply(new Map([[firstNode.id, firstNode]]), new Set());
+      await second.reconciler.apply(new Map([[secondNode.id, secondNode]]), new Set());
+
+      expect(first.applyGraph.mock.calls[0][0].transactionId).not.toBe(
+        second.applyGraph.mock.calls[0][0].transactionId,
+      );
+    } finally {
+      now.mockRestore();
+      random.mockRestore();
+    }
+  });
+
   it('submits one complete graph including the native output bus', async () => {
     const { reconciler, applyGraph } = createHarness();
     const node = { id: 'track:output', type: 'trackOutput' };
@@ -135,13 +157,146 @@ describe('GraphReconciler', () => {
 
   it('retries exactly once after a stale identity', async () => {
     const { reconciler, applyGraph, describeGraph, getActiveGraph } = createHarness();
-    applyGraph.mockResolvedValueOnce(rejectedResult(getActiveGraph(), 'stale'));
+    applyGraph.mockImplementationOnce(async (request) =>
+      rejectedResult(getActiveGraph(), request.transactionId, 'stale'),
+    );
     const node = { id: 'track:output', type: 'trackOutput' };
 
     await reconciler.apply(new Map([[node.id, node]]), new Set());
 
     expect(applyGraph).toHaveBeenCalledTimes(2);
     expect(describeGraph).toHaveBeenCalledTimes(2);
+  });
+
+  it('replays the same transaction when the commit response is lost', async () => {
+    const { reconciler, applyGraph, commit, describeGraph, logger } = createHarness();
+    const responseError = new Error('Apply audio graph failed');
+    applyGraph.mockImplementationOnce(async (request) => {
+      await commit(request);
+      throw responseError;
+    });
+    const node = { id: 'track:output', type: 'trackOutput' };
+
+    await reconciler.apply(new Map([[node.id, node]]), new Set());
+
+    expect(applyGraph).toHaveBeenCalledTimes(2);
+    expect(applyGraph.mock.calls[1][0]).toEqual(applyGraph.mock.calls[0][0]);
+    expect(describeGraph).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Replaying graph transaction after native response failure',
+      expect.objectContaining({
+        error: responseError,
+      }),
+    );
+  });
+
+  it('replays once when an unstructured native failure did not commit', async () => {
+    const { reconciler, applyGraph, describeGraph, logger } = createHarness();
+    const responseError = new Error('Apply audio graph failed');
+    applyGraph.mockRejectedValueOnce(responseError);
+    const node = { id: 'track:output', type: 'trackOutput' };
+
+    await reconciler.apply(new Map([[node.id, node]]), new Set());
+
+    expect(applyGraph).toHaveBeenCalledTimes(2);
+    expect(applyGraph.mock.calls[1][0]).toEqual(applyGraph.mock.calls[0][0]);
+    expect(describeGraph).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Replaying graph transaction after native response failure',
+      expect.objectContaining({ error: responseError }),
+    );
+  });
+
+  it('does not mistake matching node ids for a committed parameter change', async () => {
+    const { reconciler, applyGraph, logger } = createHarness();
+    const initial = {
+      id: 'track:output',
+      type: 'trackOutput',
+      options: { gain: 1 },
+    };
+    const changed = {
+      ...initial,
+      options: { gain: 0.5 },
+    };
+    await reconciler.apply(new Map([[initial.id, initial]]), new Set());
+    const responseError = new Error('Apply audio graph failed');
+    applyGraph.mockRejectedValueOnce(responseError);
+
+    await reconciler.apply(new Map([[changed.id, changed]]), new Set());
+
+    expect(applyGraph).toHaveBeenCalledTimes(3);
+    expect(applyGraph.mock.calls[2][0]).toEqual(applyGraph.mock.calls[1][0]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Replaying graph transaction after native response failure',
+      expect.objectContaining({ error: responseError }),
+    );
+  });
+
+  it('fails closed when replaying the same transaction also rejects', async () => {
+    const { reconciler, applyGraph, describeGraph, logger } = createHarness();
+    const responseError = new Error('Apply audio graph failed');
+    const replayError = new Error('Apply audio graph replay failed');
+    applyGraph.mockRejectedValueOnce(responseError).mockRejectedValueOnce(replayError);
+    const node = { id: 'track:output', type: 'trackOutput' };
+
+    await expect(reconciler.apply(new Map([[node.id, node]]), new Set())).rejects.toBe(
+      replayError,
+    );
+
+    expect(applyGraph).toHaveBeenCalledTimes(2);
+    expect(applyGraph.mock.calls[1][0]).toEqual(applyGraph.mock.calls[0][0]);
+    expect(describeGraph).toHaveBeenCalledTimes(2);
+    expect(logger.error).toHaveBeenCalledWith(
+      'Native graph transaction replay failed',
+      expect.objectContaining({
+        error: responseError,
+        replayError,
+        observedGraph: {
+          generation: 0,
+          graphHash: 'empty',
+          nodeCount: 0,
+          nodeIds: [],
+          nodeIdsTruncated: false,
+          routeEpoch: 1,
+          engineInstance: 7,
+        },
+        observationError: undefined,
+      }),
+    );
+  });
+
+  it('records native graph identity when response delivery fails after commit', async () => {
+    const { reconciler, applyGraph, commit, describeGraph, logger } = createHarness();
+    const responseError = new Error('Apply audio graph failed after commit');
+    const replayError = new Error('Apply audio graph replay failed');
+    applyGraph
+      .mockImplementationOnce(async (request) => {
+        await commit(request);
+        throw responseError;
+      })
+      .mockRejectedValueOnce(replayError);
+    const node = { id: 'track:output', type: 'trackOutput' };
+
+    await expect(reconciler.apply(new Map([[node.id, node]]), new Set())).rejects.toBe(
+      replayError,
+    );
+
+    expect(describeGraph).toHaveBeenCalledTimes(2);
+    expect(logger.error).toHaveBeenCalledWith(
+      'Native graph transaction replay failed',
+      expect.objectContaining({
+        transactionId: applyGraph.mock.calls[0][0].transactionId,
+        observedGraph: {
+          generation: 1,
+          graphHash: 'graph-1',
+          nodeCount: 1,
+          nodeIds: [node.id],
+          nodeIdsTruncated: false,
+          routeEpoch: 1,
+          engineInstance: 7,
+        },
+      }),
+    );
   });
 
   it('does not retry a structural rejection or mutate tracked state', async () => {
@@ -156,7 +311,9 @@ describe('GraphReconciler', () => {
       options: { gain: 0.5 },
     };
     await reconciler.apply(new Map([[initial.id, initial]]), new Set());
-    applyGraph.mockResolvedValueOnce(rejectedResult(getActiveGraph()));
+    applyGraph.mockImplementationOnce(async (request) =>
+      rejectedResult(getActiveGraph(), request.transactionId),
+    );
 
     await expect(
       reconciler.apply(new Map([[changed.id, changed]]), new Set()),
@@ -224,7 +381,9 @@ describe('GraphReconciler', () => {
     getTransportState
       .mockResolvedValueOnce({ frame: 64, isPlaying: true })
       .mockResolvedValueOnce({ frame: 72, isPlaying: false });
-    applyGraph.mockResolvedValueOnce(rejectedResult(getActiveGraph()));
+    applyGraph.mockImplementationOnce(async (request) =>
+      rejectedResult(getActiveGraph(), request.transactionId),
+    );
     const node = { id: 'track:output', type: 'trackOutput' };
 
     await expect(

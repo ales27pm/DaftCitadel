@@ -68,6 +68,7 @@ if(DAFT_AUDIO_ENGINE_BUILD_TESTS)
     tests/GraphTransactionHostTests.cpp
         tests/JunoCoreTests.cpp
         tests/InstrumentNodeTests.cpp
+        tests/NodeFactoryTests.cpp
         tests/RealtimeControlQueueTests.cpp
         tests/RealtimeControlPlaneTests.cpp
     )

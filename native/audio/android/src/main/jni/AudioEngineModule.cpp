@@ -26,6 +26,8 @@ using daft::audio::GraphConnectionDefinition;
 using daft::audio::GraphDescription;
 using daft::audio::GraphErrorCodeName;
 using daft::audio::GraphFailureStageName;
+using daft::audio::InstrumentEvent;
+using daft::audio::InstrumentEventType;
 using daft::audio::PreparedGraphNode;
 
 namespace {
@@ -78,13 +80,6 @@ std::string TrimCopy(std::string value) {
     return std::string();
   }
   return std::string(first, last);
-}
-
-std::string ToLowerCopy(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
-  return value;
 }
 
 /**
@@ -172,20 +167,7 @@ NodeOptions ConvertOptions(JNIEnv* env, jobject map) {
         if (trimmed.empty()) {
           // Ignore empty strings.
         } else {
-          options.setString(key, trimmed);
-          const std::string lowered = ToLowerCopy(trimmed);
-          if (lowered == "true" || lowered == "yes" || lowered == "on") {
-            options.setNumeric(key, 1.0);
-          } else if (lowered == "false" || lowered == "no" || lowered == "off") {
-            options.setNumeric(key, 0.0);
-          } else {
-            try {
-              const double parsed = std::stod(trimmed);
-              options.setNumeric(key, parsed);
-            } catch (const std::exception&) {
-              // keep as string only
-            }
-          }
+          daft::audio::bridge::detail::storeStringOption(options, key, trimmed);
         }
       }
     }
@@ -757,6 +739,93 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeScheduleAutomation(JNIEnv* en
   try {
     AudioEngineBridge::scheduleParameterAutomation(ToStdString(env, nodeId), ToStdString(env, parameter),
                                                    static_cast<std::uint64_t>(frame), value);
+  } catch (const std::exception& ex) {
+    ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeSendInstrumentMidi(
+    JNIEnv* env, jobject /*thiz*/, jstring nodeId, jint type, jint channel,
+    jint data1, jint data2, jlong frameOffset) {
+  const std::string sanitizedNodeId = TrimCopy(ToStdString(env, nodeId));
+  if (sanitizedNodeId.empty()) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException",
+                       "nodeId is required");
+    return;
+  }
+  if (channel < 0 || channel > 15 || data1 < 0 || data1 > 127 ||
+      data2 < 0 || data2 > 127) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException",
+                       "Invalid MIDI event payload");
+    return;
+  }
+  if (frameOffset < 0) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException",
+                       "frameOffset must be non-negative");
+    return;
+  }
+
+  InstrumentEvent event{};
+  switch (type) {
+    case 0:
+      event.type = InstrumentEventType::kNoteOn;
+      break;
+    case 1:
+      event.type = InstrumentEventType::kNoteOff;
+      break;
+    case 2:
+      event.type = InstrumentEventType::kControlChange;
+      break;
+    case 3:
+      event.type = InstrumentEventType::kPitchBend;
+      break;
+    case 4:
+      event.type = InstrumentEventType::kChannelAftertouch;
+      break;
+    case 5:
+      event.type = InstrumentEventType::kPolyAftertouch;
+      break;
+    default:
+      ThrowJavaException(env, "java/lang/IllegalArgumentException",
+                         "Invalid MIDI event type");
+      return;
+  }
+
+  event.channel = static_cast<std::uint8_t>(channel);
+  event.data = static_cast<std::uint8_t>(data1);
+  event.value = static_cast<float>(data2) / 127.0F;
+  event.retainAcrossPanic = false;
+  if (event.type == InstrumentEventType::kChannelAftertouch) {
+    event.data = 0U;
+    event.value = static_cast<float>(data1) / 127.0F;
+  } else if (event.type == InstrumentEventType::kPitchBend) {
+    const jint bend = (data2 << 7) | data1;
+    event.data = 0U;
+    event.value = static_cast<float>(
+        std::clamp((static_cast<double>(bend) - 8192.0) / 8192.0, -1.0,
+                   1.0));
+  }
+
+  try {
+    AudioEngineBridge::scheduleInstrumentEventFromNow(
+        sanitizedNodeId, event, static_cast<std::uint64_t>(frameOffset));
+  } catch (const std::exception& ex) {
+    ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
+  }
+}
+
+JNIEXPORT void JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeAllNotesOff(
+    JNIEnv* env, jobject /*thiz*/, jstring nodeId) {
+  const std::string sanitizedNodeId = TrimCopy(ToStdString(env, nodeId));
+  if (sanitizedNodeId.empty()) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException",
+                       "nodeId is required");
+    return;
+  }
+  try {
+    AudioEngineBridge::allNotesOff(sanitizedNodeId);
   } catch (const std::exception& ex) {
     ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
   }

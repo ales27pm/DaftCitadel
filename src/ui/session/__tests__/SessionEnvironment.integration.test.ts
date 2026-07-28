@@ -53,65 +53,74 @@ describe('Session environments', () => {
       fileLoader: createTestAudioFileLoader(),
     });
 
-    const session = environment.manager.getSession();
-    expect(session?.id).toBe(sessionId);
-    expect(session?.tracks.length).toBeGreaterThan(0);
+    try {
+      const session = environment.manager.getSession();
+      expect(session?.id).toBe(sessionId);
+      expect(session?.name).toBe('Daft Citadel Session');
+      expect(session?.tracks).toEqual([]);
 
-    const storage = new JsonSessionStorageAdapter(tempDir);
-    await storage.initialize();
-    const persisted = await storage.read(sessionId);
-    expect(persisted?.name).toBe(session?.name);
+      const storage = new JsonSessionStorageAdapter(tempDir);
+      await storage.initialize();
+      const persisted = await storage.read(sessionId);
+      expect(persisted?.name).toBe(session?.name);
 
-    await environment.manager.updateSession((current) => ({
-      ...current,
-      name: 'Updated Session',
-    }));
+      await environment.manager.updateSession((current) => ({
+        ...current,
+        name: 'Updated Session',
+      }));
 
-    const updated = await storage.read(sessionId);
-    expect(updated?.name).toBe('Updated Session');
-    expect(updated?.revision).toBeGreaterThan(persisted?.revision ?? 0);
+      const updated = await storage.read(sessionId);
+      expect(updated?.name).toBe('Updated Session');
+      expect(updated?.revision).toBeGreaterThan(persisted?.revision ?? 0);
 
-    const engineState = (
-      NativeModules.AudioEngineModule as {
-        __state: { clipBuffers: Map<unknown, unknown> };
-      }
-    ).__state;
-    expect(engineState.clipBuffers.size).toBeGreaterThan(0);
-
-    await environment.dispose?.();
+      const engineState = (
+        NativeModules.AudioEngineModule as {
+          __state: {
+            initialized: boolean;
+            clipBuffers: Map<unknown, unknown>;
+          };
+        }
+      ).__state;
+      expect(engineState.initialized).toBe(true);
+      expect(engineState.clipBuffers.size).toBe(0);
+    } finally {
+      await environment.dispose?.();
+    }
   });
 
-  it('falls back to passive environment when native audio is unavailable', async () => {
+  it('rejects production startup and allows an explicit passive environment', async () => {
     const modules = NativeModules as Record<string, unknown>;
     const originalEngineModule = modules.AudioEngineModule;
     delete modules.AudioEngineModule;
 
-    await expect(
-      createProductionSessionEnvironment({
+    try {
+      await expect(
+        createProductionSessionEnvironment({
+          storageDirectory: tempDir,
+          fileLoader: createTestAudioFileLoader(),
+        }),
+      ).rejects.toBeInstanceOf(NativeAudioUnavailableError);
+
+      const passive = await createPassiveSessionEnvironment({
         storageDirectory: tempDir,
-        fileLoader: createTestAudioFileLoader(),
-      }),
-    ).rejects.toBeInstanceOf(NativeAudioUnavailableError);
+        sessionId: 'passive-session',
+      });
 
-    const passive = await createPassiveSessionEnvironment({
-      storageDirectory: tempDir,
-      sessionId: 'passive-session',
-    });
+      try {
+        await passive.manager.updateSession((current) => ({
+          ...current,
+          name: 'Passive Updated',
+        }));
 
-    await passive.manager.updateSession((current) => ({
-      ...current,
-      name: 'Passive Updated',
-    }));
-
-    const storage = new JsonSessionStorageAdapter(tempDir);
-    await storage.initialize();
-    const persisted = await storage.read('passive-session');
-    expect(persisted?.name).toBe('Passive Updated');
-
-    if (passive.dispose) {
-      await passive.dispose();
+        const storage = new JsonSessionStorageAdapter(tempDir);
+        await storage.initialize();
+        const persisted = await storage.read('passive-session');
+        expect(persisted?.name).toBe('Passive Updated');
+      } finally {
+        await passive.dispose?.();
+      }
+    } finally {
+      modules.AudioEngineModule = originalEngineModule;
     }
-
-    modules.AudioEngineModule = originalEngineModule;
   });
 });
