@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Image } from 'expo-image';
 import { Pressable, StyleSheet, View, type ViewStyle } from 'react-native';
 
-import type { MidiNoteEvent, Session } from '../../session';
+import { isJuno106FeatureEnabled, type MidiNoteEvent, type Session } from '../../session';
 import {
   StatusBadge,
   StudioAlertText,
@@ -246,6 +246,7 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
   const [isAddingScene, setIsAddingScene] = useState(false);
   const [isAddingPart, setIsAddingPart] = useState(false);
   const [isDuplicatingScene, setIsDuplicatingScene] = useState(false);
+  const junoFeatureEnabled = isJuno106FeatureEnabled();
   const recordingStartedAtRef = useRef(0);
   const activeNotesRef = useRef(new Map<number, PendingNote>());
   const takeNotesRef = useRef<MidiNoteEvent[]>([]);
@@ -416,7 +417,12 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
   );
 
   const handleAddScene = useCallback(async () => {
-    if (isAddingScene || scenes.length >= PAD_COUNT || takeMode !== 'idle') {
+    if (
+      !junoFeatureEnabled ||
+      isAddingScene ||
+      scenes.length >= PAD_COUNT ||
+      takeMode !== 'idle'
+    ) {
       return;
     }
     setIsAddingScene(true);
@@ -442,10 +448,10 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
     } finally {
       setIsAddingScene(false);
     }
-  }, [isAddingScene, scenes.length, sessionActions, takeMode]);
+  }, [isAddingScene, junoFeatureEnabled, scenes.length, sessionActions, takeMode]);
 
   const handleAddPart = useCallback(async () => {
-    if (!selectedScene || isAddingPart || takeMode !== 'idle') {
+    if (!junoFeatureEnabled || !selectedScene || isAddingPart || takeMode !== 'idle') {
       return;
     }
     setIsAddingPart(true);
@@ -478,10 +484,11 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
     } finally {
       setIsAddingPart(false);
     }
-  }, [isAddingPart, selectedScene, sessionActions, takeMode]);
+  }, [isAddingPart, junoFeatureEnabled, selectedScene, sessionActions, takeMode]);
 
   const handleDuplicateScene = useCallback(async () => {
     if (
+      !junoFeatureEnabled ||
       !selectedScene ||
       isDuplicatingScene ||
       scenes.length >= PAD_COUNT ||
@@ -514,7 +521,14 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
     } finally {
       setIsDuplicatingScene(false);
     }
-  }, [isDuplicatingScene, scenes.length, selectedScene, sessionActions, takeMode]);
+  }, [
+    isDuplicatingScene,
+    junoFeatureEnabled,
+    scenes.length,
+    selectedScene,
+    sessionActions,
+    takeMode,
+  ]);
 
   const startTake = useCallback(
     async (overdub: boolean) => {
@@ -765,6 +779,23 @@ export const JunoMidiLooperPanel: React.FC<JunoMidiLooperPanelProps> = ({
 
   if (status !== 'ready') {
     return null;
+  }
+
+  if (!junoFeatureEnabled) {
+    return (
+      <StudioPanel
+        padding={adaptive.width < 360 ? 12 : 16}
+        style={styles.unavailable}
+        testID="juno-scene-launcher-disabled"
+      >
+        <StudioText variant="sectionTitle" tone="mint" weight="bold">
+          Juno scene launcher
+        </StudioText>
+        <StudioText variant="body" tone="secondary">
+          Juno-106 scenes are disabled for this build.
+        </StudioText>
+      </StudioPanel>
+    );
   }
 
   return (
