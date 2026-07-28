@@ -12,9 +12,17 @@ const methodBody = (source: string, startMarker: string, endMarker: string): str
   return source.slice(start, end);
 };
 
+const expectRealtimeCallbackContract = (source: string): void => {
+  expect(source).not.toMatch(
+    /std::lock_guard|std::unique_lock|std::try_to_lock|pthread_mutex|@catch|\bcatch\b|\bthrow\b|os_log|__android_log_print|ThrowJavaException|\bLog\./,
+  );
+  expect(source).not.toMatch(/\bnew\s|std::vector<|malloc\(|calloc\(|realloc\(/);
+};
+
 describe('instrument native bridge contract', () => {
   const iosModule = readRepositoryFile('native/audio/ios/AudioEngineModule.mm');
   const iosBridge = readRepositoryFile('audio-engine/platform/ios/AudioEngineBridge.mm');
+  const iosDeviceDriver = readRepositoryFile('native/audio/ios/AudioDeviceDriver.mm');
   const androidBridge = readRepositoryFile(
     'audio-engine/platform/android/AudioEngineBridge.cpp',
   );
@@ -145,5 +153,50 @@ describe('instrument native bridge contract', () => {
     expect(renderLoop).not.toMatch(/\btry\b|\bcatch\b|runCatching|Log\./);
     expect(androidDeviceDriver).toContain('uncaughtExceptionHandler =');
     expect(androidDeviceDriver).toContain('running.set(false)');
+  });
+
+  it('keeps native callback entry points free of locks, logging, exceptions, and allocations', () => {
+    const iosBridgeRender = methodBody(
+      iosBridge,
+      'void AudioEngineBridge::render(EngineGeneration generation',
+      'void AudioEngineBridge::startTransport(',
+    );
+    const androidBridgeRender = methodBody(
+      androidBridge,
+      'void AudioEngineBridge::render(float** outputs',
+      'void AudioEngineBridge::startTransport()',
+    );
+    const realtimePlaneRender = methodBody(
+      controlPlane,
+      'void RealtimeControlPlane::render(',
+      'void RealtimeControlPlane::waitUntilRenderIdle()',
+    );
+    const iosSourceNodeRenderBlock = methodBody(
+      iosDeviceDriver,
+      'AVAudioSourceNodeRenderBlock renderBlock =',
+      'phase = @"source-node-creation";',
+    );
+    const androidJniRender = methodBody(
+      androidJni,
+      'Java_com_daftcitadel_audio_AudioEngineModule_nativeRenderInterleaved',
+      'JNIEXPORT jobjectArray JNICALL\nJava_com_daftcitadel_audio_AudioEngineModule_nativeRecoverAfterAudioConfigurationChange',
+    );
+
+    expect(iosBridgeRender).toContain('realtimePlane_.render(view, generation)');
+    expect(androidBridgeRender).toContain('realtimePlane_.render(view, publication)');
+    expect(realtimePlaneRender).toContain('commandQueue_.tryPop(command)');
+    expect(realtimePlaneRender).toContain('graph->render(outputBuffer)');
+    expect(iosSourceNodeRenderBlock).toContain('AudioEngineBridge::render(');
+    expect(iosSourceNodeRenderBlock).toContain('thread_local PlanarBuffer planar{}');
+    expect(androidJniRender).toContain('AudioEngineBridge::render(');
+    expect(androidJniRender).toContain('gRenderScratch');
+
+    [
+      iosBridgeRender,
+      androidBridgeRender,
+      realtimePlaneRender,
+      iosSourceNodeRenderBlock,
+      androidJniRender,
+    ].forEach(expectRealtimeCallbackContract);
   });
 });
