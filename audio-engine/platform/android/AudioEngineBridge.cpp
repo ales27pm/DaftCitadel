@@ -13,9 +13,26 @@ namespace daft::audio::bridge {
 
 namespace {
 constexpr const char* kTag = "DaftAudioEngine";
+
+GraphApplyResult UnavailableGraphTransactionResult(
+    std::string transactionId, std::uint64_t engineInstance,
+    std::string detail) {
+  GraphApplyResult result;
+  result.status = GraphApplyStatus::Rejected;
+  result.transactionId = std::move(transactionId);
+  result.graph.engineInstance = engineInstance;
+  GraphFailure failure;
+  failure.stage = GraphFailureStage::Lifecycle;
+  failure.code = GraphErrorCode::EngineUnavailable;
+  failure.detail = std::move(detail);
+  result.failure = std::move(failure);
+  return result;
+}
 }
 
-std::unique_ptr<SceneGraph> AudioEngineBridge::graph_;
+std::unique_ptr<SceneGraph> AudioEngineBridge::legacyGraph_;
+std::unique_ptr<GraphTransactionHost> AudioEngineBridge::transactionHost_;
+SceneGraph* AudioEngineBridge::graph_ = nullptr;
 std::mutex AudioEngineBridge::mutex_;
 RealtimeControlPlane AudioEngineBridge::realtimePlane_;
 std::atomic<std::uint64_t> AudioEngineBridge::publicationToken_{0U};
@@ -27,6 +44,12 @@ void AudioEngineBridge::initialize(JNIEnv*, double sampleRate,
   std::lock_guard<std::mutex> lock(mutex_);
   stopRealtimePlaneLocked();
   realtimePlane_.publishGraph(nullptr, 0U);
+  if (transactionHost_) {
+    const auto owner = transactionHost_->describeGraph().engineInstance;
+    (void)transactionHost_->invalidate(owner);
+    transactionHost_.reset();
+  }
+  graph_ = nullptr;
 
   auto preparedGraph =
       std::make_unique<SceneGraph>(sampleRate, framesPerBuffer);
@@ -35,20 +58,124 @@ void AudioEngineBridge::initialize(JNIEnv*, double sampleRate,
     publication = 1U;
   }
 
-  graph_ = std::move(preparedGraph);
+  legacyGraph_ = std::move(preparedGraph);
+  graph_ = legacyGraph_.get();
   clipBuffers_.clear();
   realtimePlane_.resetQuiescent();
-  realtimePlane_.publishGraph(graph_.get(), publication);
+  realtimePlane_.publishGraph(graph_, publication);
   publicationToken_.store(publication, std::memory_order_release);
   __android_log_print(ANDROID_LOG_INFO, kTag,
                       "Audio engine initialized at %.2f Hz", sampleRate);
 }
 
+GraphApplyResult AudioEngineBridge::initializeGraphTransactions(
+    double sampleRate, std::uint32_t framesPerBuffer) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  requireInitializedLocked();
+  requireTransportStoppedLocked();
+  const auto publication =
+      publicationToken_.load(std::memory_order_acquire);
+
+  if (transactionHost_) {
+    return transactionHost_->initialize(publication);
+  }
+
+  try {
+    transactionHost_ = std::make_unique<GraphTransactionHost>(
+        sampleRate, framesPerBuffer,
+        [](SceneGraph* graph, std::uint64_t publicationToken) {
+          graph_ = graph;
+          realtimePlane_.publishGraph(graph, publicationToken);
+          return true;
+        },
+        [] { realtimePlane_.waitUntilRenderIdle(); });
+  } catch (const std::exception& exception) {
+    return UnavailableGraphTransactionResult(
+        "initialize", publication, exception.what());
+  }
+
+  auto result = transactionHost_->initialize(publication);
+  if (result.status != GraphApplyStatus::Committed) {
+    transactionHost_.reset();
+    graph_ = legacyGraph_.get();
+    realtimePlane_.publishGraph(graph_, publication);
+  }
+  return result;
+}
+
+GraphDescription AudioEngineBridge::describeGraph() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  requireInitializedLocked();
+  if (!transactionHost_) {
+    GraphDescription description;
+    description.graphHash = "legacy-untracked";
+    description.engineInstance =
+        publicationToken_.load(std::memory_order_acquire);
+    return description;
+  }
+  return transactionHost_->describeGraph();
+}
+
+GraphApplyResult AudioEngineBridge::applyGraph(
+    GraphApplyRequest request) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  requireInitializedLocked();
+  requireTransportStoppedLocked();
+  if (!transactionHost_) {
+    return UnavailableGraphTransactionResult(
+        std::move(request.transactionId),
+        publicationToken_.load(std::memory_order_acquire),
+        "Graph transactions were not initialized");
+  }
+  return transactionHost_->applyGraph(std::move(request));
+}
+
+GraphApplyResult
+AudioEngineBridge::recoverAfterAudioConfigurationChange() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  requireInitializedLocked();
+  requireTransportStoppedLocked();
+  const auto publication =
+      publicationToken_.load(std::memory_order_acquire);
+  if (!transactionHost_) {
+    return UnavailableGraphTransactionResult(
+        "audio-configuration-recovery", publication,
+        "Graph transactions were not initialized");
+  }
+  return transactionHost_->recoverAudioConfiguration(publication);
+}
+
+bool AudioEngineBridge::invalidateGraphTransactions() noexcept {
+  try {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!transactionHost_) {
+      return false;
+    }
+    const auto publication =
+        publicationToken_.load(std::memory_order_acquire);
+    if (!transactionHost_->invalidate(publication)) {
+      return false;
+    }
+    transactionHost_.reset();
+    graph_ = legacyGraph_.get();
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
 void AudioEngineBridge::shutdown() {
   std::lock_guard<std::mutex> lock(mutex_);
+  if (transactionHost_) {
+    const auto publication =
+        publicationToken_.load(std::memory_order_acquire);
+    (void)transactionHost_->invalidate(publication);
+    transactionHost_.reset();
+  }
   stopRealtimePlaneLocked();
   realtimePlane_.publishGraph(nullptr, 0U);
-  graph_.reset();
+  graph_ = nullptr;
+  legacyGraph_.reset();
   clipBuffers_.clear();
   realtimePlane_.resetQuiescent();
   __android_log_print(ANDROID_LOG_INFO, kTag, "Audio engine shutdown");
@@ -64,6 +191,13 @@ void AudioEngineBridge::requireTransportStoppedLocked() {
   if (realtimePlane_.isPlaying()) {
     throw std::runtime_error(
         "Audio graph structure cannot change while transport is playing");
+  }
+}
+
+void AudioEngineBridge::requireLegacyGraphMutationLocked() {
+  if (transactionHost_) {
+    throw std::runtime_error(
+        "Granular graph mutation is disabled after transaction initialization");
   }
 }
 
@@ -109,7 +243,7 @@ void AudioEngineBridge::startTransport() {
   requireInitializedLocked();
   const auto publication =
       publicationToken_.load(std::memory_order_acquire);
-  realtimePlane_.publishGraph(graph_.get(), publication);
+  realtimePlane_.publishGraph(graph_, publication);
   realtimePlane_.setPlaying(true);
 }
 
@@ -169,6 +303,7 @@ bool AudioEngineBridge::addNode(const std::string& id,
   std::lock_guard<std::mutex> lock(mutex_);
   requireInitializedLocked();
   requireTransportStoppedLocked();
+  requireLegacyGraphMutationLocked();
   return graph_->addNode(id, std::move(node));
 }
 
@@ -176,6 +311,7 @@ void AudioEngineBridge::removeNode(const std::string& id) {
   std::lock_guard<std::mutex> lock(mutex_);
   requireInitializedLocked();
   requireTransportStoppedLocked();
+  requireLegacyGraphMutationLocked();
   graph_->removeNode(id);
 }
 
@@ -184,6 +320,7 @@ bool AudioEngineBridge::connect(const std::string& source,
   std::lock_guard<std::mutex> lock(mutex_);
   requireInitializedLocked();
   requireTransportStoppedLocked();
+  requireLegacyGraphMutationLocked();
   return graph_->connect(source, destination);
 }
 
@@ -192,6 +329,7 @@ void AudioEngineBridge::disconnect(const std::string& source,
   std::lock_guard<std::mutex> lock(mutex_);
   requireInitializedLocked();
   requireTransportStoppedLocked();
+  requireLegacyGraphMutationLocked();
   graph_->disconnect(source, destination);
 }
 

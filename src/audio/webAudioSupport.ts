@@ -44,10 +44,7 @@ export const isWebAudioEngineAvailable = (): boolean => {
     return false;
   }
   try {
-    const closeResult = context.close();
-    if (closeResult && typeof closeResult.catch === 'function') {
-      closeResult.catch(() => undefined);
-    }
+    void context.close().catch(() => undefined);
     return true;
   } catch {
     return false;

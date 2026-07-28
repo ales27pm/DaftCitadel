@@ -8,6 +8,7 @@ export const Pressable = 'Pressable';
 export const TouchableOpacity = 'TouchableOpacity';
 export const FlatList = 'FlatList';
 export const SectionList = 'SectionList';
+export const Switch = 'Switch';
 
 export const StyleSheet = {
   create: <T extends Record<string, unknown>>(styles: T): T => styles,
@@ -139,6 +140,10 @@ type AudioEngineMockState = {
     isPlaying: boolean;
     lastUpdatedMs: number;
   };
+  graphGeneration: number;
+  routeEpoch: number;
+  engineInstance: number;
+  graphHash: string;
 };
 
 const audioEngineState: AudioEngineMockState = {
@@ -156,7 +161,91 @@ const audioEngineState: AudioEngineMockState = {
     isPlaying: false,
     lastUpdatedMs: Date.now(),
   },
+  graphGeneration: 0,
+  routeEpoch: 1,
+  engineInstance: 0,
+  graphHash: 'mock-empty',
 };
+
+type MockGraphDescription = {
+  generation: number;
+  graphHash: string;
+  nodeIds: string[];
+  routeEpoch: number;
+  engineInstance: number;
+};
+
+type MockGraphApplyRequest = {
+  transactionId: string;
+  expectedGeneration: number;
+  expectedRouteEpoch: number;
+  expectedEngineInstance: number;
+  nodes: Array<{
+    id: string;
+    type: string;
+    options: Record<string, number | string | boolean>;
+  }>;
+  connections: Array<{ source: string; destination: string }>;
+};
+
+type MockGraphApplyResult = {
+  status: 'committed' | 'stale' | 'rejected';
+  transactionId: string;
+  graph: MockGraphDescription;
+  failure?: {
+    stage: string;
+    code: string;
+    nodeId: string;
+    detail: string;
+  };
+};
+
+const graphTransactionResults = new Map<string, MockGraphApplyResult>();
+
+const describeMockGraph = (): MockGraphDescription => ({
+  generation: audioEngineState.graphGeneration,
+  graphHash: audioEngineState.graphHash,
+  nodeIds: [...audioEngineState.nodes.keys()].sort(),
+  routeEpoch: audioEngineState.routeEpoch,
+  engineInstance: audioEngineState.engineInstance,
+});
+
+const computeMockGraphHash = (request: MockGraphApplyRequest): string =>
+  JSON.stringify({
+    nodes: [...request.nodes]
+      .map((node) => ({
+        id: node.id,
+        type: node.type,
+        options: Object.fromEntries(
+          Object.entries(node.options ?? {}).sort(([left], [right]) =>
+            left.localeCompare(right),
+          ),
+        ),
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id)),
+    connections: [...request.connections].sort((left, right) =>
+      connectionKey(left.source, left.destination).localeCompare(
+        connectionKey(right.source, right.destination),
+      ),
+    ),
+  });
+
+const rejectMockGraph = (
+  request: MockGraphApplyRequest,
+  status: 'stale' | 'rejected',
+  code: string,
+  detail: string,
+): MockGraphApplyResult => ({
+  status,
+  transactionId: request.transactionId,
+  graph: describeMockGraph(),
+  failure: {
+    stage: status === 'stale' ? 'validate' : 'prepare',
+    code,
+    nodeId: '',
+    detail,
+  },
+});
 
 const recomputeClipBufferBytes = () => {
   let total = 0;
@@ -179,9 +268,7 @@ const computeTransportFrame = (now: number): number => {
   if (elapsedMs <= 0 || audioEngineState.sampleRate <= 0) {
     return audioEngineState.transport.startFrame;
   }
-  const framesAdvanced = Math.floor(
-    (elapsedMs / 1000) * audioEngineState.sampleRate,
-  );
+  const framesAdvanced = Math.floor((elapsedMs / 1000) * audioEngineState.sampleRate);
   return audioEngineState.transport.startFrame + framesAdvanced;
 };
 
@@ -197,6 +284,11 @@ const audioEngineModule = {
     audioEngineState.transport.startFrame = 0;
     audioEngineState.transport.isPlaying = false;
     audioEngineState.transport.lastUpdatedMs = Date.now();
+    audioEngineState.graphGeneration = 0;
+    audioEngineState.routeEpoch += 1;
+    audioEngineState.engineInstance += 1;
+    audioEngineState.graphHash = 'mock-empty';
+    graphTransactionResults.clear();
   },
   shutdown: async () => {
     audioEngineState.initialized = false;
@@ -211,6 +303,83 @@ const audioEngineModule = {
     audioEngineState.transport.startFrame = 0;
     audioEngineState.transport.isPlaying = false;
     audioEngineState.transport.lastUpdatedMs = Date.now();
+    audioEngineState.graphGeneration = 0;
+    audioEngineState.graphHash = 'mock-empty';
+    graphTransactionResults.clear();
+  },
+  describeGraph: async () => describeMockGraph(),
+  applyGraph: async (request: MockGraphApplyRequest): Promise<MockGraphApplyResult> => {
+    const replay = graphTransactionResults.get(request.transactionId);
+    if (replay) {
+      return replay;
+    }
+    if (request.expectedGeneration !== audioEngineState.graphGeneration) {
+      return rejectMockGraph(
+        request,
+        'stale',
+        'stale_generation',
+        'Graph generation changed',
+      );
+    }
+    if (request.expectedRouteEpoch !== audioEngineState.routeEpoch) {
+      return rejectMockGraph(
+        request,
+        'stale',
+        'stale_route_epoch',
+        'Audio route changed',
+      );
+    }
+    if (request.expectedEngineInstance !== audioEngineState.engineInstance) {
+      return rejectMockGraph(
+        request,
+        'stale',
+        'stale_engine_instance',
+        'Audio engine instance changed',
+      );
+    }
+
+    const nodeIds = new Set(request.nodes.map((node) => node.id));
+    if (nodeIds.size !== request.nodes.length) {
+      return rejectMockGraph(request, 'rejected', 'duplicate_node', 'Duplicate node');
+    }
+    const invalidConnection = request.connections.find(
+      ({ source, destination }) =>
+        !nodeIds.has(source) ||
+        (destination !== OUTPUT_BUS_ID && !nodeIds.has(destination)),
+    );
+    if (invalidConnection) {
+      return rejectMockGraph(
+        request,
+        'rejected',
+        'missing_endpoint',
+        'Connection endpoint is missing',
+      );
+    }
+
+    const nextHash = computeMockGraphHash(request);
+    if (nextHash !== audioEngineState.graphHash) {
+      audioEngineState.nodes.clear();
+      request.nodes.forEach((node) => {
+        audioEngineState.nodes.set(node.id, {
+          type: node.type,
+          options: { ...(node.options ?? {}) },
+        });
+      });
+      audioEngineState.connections.clear();
+      request.connections.forEach(({ source, destination }) => {
+        audioEngineState.connections.add(connectionKey(source, destination));
+      });
+      audioEngineState.graphGeneration += 1;
+      audioEngineState.graphHash = nextHash;
+    }
+
+    const result: MockGraphApplyResult = {
+      status: 'committed',
+      transactionId: request.transactionId,
+      graph: describeMockGraph(),
+    };
+    graphTransactionResults.set(request.transactionId, result);
+    return result;
   },
   addNode: async (
     nodeId: string,
@@ -419,9 +588,11 @@ type MockLoggerModule = {
 const loggerEntries: LoggerEntry[] = [];
 
 const createLoggerModule = (): MockLoggerModule => ({
-  logWithLevel: jest.fn((level: string, message: string, metadata?: Record<string, unknown>) => {
-    loggerEntries.push({ level, message, metadata });
-  }),
+  logWithLevel: jest.fn(
+    (level: string, message: string, metadata?: Record<string, unknown>) => {
+      loggerEntries.push({ level, message, metadata });
+    },
+  ),
   __getLogs: () => [...loggerEntries],
   __clearLogs: () => {
     loggerEntries.splice(0, loggerEntries.length);
@@ -433,6 +604,7 @@ const loggerModule = createLoggerModule();
 const pluginHostEmitter = new MockNativeEventEmitter();
 
 const pluginHostModule = {
+  runtimeReady: true,
   queryAvailablePlugins: async () => [],
   instantiatePlugin: async () => ({
     instanceId: 'mock-instance',
@@ -562,8 +734,7 @@ export class NativeEventEmitter extends MockNativeEventEmitter {
 }
 
 export const TurboModuleRegistry = {
-  get: <T>(name: string): T | null =>
-    (NativeModules[name] as T | undefined) ?? null,
+  get: <T>(name: string): T | null => (NativeModules[name] as T | undefined) ?? null,
   getEnforcing: <T>(name: string): T => NativeModules[name] as T,
 };
 

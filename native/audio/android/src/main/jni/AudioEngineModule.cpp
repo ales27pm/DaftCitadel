@@ -5,8 +5,10 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "audio-engine/platform/android/AudioEngineBridge.h"
 #include "audio-engine/platform/common/NodeFactory.h"
@@ -15,6 +17,15 @@
 using daft::audio::bridge::AudioEngineBridge;
 using daft::audio::bridge::CreateNode;
 using daft::audio::bridge::NodeOptions;
+using daft::audio::GraphApplyRequest;
+using daft::audio::GraphApplyResult;
+using daft::audio::GraphApplyStatus;
+using daft::audio::GraphApplyStatusName;
+using daft::audio::GraphConnectionDefinition;
+using daft::audio::GraphDescription;
+using daft::audio::GraphErrorCodeName;
+using daft::audio::GraphFailureStageName;
+using daft::audio::PreparedGraphNode;
 
 namespace {
 
@@ -189,6 +200,68 @@ NodeOptions ConvertOptions(JNIEnv* env, jobject map) {
   return options;
 }
 
+void AppendGraphDescription(const GraphDescription& description,
+                            std::vector<std::string>& payload) {
+  payload.push_back(std::to_string(description.generation));
+  payload.push_back(description.graphHash);
+  payload.push_back(std::to_string(description.routeEpoch));
+  payload.push_back(std::to_string(description.engineInstance));
+  payload.push_back(std::to_string(description.nodeIds.size()));
+  payload.insert(payload.end(), description.nodeIds.begin(),
+                 description.nodeIds.end());
+}
+
+jobjectArray ToJavaStringArray(
+    JNIEnv* env, const std::vector<std::string>& values) {
+  jclass stringClass = env->FindClass("java/lang/String");
+  if (stringClass == nullptr) {
+    return nullptr;
+  }
+  jobjectArray result = env->NewObjectArray(
+      static_cast<jsize>(values.size()), stringClass, nullptr);
+  env->DeleteLocalRef(stringClass);
+  if (result == nullptr) {
+    return nullptr;
+  }
+  for (jsize index = 0;
+       index < static_cast<jsize>(values.size()); ++index) {
+    jstring value =
+        env->NewStringUTF(values[static_cast<std::size_t>(index)].c_str());
+    if (value == nullptr) {
+      return nullptr;
+    }
+    env->SetObjectArrayElement(result, index, value);
+    env->DeleteLocalRef(value);
+  }
+  return result;
+}
+
+jobjectArray EncodeGraphDescription(
+    JNIEnv* env, const GraphDescription& description) {
+  std::vector<std::string> payload;
+  payload.reserve(5U + description.nodeIds.size());
+  AppendGraphDescription(description, payload);
+  return ToJavaStringArray(env, payload);
+}
+
+jobjectArray EncodeGraphApplyResult(
+    JNIEnv* env, const GraphApplyResult& result) {
+  std::vector<std::string> payload;
+  payload.reserve(11U + result.graph.nodeIds.size());
+  payload.push_back(GraphApplyStatusName(result.status));
+  payload.push_back(result.transactionId);
+  AppendGraphDescription(result.graph, payload);
+  if (result.failure.has_value()) {
+    payload.push_back(GraphFailureStageName(result.failure->stage));
+    payload.push_back(GraphErrorCodeName(result.failure->code));
+    payload.push_back(result.failure->nodeId);
+    payload.push_back(result.failure->detail);
+  } else {
+    payload.insert(payload.end(), 4U, std::string());
+  }
+  return ToJavaStringArray(env, payload);
+}
+
 }  // namespace
 
 extern "C" {
@@ -206,6 +279,17 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeInitialize(JNIEnv* env, jobje
                                                              jint framesPerBuffer) {
   try {
     AudioEngineBridge::initialize(env, sampleRate, static_cast<std::uint32_t>(framesPerBuffer));
+    const auto graphInitialization =
+        AudioEngineBridge::initializeGraphTransactions(
+            sampleRate, static_cast<std::uint32_t>(framesPerBuffer));
+    if (graphInitialization.status != GraphApplyStatus::Committed) {
+      const std::string detail =
+          graphInitialization.failure.has_value()
+              ? graphInitialization.failure->detail
+              : "Native graph transaction initialization failed";
+      AudioEngineBridge::shutdown();
+      throw std::runtime_error(detail);
+    }
   } catch (const std::exception& ex) {
     ThrowJavaException(env, "java/lang/RuntimeException", ex.what());
   }
@@ -224,10 +308,126 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeInitialize(JNIEnv* env, jobje
 JNIEXPORT void JNICALL
 Java_com_daftcitadel_audio_AudioEngineModule_nativeShutdown(JNIEnv* env, jobject /*thiz*/) {
   try {
+    (void)AudioEngineBridge::invalidateGraphTransactions();
     AudioEngineBridge::shutdown();
   } catch (const std::exception& ex) {
     ThrowJavaException(env, "java/lang/RuntimeException", ex.what());
   }
+}
+
+JNIEXPORT jobjectArray JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeDescribeGraph(
+    JNIEnv* env, jobject /*thiz*/) {
+  try {
+    return EncodeGraphDescription(env, AudioEngineBridge::describeGraph());
+  } catch (const std::exception& ex) {
+    ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
+    return nullptr;
+  }
+}
+
+JNIEXPORT jobjectArray JNICALL
+Java_com_daftcitadel_audio_AudioEngineModule_nativeApplyGraph(
+    JNIEnv* env, jobject /*thiz*/, jstring transactionId,
+    jlong expectedGeneration, jlong expectedRouteEpoch,
+    jlong expectedEngineInstance, jobjectArray nodeIds,
+    jobjectArray nodeTypes, jobjectArray nodeOptions,
+    jobjectArray optionFingerprints, jobjectArray connectionSources,
+    jobjectArray connectionDestinations) {
+  if (transactionId == nullptr || nodeIds == nullptr ||
+      nodeTypes == nullptr || nodeOptions == nullptr ||
+      optionFingerprints == nullptr || connectionSources == nullptr ||
+      connectionDestinations == nullptr ||
+      expectedGeneration < 0 || expectedRouteEpoch < 0 ||
+      expectedEngineInstance < 0) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException",
+                       "Graph transaction payload is invalid");
+    return nullptr;
+  }
+
+  const jsize nodeCount = env->GetArrayLength(nodeIds);
+  if (env->GetArrayLength(nodeTypes) != nodeCount ||
+      env->GetArrayLength(nodeOptions) != nodeCount ||
+      env->GetArrayLength(optionFingerprints) != nodeCount) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException",
+                       "Graph node arrays must have matching lengths");
+    return nullptr;
+  }
+  const jsize connectionCount =
+      env->GetArrayLength(connectionSources);
+  if (env->GetArrayLength(connectionDestinations) != connectionCount) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException",
+                       "Graph connection arrays must have matching lengths");
+    return nullptr;
+  }
+
+  try {
+    GraphApplyRequest request;
+    request.transactionId = ToStdString(env, transactionId);
+    if (request.transactionId.empty()) {
+      throw std::invalid_argument("transactionId is required");
+    }
+    request.expectedGeneration =
+        static_cast<std::uint64_t>(expectedGeneration);
+    request.expectedRouteEpoch =
+        static_cast<std::uint64_t>(expectedRouteEpoch);
+    request.expectedEngineInstance =
+        static_cast<std::uint64_t>(expectedEngineInstance);
+    request.nodes.reserve(static_cast<std::size_t>(nodeCount));
+
+    for (jsize index = 0; index < nodeCount; ++index) {
+      jstring nodeId = static_cast<jstring>(
+          env->GetObjectArrayElement(nodeIds, index));
+      jstring nodeType = static_cast<jstring>(
+          env->GetObjectArrayElement(nodeTypes, index));
+      jobject optionsMap =
+          env->GetObjectArrayElement(nodeOptions, index);
+      jstring fingerprint = static_cast<jstring>(
+          env->GetObjectArrayElement(optionFingerprints, index));
+
+      PreparedGraphNode prepared;
+      prepared.id = ToStdString(env, nodeId);
+      prepared.type = ToStdString(env, nodeType);
+      prepared.optionsFingerprint =
+          ToStdString(env, fingerprint);
+      NodeOptions options = ConvertOptions(env, optionsMap);
+      std::string error;
+      prepared.node = CreateNode(prepared.type, options, error);
+
+      env->DeleteLocalRef(nodeId);
+      env->DeleteLocalRef(nodeType);
+      env->DeleteLocalRef(optionsMap);
+      env->DeleteLocalRef(fingerprint);
+
+      if (!prepared.node) {
+        throw std::invalid_argument(error);
+      }
+      request.nodes.push_back(std::move(prepared));
+    }
+
+    request.connections.reserve(
+        static_cast<std::size_t>(connectionCount));
+    for (jsize index = 0; index < connectionCount; ++index) {
+      jstring source = static_cast<jstring>(
+          env->GetObjectArrayElement(connectionSources, index));
+      jstring destination = static_cast<jstring>(
+          env->GetObjectArrayElement(connectionDestinations, index));
+      GraphConnectionDefinition connection;
+      connection.source = ToStdString(env, source);
+      connection.destination = ToStdString(env, destination);
+      env->DeleteLocalRef(source);
+      env->DeleteLocalRef(destination);
+      request.connections.push_back(std::move(connection));
+    }
+
+    return EncodeGraphApplyResult(
+        env, AudioEngineBridge::applyGraph(std::move(request)));
+  } catch (const std::invalid_argument& ex) {
+    ThrowJavaException(env, "java/lang/IllegalArgumentException", ex.what());
+  } catch (const std::exception& ex) {
+    ThrowJavaException(env, "java/lang/IllegalStateException", ex.what());
+  }
+  return nullptr;
 }
 
 /**

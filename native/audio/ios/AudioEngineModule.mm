@@ -102,6 +102,89 @@ NSString* NSStringFromStdString(const std::string& value) {
   return converted ?: @"Native audio operation failed";
 }
 
+NSDictionary* GraphDescriptionDictionary(
+    const daft::audio::GraphDescription& description) {
+  NSMutableArray<NSString*>* nodeIds =
+      [NSMutableArray arrayWithCapacity:description.nodeIds.size()];
+  for (const auto& nodeId : description.nodeIds) {
+    [nodeIds addObject:NSStringFromStdString(nodeId)];
+  }
+  return @{
+    @"generation" :
+        @(static_cast<unsigned long long>(description.generation)),
+    @"graphHash" : NSStringFromStdString(description.graphHash),
+    @"nodeIds" : nodeIds,
+    @"routeEpoch" :
+        @(static_cast<unsigned long long>(description.routeEpoch)),
+    @"engineInstance" :
+        @(static_cast<unsigned long long>(description.engineInstance)),
+  };
+}
+
+NSDictionary* GraphApplyResultDictionary(
+    const daft::audio::GraphApplyResult& result) {
+  NSMutableDictionary* dictionary = [@{
+    @"status" :
+        NSStringFromStdString(daft::audio::GraphApplyStatusName(result.status)),
+    @"transactionId" : NSStringFromStdString(result.transactionId),
+    @"graph" : GraphDescriptionDictionary(result.graph),
+  } mutableCopy];
+  if (result.failure.has_value()) {
+    const auto& failure = *result.failure;
+    dictionary[@"failure"] = @{
+      @"stage" : NSStringFromStdString(
+          daft::audio::GraphFailureStageName(failure.stage)),
+      @"code" :
+          NSStringFromStdString(daft::audio::GraphErrorCodeName(failure.code)),
+      @"nodeId" : NSStringFromStdString(failure.nodeId),
+      @"detail" : NSStringFromStdString(failure.detail),
+    };
+  }
+  return dictionary;
+}
+
+bool ReadUnsignedGraphField(NSDictionary* dictionary, NSString* key,
+                            std::uint64_t& output, std::string& error) {
+  id raw = dictionary[key];
+  if (![raw isKindOfClass:[NSNumber class]]) {
+    error = std::string([key UTF8String]) + " must be numeric";
+    return false;
+  }
+  const double value = [(NSNumber*)raw doubleValue];
+  if (!std::isfinite(value) || value < 0.0 || std::floor(value) != value ||
+      value > static_cast<double>(
+                  std::numeric_limits<std::uint64_t>::max())) {
+    error = std::string([key UTF8String]) +
+            " must be a non-negative integer";
+    return false;
+  }
+  output = [(NSNumber*)raw unsignedLongLongValue];
+  return true;
+}
+
+std::string CanonicalOptionsFingerprint(NSDictionary* options,
+                                        std::string& error) {
+  if (options == nil || options.count == 0) {
+    return "{}";
+  }
+  if (![NSJSONSerialization isValidJSONObject:options]) {
+    error = "Node options must contain JSON-compatible values";
+    return {};
+  }
+  NSError* serializationError = nil;
+  NSData* data =
+      [NSJSONSerialization dataWithJSONObject:options
+                                      options:NSJSONWritingSortedKeys
+                                        error:&serializationError];
+  if (data == nil) {
+    error = serializationError.localizedDescription.UTF8String
+                ? serializationError.localizedDescription.UTF8String
+                : "Unable to canonicalize node options";
+    return {};
+  }
+  return std::string(static_cast<const char*>(data.bytes), data.length);
+}
+
 void RejectPromise(RCTPromiseRejectBlock reject, NSString* code, const std::string& message) {
   reject(code, NSStringFromStdString(message), nil);
 }
@@ -196,6 +279,7 @@ void ShutdownBridgeIfOwner(NSString* operation,
   if (generation == 0) {
     return;
   }
+  (void)AudioEngineBridge::invalidateGraphTransactions(generation);
   if (!AudioEngineBridge::shutdownIfOwner(generation)) {
     os_log_info(ModuleLogger(), "%{public}@ did not own generation %llu", operation,
                 static_cast<unsigned long long>(generation));
@@ -293,6 +377,8 @@ bool ReadBoundedInteger(NSDictionary* event, NSString* key, NSInteger minimum,
 
 @implementation AudioEngineModule {
   AudioEngineBridge::EngineGeneration _engineGeneration;
+  BOOL _isRecoveringAudioConfiguration;
+  NSUInteger _audioConfigurationNotificationSequence;
 }
 
 - (instancetype)init {
@@ -300,6 +386,35 @@ bool ReadBoundedInteger(NSDictionary* event, NSString* key, NSInteger minimum,
   if (self != nil) {
     _engineGeneration = 0;
     _audioDeviceDriver = [[DaftAudioDeviceDriver alloc] init];
+    _isRecoveringAudioConfiguration = NO;
+    _audioConfigurationNotificationSequence = 0U;
+    __weak AudioEngineModule* weakSelf = self;
+    _audioDeviceDriver.audioConfigurationChangeHandler =
+        ^(NSString* notificationName) {
+          AudioEngineModule* strongSelf = weakSelf;
+          if (strongSelf == nil) {
+            return;
+          }
+          dispatch_async([strongSelf methodQueue], ^{
+            strongSelf->_audioConfigurationNotificationSequence += 1U;
+            const NSUInteger sequence =
+                strongSelf->_audioConfigurationNotificationSequence;
+            dispatch_after(
+                dispatch_time(DISPATCH_TIME_NOW,
+                              50LL * NSEC_PER_MSEC),
+                [strongSelf methodQueue], ^{
+                  if (strongSelf == nil ||
+                      sequence !=
+                          strongSelf
+                              ->_audioConfigurationNotificationSequence) {
+                    return;
+                  }
+                  [strongSelf
+                      recoverAfterAudioConfigurationChange:
+                          notificationName];
+                });
+          });
+        };
     _configuredSampleRate = 0.0;
     _configuredFramesPerBuffer = 0U;
   }
@@ -322,7 +437,86 @@ RCT_EXPORT_MODULE();
   return audioControlQueue;
 }
 
+- (void)recoverAfterAudioConfigurationChange:(NSString*)notificationName {
+  if (_isRecoveringAudioConfiguration || _engineGeneration == 0) {
+    return;
+  }
+  _isRecoveringAudioConfiguration = YES;
+  @try {
+    try {
+      const auto generation = _engineGeneration;
+      const auto transport =
+          AudioEngineBridge::getTransportState(generation);
+      [self.audioDeviceDriver stop];
+      AudioEngineBridge::stopTransport(generation);
+
+      const auto recovery =
+          AudioEngineBridge::recoverAfterAudioConfigurationChange(
+              generation);
+      if (recovery.status !=
+          daft::audio::GraphApplyStatus::Committed) {
+        const std::string detail =
+            recovery.failure.has_value()
+                ? recovery.failure->detail
+                : "Native graph recovery was rejected";
+        os_log_error(
+            ModuleLogger(),
+            "Audio configuration recovery failed after %{public}@: %{public}s",
+            notificationName, detail.c_str());
+        return;
+      }
+
+      if (transport.isPlaying) {
+        AudioEngineBridge::locateTransport(
+            generation, transport.currentFrame);
+        AudioEngineBridge::startTransport(generation);
+        NSError* deviceError = nil;
+        if (![self.audioDeviceDriver
+                startWithSampleRate:self.configuredSampleRate
+                   framesPerBuffer:self.configuredFramesPerBuffer
+                  engineGeneration:generation
+                             error:&deviceError]) {
+          StopTransportSilently(generation);
+          os_log_error(
+              ModuleLogger(),
+              "Audio device restart failed after %{public}@: %{public}@",
+              notificationName,
+              deviceError.localizedDescription ?:
+                  @"No device error was supplied");
+          return;
+        }
+      }
+
+      os_log_info(
+          ModuleLogger(),
+          "Recovered audio graph after %{public}@ (route epoch %llu)",
+          notificationName,
+          static_cast<unsigned long long>(
+              recovery.graph.routeEpoch));
+    } catch (const std::exception& exception) {
+      StopTransportSilently(_engineGeneration);
+      os_log_error(
+          ModuleLogger(),
+          "Audio configuration recovery failed after %{public}@: %{public}s",
+          notificationName, exception.what());
+    } catch (...) {
+      StopTransportSilently(_engineGeneration);
+      os_log_error(
+          ModuleLogger(),
+          "Audio configuration recovery failed after %{public}@",
+          notificationName);
+    }
+  } @catch (NSException* exception) {
+    StopTransportSilently(_engineGeneration);
+    LogObjectiveCException(
+        @"Audio configuration recovery", exception);
+  } @finally {
+    _isRecoveringAudioConfiguration = NO;
+  }
+}
+
 - (void)invalidate {
+  _audioConfigurationNotificationSequence += 1U;
   @try {
     [self.audioDeviceDriver stop];
   } @catch (NSException* exception) {
@@ -367,7 +561,22 @@ RCT_EXPORT_METHOD(initialize:(double)sampleRate
     return;
   }
   try {
-    _engineGeneration = AudioEngineBridge::initialize(sampleRate, framesUnsigned);
+    const auto generation =
+        AudioEngineBridge::initialize(sampleRate, framesUnsigned);
+    const auto graphInitialization =
+        AudioEngineBridge::initializeGraphTransactions(
+            generation, sampleRate, framesUnsigned);
+    if (graphInitialization.status !=
+        daft::audio::GraphApplyStatus::Committed) {
+      const std::string detail =
+          graphInitialization.failure.has_value()
+              ? graphInitialization.failure->detail
+              : "Native graph transaction initialization failed";
+      ShutdownBridgeIfOwner(@"Failed graph initialization", generation);
+      RejectPromise(reject, @"initialize_failed", detail);
+      return;
+    }
+    _engineGeneration = generation;
     self.configuredSampleRate = sampleRate;
     self.configuredFramesPerBuffer = framesUnsigned;
     resolve(nil);
@@ -385,9 +594,9 @@ RCT_EXPORT_METHOD(shutdown:(RCTPromiseResolveBlock)resolve
   try {
     [self.audioDeviceDriver stop];
     const auto generation = _engineGeneration;
+    _engineGeneration = 0;
     if (generation != 0) {
-      AudioEngineBridge::shutdownIfOwner(generation);
-      _engineGeneration = 0;
+      ShutdownBridgeIfOwner(@"Audio engine shutdown", generation);
     }
     self.configuredSampleRate = 0.0;
     self.configuredFramesPerBuffer = 0U;
@@ -539,6 +748,176 @@ RCT_EXPORT_METHOD(getTransportState:(RCTPromiseResolveBlock)resolve
     RejectPromise(reject, @"transport_state_failed", ex.what());
   }
   });
+}
+
+RCT_EXPORT_METHOD(describeGraph:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(
+      reject, @"describe_graph_failed", @"Describe audio graph", resolve,
+      ^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject) {
+        const auto generation = _engineGeneration;
+        if (!EnsureInitialized(generation, reject)) {
+          return;
+        }
+        const auto description =
+            AudioEngineBridge::describeGraph(generation);
+        resolve(GraphDescriptionDictionary(description));
+      });
+}
+
+RCT_EXPORT_METHOD(applyGraph:(NSDictionary*)request
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+  PerformPromiseOperation(
+      reject, @"apply_graph_failed", @"Apply audio graph", resolve,
+      ^(RCTPromiseResolveBlock resolve, RCTPromiseRejectBlock reject) {
+        const auto generation = _engineGeneration;
+        if (!EnsureInitialized(generation, reject)) {
+          return;
+        }
+        if (![request isKindOfClass:[NSDictionary class]]) {
+          RejectPromise(reject, @"invalid_arguments",
+                        "Graph request must be an object");
+          return;
+        }
+
+        id transactionValue = request[@"transactionId"];
+        if (![transactionValue isKindOfClass:[NSString class]] ||
+            [(NSString*)transactionValue length] == 0) {
+          RejectPromise(reject, @"invalid_arguments",
+                        "transactionId is required");
+          return;
+        }
+
+        daft::audio::GraphApplyRequest nativeRequest;
+        nativeRequest.transactionId =
+            [(NSString*)transactionValue UTF8String];
+        std::string conversionError;
+        if (!ReadUnsignedGraphField(request, @"expectedGeneration",
+                                    nativeRequest.expectedGeneration,
+                                    conversionError) ||
+            !ReadUnsignedGraphField(request, @"expectedRouteEpoch",
+                                    nativeRequest.expectedRouteEpoch,
+                                    conversionError) ||
+            !ReadUnsignedGraphField(request, @"expectedEngineInstance",
+                                    nativeRequest.expectedEngineInstance,
+                                    conversionError)) {
+          RejectPromise(reject, @"invalid_arguments", conversionError);
+          return;
+        }
+
+        id rawNodes = request[@"nodes"];
+        if (![rawNodes isKindOfClass:[NSArray class]]) {
+          RejectPromise(reject, @"invalid_arguments",
+                        "nodes must be an array");
+          return;
+        }
+        NSArray* nodes = (NSArray*)rawNodes;
+        nativeRequest.nodes.reserve(nodes.count);
+        for (id rawNode in nodes) {
+          if (![rawNode isKindOfClass:[NSDictionary class]]) {
+            RejectPromise(reject, @"invalid_arguments",
+                          "Every node must be an object");
+            return;
+          }
+          NSDictionary* node = (NSDictionary*)rawNode;
+          id rawNodeId = node[@"id"];
+          id rawNodeType = node[@"type"];
+          id rawOptions = node[@"options"];
+          if (![rawNodeId isKindOfClass:[NSString class]] ||
+              [(NSString*)rawNodeId length] == 0 ||
+              ![rawNodeType isKindOfClass:[NSString class]] ||
+              [(NSString*)rawNodeType length] == 0 ||
+              (rawOptions != nil &&
+               ![rawOptions isKindOfClass:[NSDictionary class]])) {
+            RejectPromise(
+                reject, @"invalid_arguments",
+                "Each node needs non-empty id/type and object options");
+            return;
+          }
+
+          const std::string nodeId =
+              Trim([(NSString*)rawNodeId UTF8String]);
+          const std::string nodeType =
+              ToLowerCopy(Trim([(NSString*)rawNodeType UTF8String]));
+          if (nodeId.empty() || nodeType.empty()) {
+            RejectPromise(reject, @"invalid_arguments",
+                          "Node id and type cannot contain only whitespace");
+            return;
+          }
+
+          NSDictionary* options =
+              [rawOptions isKindOfClass:[NSDictionary class]]
+                  ? (NSDictionary*)rawOptions
+                  : @{};
+          NodeOptions nativeOptions = ConvertOptions(options);
+          nativeOptions.engineGeneration = generation;
+          std::string factoryError;
+          auto nativeNode =
+              CreateNode(nodeType, nativeOptions, factoryError);
+          if (!nativeNode) {
+            RejectPromise(reject, @"unsupported_node", factoryError);
+            return;
+          }
+
+          std::string fingerprint =
+              CanonicalOptionsFingerprint(options, conversionError);
+          if (!conversionError.empty()) {
+            RejectPromise(reject, @"invalid_arguments", conversionError);
+            return;
+          }
+
+          daft::audio::PreparedGraphNode prepared;
+          prepared.id = nodeId;
+          prepared.type = nodeType;
+          prepared.optionsFingerprint = std::move(fingerprint);
+          prepared.node = std::move(nativeNode);
+          nativeRequest.nodes.push_back(std::move(prepared));
+        }
+
+        id rawConnections = request[@"connections"];
+        if (![rawConnections isKindOfClass:[NSArray class]]) {
+          RejectPromise(reject, @"invalid_arguments",
+                        "connections must be an array");
+          return;
+        }
+        NSArray* connections = (NSArray*)rawConnections;
+        nativeRequest.connections.reserve(connections.count);
+        for (id rawConnection in connections) {
+          if (![rawConnection isKindOfClass:[NSDictionary class]]) {
+            RejectPromise(reject, @"invalid_arguments",
+                          "Every connection must be an object");
+            return;
+          }
+          NSDictionary* connection = (NSDictionary*)rawConnection;
+          id rawSource = connection[@"source"];
+          id rawDestination = connection[@"destination"];
+          if (![rawSource isKindOfClass:[NSString class]] ||
+              ![rawDestination isKindOfClass:[NSString class]]) {
+            RejectPromise(
+                reject, @"invalid_arguments",
+                "Every connection needs source and destination strings");
+            return;
+          }
+          daft::audio::GraphConnectionDefinition definition;
+          definition.source =
+              Trim([(NSString*)rawSource UTF8String]);
+          definition.destination =
+              Trim([(NSString*)rawDestination UTF8String]);
+          if (definition.source.empty() ||
+              definition.destination.empty()) {
+            RejectPromise(
+                reject, @"invalid_arguments",
+                "Connection endpoints cannot contain only whitespace");
+            return;
+          }
+          nativeRequest.connections.push_back(std::move(definition));
+        }
+
+        const auto result = AudioEngineBridge::applyGraph(
+            generation, std::move(nativeRequest));
+        resolve(GraphApplyResultDictionary(result));
+      });
 }
 
 RCT_EXPORT_METHOD(addNode:(NSString*)nodeId

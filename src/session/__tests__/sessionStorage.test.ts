@@ -182,11 +182,49 @@ class InMemorySQLiteConnection implements SQLiteConnection {
 
 class MockAudioEngine implements AudioEngineBridge {
   public updates: Session[] = [];
+  public events: string[] = [];
+  public failNextUpdate: Error | null = null;
+  public resetCount = 0;
 
   async applySessionUpdate(session: Session): Promise<void> {
+    this.events.push('audio');
+    if (this.failNextUpdate) {
+      const error = this.failNextUpdate;
+      this.failNextUpdate = null;
+      throw error;
+    }
     this.updates.push(JSON.parse(JSON.stringify(session)));
   }
+
+  async resetSession(): Promise<void> {
+    this.events.push('reset');
+    this.resetCount += 1;
+  }
 }
+
+const recordTransactionEvents = (storage: SessionStorageAdapter, events: string[]) => {
+  const beginTransaction = storage.beginTransaction.bind(storage);
+  return jest.spyOn(storage, 'beginTransaction').mockImplementation(async () => {
+    const transaction = await beginTransaction();
+    const write = transaction.write.bind(transaction);
+    const commit = transaction.commit.bind(transaction);
+    const rollback = transaction.rollback.bind(transaction);
+    const wrapped = Object.create(transaction) as typeof transaction;
+    wrapped.write = async (...args: Parameters<typeof transaction.write>) => {
+      events.push('stage');
+      return write(...args);
+    };
+    wrapped.commit = async () => {
+      events.push('commit');
+      return commit();
+    };
+    wrapped.rollback = async () => {
+      events.push('rollback');
+      return rollback();
+    };
+    return wrapped;
+  });
+};
 
 class RecordingCloudProvider extends NoopCloudSyncProvider {
   public pushed: Session[] = [];
@@ -356,6 +394,58 @@ describe('SessionManager', () => {
 
     const redone = await manager.redo();
     expect(redone?.name).toBe('Updated Session');
+  });
+
+  it('commits storage only after native graph acknowledgment', async () => {
+    const events: string[] = [];
+    engine.events = events;
+    recordTransactionEvents(storage, events);
+
+    await manager.updateSession((session) => {
+      session.name = 'Commit Ordered';
+    });
+
+    expect(events).toEqual(['stage', 'audio', 'commit']);
+    expect((await storage.read('session-test'))?.name).toBe('Commit Ordered');
+  });
+
+  it('rolls back staged storage and restores audio after native rejection', async () => {
+    const events: string[] = [];
+    engine.events = events;
+    engine.failNextUpdate = new Error('Native graph rejected transaction');
+    recordTransactionEvents(storage, events);
+
+    await expect(
+      manager.updateSession((session) => {
+        session.name = 'Must Not Persist';
+      }),
+    ).rejects.toThrow('Native graph rejected transaction');
+
+    expect(events).toEqual(['stage', 'audio', 'rollback', 'audio']);
+    expect((await storage.read('session-test'))?.name).toBe('Test Session');
+    expect(manager.getSession()?.name).toBe('Test Session');
+  });
+
+  it('resets audio when an initial create is rejected', async () => {
+    const freshEngine = new MockAudioEngine();
+    const events: string[] = [];
+    freshEngine.events = events;
+    freshEngine.failNextUpdate = new Error('Native graph unavailable');
+    const freshManager = new SessionManager(storage, freshEngine);
+    await freshManager.initialize();
+    recordTransactionEvents(storage, events);
+    const candidate = createTestSession({
+      id: 'session-rejected',
+      revision: 0,
+    });
+
+    await expect(freshManager.createSession(candidate)).rejects.toThrow(
+      'Native graph unavailable',
+    );
+
+    expect(events).toEqual(['stage', 'audio', 'rollback', 'reset']);
+    expect(await storage.read(candidate.id)).toBeNull();
+    expect(freshEngine.resetCount).toBe(1);
   });
 
   it('merges remote changes during sync', async () => {

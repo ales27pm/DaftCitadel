@@ -433,11 +433,10 @@ export class SessionAudioBridge {
 
   public async applySessionUpdate(session: Session): Promise<void> {
     if (session.revision < this.previousSessionRevision) {
-      throw new Error('Session revision regressed; refusing to apply update');
-    }
-    if (session.revision === this.previousSessionRevision) {
-      this.logger.debug('Session revision unchanged; skipping update');
-      return;
+      this.logger.info('Applying an older session revision during rollback', {
+        previousRevision: this.previousSessionRevision,
+        revision: session.revision,
+      });
     }
 
     const engineDescription = this.clock.describe();
@@ -502,6 +501,31 @@ export class SessionAudioBridge {
         this.logger.warn('Failed to refresh transport state after session update', error);
       });
     }
+  }
+
+  public async resetSession(): Promise<void> {
+    await this.graph.apply(
+      new Map<string, NodeConfiguration>(),
+      new Set<ConnectionKey>(),
+    );
+    this.previousSessionRevision = -1;
+    this.pluginRecovery?.record({
+      automationRequests: new Map(),
+      pluginAutomations: new Map(),
+      pluginNodes: new Map(),
+    });
+    await this.automationPublisher.applyChanges(new Map()).catch((error) => {
+      this.logger.error('Failed to clear automation during session reset', error);
+    });
+    await this.applyPluginAutomations(new Map()).catch((error) => {
+      this.logger.error('Failed to clear plugin automation during session reset', error);
+    });
+    await this.releaseStalePluginInstances(new Set()).catch((error) => {
+      this.logger.error('Failed to release plugins during session reset', error);
+    });
+    await this.reconcileClipBuffers(new Map()).catch((error) => {
+      this.logger.error('Failed to release clip buffers during session reset', error);
+    });
   }
 
   public getTransportState(): AudioTransportSnapshot | null {

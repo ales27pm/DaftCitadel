@@ -1,6 +1,6 @@
 module.exports = {
   root: true,
-  ignorePatterns: ['__mocks__/**', 'audio-engine/build/**'],
+  ignorePatterns: ['__mocks__/**', 'audio-engine/build*/**'],
   env: {
     es2021: true,
     node: true,
@@ -17,7 +17,7 @@ module.exports = {
   ],
   parser: '@typescript-eslint/parser',
   parserOptions: {
-    project: './tsconfig.json',
+    project: './tsconfig.eslint.json',
     tsconfigRootDir: __dirname,
   },
   plugins: ['@typescript-eslint', 'import', 'react', 'react-hooks', 'jest'],

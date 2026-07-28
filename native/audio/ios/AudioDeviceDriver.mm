@@ -85,6 +85,51 @@ void CleanupEngine(AVAudioEngine* engine, AVAudioSourceNode* sourceNode, BOOL so
 
 @implementation DaftAudioDeviceDriver
 
+- (instancetype)init {
+  self = [super init];
+  if (self) {
+    NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+    [center addObserver:self
+               selector:@selector(handleAudioConfigurationChange:)
+                   name:AVAudioEngineConfigurationChangeNotification
+                 object:nil];
+    [center addObserver:self
+               selector:@selector(handleAudioConfigurationChange:)
+                   name:AVAudioSessionRouteChangeNotification
+                 object:AVAudioSession.sharedInstance];
+    [center addObserver:self
+               selector:@selector(handleAudioConfigurationChange:)
+                   name:AVAudioSessionMediaServicesWereResetNotification
+                 object:AVAudioSession.sharedInstance];
+  }
+  return self;
+}
+
+- (void)dealloc {
+  [NSNotificationCenter.defaultCenter removeObserver:self];
+  [self stop];
+}
+
+- (void)handleAudioConfigurationChange:(NSNotification*)notification {
+  if (_engine == nil) {
+    return;
+  }
+  if ([notification.name
+          isEqualToString:AVAudioSessionRouteChangeNotification]) {
+    NSNumber* reason =
+        notification.userInfo[AVAudioSessionRouteChangeReasonKey];
+    if (reason != nil &&
+        reason.unsignedIntegerValue ==
+            AVAudioSessionRouteChangeReasonCategoryChange) {
+      return;
+    }
+  }
+  void (^handler)(NSString*) = self.audioConfigurationChangeHandler;
+  if (handler != nil) {
+    handler(notification.name);
+  }
+}
+
 - (BOOL)startWithSampleRate:(double)sampleRate
             framesPerBuffer:(NSUInteger)framesPerBuffer
            engineGeneration:(uint64_t)engineGeneration
@@ -303,10 +348,6 @@ void CleanupEngine(AVAudioEngine* engine, AVAudioSourceNode* sourceNode, BOOL so
     LogException(@"audio-session-access", exception);
   }
   CleanupEngine(engine, sourceNode, sourceNode != nil, session);
-}
-
-- (void)dealloc {
-  [self stop];
 }
 
 @end

@@ -12,7 +12,9 @@ add_library(daft_audio_engine
     src/AudioBuffer.cpp
     src/DSPNode.cpp
     src/Scheduler.cpp
-    src/SceneGraph.cpp
+  src/SceneGraph.cpp
+  src/RenderPlan.cpp
+  src/GraphTransactionHost.cpp
     src/SceneGraphRealtimeBatch.cpp
     src/RealtimeControlPlane.cpp
     src/Automation.cpp
@@ -58,7 +60,9 @@ if(DAFT_AUDIO_ENGINE_BUILD_TESTS)
         tests/SchedulerTests.cpp
         tests/ClipPlayerNodeTests.cpp
         tests/PluginNodeTests.cpp
-        tests/SceneGraphTests.cpp
+    tests/SceneGraphTests.cpp
+    tests/RenderPlanTests.cpp
+    tests/GraphTransactionHostTests.cpp
         tests/JunoCoreTests.cpp
         tests/InstrumentNodeTests.cpp
         tests/RealtimeControlQueueTests.cpp

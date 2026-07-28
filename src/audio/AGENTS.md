@@ -18,4 +18,3 @@
 
 - When adding new native capabilities, capture the Objective-C/Swift or Kotlin implementation details in docs/ with entitlement requirements.
 - Prefer pure functions or lightweight classes for orchestration logic to simplify deterministic testing.
-

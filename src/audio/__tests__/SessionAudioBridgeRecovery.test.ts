@@ -1,5 +1,9 @@
 import { SessionAudioBridge } from '../SessionAudioBridge';
 import type { AudioEngine } from '../AudioEngine';
+import type {
+  NativeGraphApplyRequest,
+  NativeGraphDescription,
+} from '../NativeAudioEngine';
 import {
   createDefaultTrackRoutingGraph,
   createEmptySession,
@@ -12,6 +16,13 @@ describe('SessionAudioBridge startup recovery', () => {
     const publishAutomation = jest
       .fn()
       .mockRejectedValue(new Error('Node parameter is invalid'));
+    let graph: NativeGraphDescription = {
+      generation: 0,
+      graphHash: 'recovery-empty',
+      nodeIds: [],
+      routeEpoch: 1,
+      engineInstance: 1,
+    };
     const audioEngine = {
       getClock: () => ({
         quantizeFrameToBuffer: (frame: number) => frame,
@@ -30,6 +41,23 @@ describe('SessionAudioBridge startup recovery', () => {
       connect: jest.fn().mockResolvedValue(undefined),
       disconnect: jest.fn().mockResolvedValue(undefined),
       removeNodes: jest.fn().mockResolvedValue(undefined),
+      describeGraph: jest.fn(async () => graph),
+      applyGraph: jest.fn(async (request: NativeGraphApplyRequest) => {
+        graph = {
+          ...graph,
+          generation: graph.generation + 1,
+          graphHash: JSON.stringify({
+            nodes: request.nodes,
+            connections: request.connections,
+          }),
+          nodeIds: request.nodes.map((node) => node.id).sort(),
+        };
+        return {
+          status: 'committed' as const,
+          transactionId: request.transactionId,
+          graph,
+        };
+      }),
       publishAutomation,
     } as unknown as AudioEngine;
     const logger = {

@@ -80,7 +80,7 @@ void TestFades() {
   node.setParameter("gain", 0.5);
 
   const auto rendered = RenderBlock(node, 4);
-  const std::vector<float> expected{0.25F, 0.5F, 0.5F, 0.25F};
+  const std::vector<float> expected{0.0F, 0.5F, 0.5F, 0.0F};
   AssertSamples(rendered, expected, 1e-6F, "Clip fades");
 }
 

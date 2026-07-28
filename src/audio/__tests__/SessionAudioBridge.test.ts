@@ -20,6 +20,11 @@ import type {
   PluginInstanceHandle,
 } from '../plugins/types';
 import type { PluginHost } from '../plugins/PluginHost';
+import type {
+  NativeGraphApplyRequest,
+  NativeGraphApplyResult,
+  NativeGraphDescription,
+} from '../NativeAudioEngine';
 
 type LoaderFactoryOptions = Partial<AudioFileData> & {
   throwError?: Error;
@@ -81,12 +86,16 @@ const createMockEngine = (
   locateTransport: jest.Mock;
   getTransportState: jest.Mock;
   getRenderDiagnostics: jest.Mock;
+  describeGraph: jest.Mock;
+  applyGraph: jest.Mock;
 } => {
-  const configureNodes = jest.fn(async () => undefined);
-  const connect = jest.fn(async () => undefined);
-  const disconnect = jest.fn(async () => undefined);
+  const configureNodes = jest.fn(
+    async (_nodes: NativeGraphApplyRequest['nodes']) => undefined,
+  );
+  const connect = jest.fn(async (_source: string, _destination: string) => undefined);
+  const disconnect = jest.fn(async (_source: string, _destination: string) => undefined);
   const publishAutomation = jest.fn(async () => undefined);
-  const removeNodes = jest.fn(async () => undefined);
+  const removeNodes = jest.fn(async (_nodeIds: string[]) => undefined);
   const uploadClipBuffer = jest.fn(async () => undefined);
   const releaseClipBuffer = jest.fn(async () => undefined);
   const startTransport = jest.fn(async () => undefined);
@@ -98,6 +107,75 @@ const createMockEngine = (
     lastRenderDurationMicros: 0,
     clipBufferBytes: 0,
   }));
+  let graph: NativeGraphDescription = {
+    generation: 0,
+    graphHash: 'test-empty',
+    nodeIds: [],
+    routeEpoch: 1,
+    engineInstance: 1,
+  };
+  let activeNodes = new Map<string, NativeGraphApplyRequest['nodes'][number]>();
+  let activeConnections = new Set<string>();
+  const describeGraph = jest.fn(async () => ({
+    ...graph,
+    nodeIds: [...graph.nodeIds],
+  }));
+  const applyGraph = jest.fn(
+    async (request: NativeGraphApplyRequest): Promise<NativeGraphApplyResult> => {
+      const nextNodes = new Map(request.nodes.map((node) => [node.id, node]));
+      const nextConnections = new Set(
+        request.connections.map(({ source, destination }) => `${source}->${destination}`),
+      );
+      const changedNodes = request.nodes.filter((node) => {
+        const current = activeNodes.get(node.id);
+        return JSON.stringify(current) !== JSON.stringify(node);
+      });
+      const removedNodeIds = [...activeNodes.keys()].filter(
+        (nodeId) => !nextNodes.has(nodeId),
+      );
+      const removedConnections = [...activeConnections].filter(
+        (connection) => !nextConnections.has(connection),
+      );
+      const addedConnections = [...nextConnections].filter(
+        (connection) => !activeConnections.has(connection),
+      );
+
+      for (const connection of removedConnections) {
+        const separator = connection.indexOf('->');
+        await disconnect(connection.slice(0, separator), connection.slice(separator + 2));
+      }
+      if (changedNodes.length > 0) {
+        await configureNodes(changedNodes);
+      }
+      for (const connection of addedConnections) {
+        const separator = connection.indexOf('->');
+        await connect(connection.slice(0, separator), connection.slice(separator + 2));
+      }
+      if (removedNodeIds.length > 0) {
+        await removeNodes(removedNodeIds);
+      }
+
+      const graphHash = JSON.stringify({
+        nodes: request.nodes,
+        connections: request.connections,
+      });
+      if (graphHash !== graph.graphHash) {
+        graph = {
+          ...graph,
+          generation: graph.generation + 1,
+          graphHash,
+          nodeIds: [...nextNodes.keys()].sort(),
+        };
+      }
+      activeNodes = nextNodes;
+      activeConnections = nextConnections;
+      return {
+        status: 'committed',
+        transactionId: request.transactionId,
+        graph: { ...graph, nodeIds: [...graph.nodeIds] },
+      };
+    },
+  );
   const engine: Partial<AudioEngine> = {
     getClock: () => clock,
     configureNodes,
@@ -112,6 +190,8 @@ const createMockEngine = (
     locateTransport,
     getTransportState,
     getRenderDiagnostics,
+    describeGraph,
+    applyGraph,
   };
   return {
     engine: engine as AudioEngine,
@@ -127,6 +207,8 @@ const createMockEngine = (
     locateTransport,
     getTransportState,
     getRenderDiagnostics,
+    describeGraph,
+    applyGraph,
   };
 };
 

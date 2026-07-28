@@ -1,4 +1,8 @@
 import { OUTPUT_BUS, type AudioEngine, type NodeConfiguration } from '../AudioEngine';
+import type {
+  NativeGraphApplyResult,
+  NativeGraphDescription,
+} from '../NativeAudioEngine';
 
 type Logger = Pick<typeof console, 'debug' | 'info' | 'warn' | 'error'>;
 
@@ -16,6 +20,18 @@ export type GraphReconciliationResult = {
   replacedNodeIds: ReadonlySet<string>;
 };
 
+export class GraphTransactionError extends Error {
+  constructor(public readonly result: NativeGraphApplyResult) {
+    const failure = result.failure;
+    super(
+      failure
+        ? `Graph transaction ${result.status} at ${failure.stage}: ${failure.code} (${failure.detail})`
+        : `Graph transaction ${result.status}`,
+    );
+    this.name = 'GraphTransactionError';
+  }
+}
+
 const connectionKey = (source: NodeId, destination: NodeId): ConnectionKey =>
   `${source}->${destination}`;
 
@@ -24,11 +40,11 @@ export class GraphReconciler {
 
   private readonly connectionState = new Set<ConnectionKey>();
 
-  private readonly pendingRemovedNodeIds = new Set<NodeId>();
-
-  private readonly pendingReplacedNodeIds = new Set<NodeId>();
-
   private structuralMutationTail: Promise<void> = Promise.resolve();
+
+  private transactionSequence = 0;
+
+  private lastCommittedGraph: NativeGraphDescription | null = null;
 
   constructor(
     private readonly audioEngine: AudioEngine,
@@ -67,56 +83,31 @@ export class GraphReconciler {
     nodes: Map<NodeId, NodeConfiguration>,
     connections: Set<ConnectionKey>,
   ): Promise<GraphReconciliationResult> {
-    if (!this.hasChanges(nodes, connections)) {
-      this.pendingRemovedNodeIds.clear();
-      this.pendingReplacedNodeIds.clear();
-      return {
-        removedNodeIds: new Set<string>(),
-        replacedNodeIds: new Set<string>(),
-      };
-    }
+    return this.runSerialized(async () => {
+      const result = this.getReconciliationResult(nodes);
+      if (
+        !this.hasChanges(nodes, connections) &&
+        (await this.nativeGraphMatchesLastCommit(nodes))
+      ) {
+        return result;
+      }
 
-    return this.runStructuralMutation(async () => {
-      await this.reconcileNodes(nodes);
-      await this.reconcileConnections(connections, nodes);
-      const result: GraphReconciliationResult = {
-        removedNodeIds: new Set(this.pendingRemovedNodeIds),
-        replacedNodeIds: new Set(this.pendingReplacedNodeIds),
-      };
-      this.pendingRemovedNodeIds.clear();
-      this.pendingReplacedNodeIds.clear();
-      return result;
+      return this.withTransportStopped(async () => {
+        const committed = await this.commitDesiredGraph(nodes, connections);
+        this.replaceTrackedState(nodes, connections);
+        this.lastCommittedGraph = committed;
+        return result;
+      });
     });
   }
 
   async forceConfigureNode(node: NodeConfiguration): Promise<void> {
-    await this.runStructuralMutation(async () => {
-      const connectionsToRestore = [...this.connectionState].filter((key) => {
-        const [source, destination] = this.parseConnectionKey(key);
-        return source === node.id || destination === node.id;
-      });
-      if (this.nodeState.has(node.id)) {
-        await this.removeTrackedNodes([node.id]);
-      }
-      await this.audioEngine.configureNodes([node]);
-      this.nodeState.set(node.id, node);
-      for (const key of connectionsToRestore) {
-        const [source, destination] = this.parseConnectionKey(key);
-        const otherNodeExists =
-          (source === node.id || this.nodeState.has(source)) &&
-          (destination === OUTPUT_BUS ||
-            destination === node.id ||
-            this.nodeState.has(destination));
-        if (!otherNodeExists) {
-          continue;
-        }
-        await this.audioEngine.connect(source, destination);
-        this.connectionState.add(key);
-      }
-    });
+    const desiredNodes = new Map(this.nodeState);
+    desiredNodes.set(node.id, node);
+    await this.apply(desiredNodes, new Set(this.connectionState));
   }
 
-  private async runStructuralMutation<T>(operation: () => Promise<T>): Promise<T> {
+  private async runSerialized<T>(operation: () => Promise<T>): Promise<T> {
     let releaseTail!: () => void;
     const previous = this.structuralMutationTail;
     this.structuralMutationTail = new Promise<void>((resolve) => {
@@ -124,6 +115,14 @@ export class GraphReconciler {
     });
     await previous;
 
+    try {
+      return await operation();
+    } finally {
+      releaseTail();
+    }
+  }
+
+  private async withTransportStopped<T>(operation: () => Promise<T>): Promise<T> {
     let resumeFrame: number | null = null;
     let mutationSucceeded = false;
     try {
@@ -138,118 +137,170 @@ export class GraphReconciler {
       mutationSucceeded = true;
       return result;
     } finally {
-      try {
-        if (resumeFrame !== null) {
+      if (resumeFrame !== null) {
+        try {
           await this.audioEngine.locateTransport(resumeFrame);
           if (mutationSucceeded) {
             await this.audioEngine.startTransport();
           } else {
             this.logger.warn(
-              'Graph mutation failed; transport remains stopped at the captured frame',
+              'Graph transaction failed; transport remains stopped at the captured frame',
               { frame: resumeFrame },
             );
           }
+        } catch (recoveryError) {
+          this.logger.error('Failed to restore transport after graph transaction', {
+            frame: resumeFrame,
+            mutationSucceeded,
+            recoveryError,
+          });
         }
-      } finally {
-        releaseTail();
       }
     }
   }
 
-  private async reconcileNodes(desired: Map<NodeId, NodeConfiguration>): Promise<void> {
-    const toConfigure: NodeConfiguration[] = [];
-    const replacements: NodeId[] = [];
-    desired.forEach((node) => {
-      const existing = this.nodeState.get(node.id);
-      if (!existing || !this.nodeConfigurationEquals(existing, node)) {
-        toConfigure.push(node);
-        if (existing) {
-          replacements.push(node.id);
-        }
+  private async commitDesiredGraph(
+    nodes: Map<NodeId, NodeConfiguration>,
+    connections: Set<ConnectionKey>,
+  ): Promise<NativeGraphDescription> {
+    const nativeNodes = [...nodes.values()]
+      .sort((lhs, rhs) => lhs.id.localeCompare(rhs.id))
+      .map((node) => ({
+        id: node.id,
+        type: node.type,
+        options: { ...(node.options ?? {}) },
+      }));
+    const nativeConnections = [...connections].sort().map((key) => {
+      const [source, destination] = this.parseConnectionKey(key);
+      if (!nodes.has(source)) {
+        throw new Error(`Connection source does not exist: ${source}`);
       }
+      if (destination !== OUTPUT_BUS && !nodes.has(destination)) {
+        throw new Error(`Connection destination does not exist: ${destination}`);
+      }
+      return { source, destination };
     });
 
-    const toRemove: NodeId[] = [];
-    this.nodeState.forEach((_node, nodeId) => {
-      if (!desired.has(nodeId)) {
-        toRemove.push(nodeId);
+    let expected = await this.audioEngine.describeGraph();
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const transactionId = this.nextTransactionId(attempt);
+      this.logger.debug('Applying complete native graph transaction', {
+        transactionId,
+        attempt,
+        nodeCount: nativeNodes.length,
+        connectionCount: nativeConnections.length,
+      });
+      const result = await this.audioEngine.applyGraph({
+        transactionId,
+        expectedGeneration: expected.generation,
+        expectedRouteEpoch: expected.routeEpoch,
+        expectedEngineInstance: expected.engineInstance,
+        nodes: nativeNodes,
+        connections: nativeConnections,
+      });
+
+      if (result.status === 'committed') {
+        this.validateCommittedGraph(result.graph, expected, nodes);
+        return result.graph;
       }
-    });
-
-    toRemove.forEach((nodeId) => this.pendingRemovedNodeIds.add(nodeId));
-    replacements.forEach((nodeId) => this.pendingReplacedNodeIds.add(nodeId));
-
-    const nodesToRemove = [...toRemove, ...replacements];
-    if (nodesToRemove.length > 0) {
-      this.logger.debug('Removing stale or changed nodes', { nodeIds: nodesToRemove });
-      await this.removeTrackedNodes(nodesToRemove);
+      if (result.status === 'stale' && attempt === 0) {
+        this.logger.info('Retrying graph transaction after stale native identity', {
+          transactionId,
+          failure: result.failure,
+        });
+        expected = await this.audioEngine.describeGraph();
+        continue;
+      }
+      throw new GraphTransactionError(result);
     }
 
-    if (toConfigure.length > 0) {
-      this.logger.debug('Configuring nodes', { count: toConfigure.length });
-      await this.audioEngine.configureNodes(toConfigure);
-      toConfigure.forEach((node) => this.nodeState.set(node.id, node));
+    throw new Error('Graph transaction retry loop completed without a result');
+  }
+
+  private validateCommittedGraph(
+    committed: NativeGraphDescription,
+    expected: NativeGraphDescription,
+    nodes: ReadonlyMap<NodeId, NodeConfiguration>,
+  ): void {
+    const expectedNodeIds = [...nodes.keys()].sort();
+    if (
+      committed.nodeIds.length !== expectedNodeIds.length ||
+      committed.nodeIds.some((nodeId, index) => nodeId !== expectedNodeIds[index])
+    ) {
+      throw new Error('Committed native graph node identity does not match request');
+    }
+    if (
+      committed.engineInstance !== expected.engineInstance ||
+      committed.routeEpoch !== expected.routeEpoch
+    ) {
+      throw new Error('Committed native graph lifecycle identity changed unexpectedly');
+    }
+    if (
+      committed.generation !== expected.generation &&
+      committed.generation !== expected.generation + 1
+    ) {
+      throw new Error('Committed native graph generation is not monotonic');
     }
   }
 
-  private async removeTrackedNodes(nodeIds: NodeId[]): Promise<void> {
-    for (const nodeId of nodeIds) {
-      await this.audioEngine.removeNodes([nodeId]);
-      this.nodeState.delete(nodeId);
-      [...this.connectionState].forEach((key) => {
-        const [source, destination] = this.parseConnectionKey(key);
-        if (source === nodeId || destination === nodeId) {
-          this.connectionState.delete(key);
-        }
+  private async nativeGraphMatchesLastCommit(
+    nodes: ReadonlyMap<NodeId, NodeConfiguration>,
+  ): Promise<boolean> {
+    if (this.lastCommittedGraph === null) {
+      return false;
+    }
+    const current = await this.audioEngine.describeGraph();
+    const expectedNodeIds = [...nodes.keys()].sort();
+    const matches =
+      current.engineInstance === this.lastCommittedGraph.engineInstance &&
+      current.generation === this.lastCommittedGraph.generation &&
+      current.graphHash === this.lastCommittedGraph.graphHash &&
+      current.nodeIds.length === expectedNodeIds.length &&
+      current.nodeIds.every((nodeId, index) => nodeId === expectedNodeIds[index]);
+    if (matches) {
+      this.lastCommittedGraph = current;
+    }
+    return matches;
+  }
+
+  private getReconciliationResult(
+    desired: ReadonlyMap<NodeId, NodeConfiguration>,
+  ): GraphReconciliationResult {
+    const removedNodeIds = new Set<string>();
+    const replacedNodeIds = new Set<string>();
+    for (const [nodeId, existing] of this.nodeState) {
+      const replacement = desired.get(nodeId);
+      if (replacement === undefined) {
+        removedNodeIds.add(nodeId);
+      } else if (!this.nodeConfigurationEquals(existing, replacement)) {
+        replacedNodeIds.add(nodeId);
+      }
+    }
+    return { removedNodeIds, replacedNodeIds };
+  }
+
+  private replaceTrackedState(
+    nodes: ReadonlyMap<NodeId, NodeConfiguration>,
+    connections: ReadonlySet<ConnectionKey>,
+  ): void {
+    this.nodeState.clear();
+    for (const [nodeId, node] of nodes) {
+      this.nodeState.set(nodeId, {
+        ...node,
+        ...(node.options === undefined ? {} : { options: { ...node.options } }),
       });
     }
+    this.connectionState.clear();
+    for (const connection of connections) {
+      this.connectionState.add(connection);
+    }
   }
 
-  private async reconcileConnections(
-    desired: Set<ConnectionKey>,
-    nodes: Map<NodeId, NodeConfiguration>,
-  ): Promise<void> {
-    const toDisconnect: ConnectionKey[] = [];
-    this.connectionState.forEach((key) => {
-      if (!desired.has(key)) {
-        toDisconnect.push(key);
-      }
-    });
-
-    if (toDisconnect.length > 0) {
-      this.logger.debug('Disconnecting connections', { count: toDisconnect.length });
-      for (const key of toDisconnect) {
-        const [source, destination] = this.parseConnectionKey(key);
-        await this.audioEngine.disconnect(source, destination);
-        this.connectionState.delete(key);
-      }
-    }
-
-    const toConnect: ConnectionKey[] = [];
-    desired.forEach((key) => {
-      if (this.connectionState.has(key)) {
-        return;
-      }
-      const [source, destination] = this.parseConnectionKey(key);
-      const hasSource = nodes.has(source) || this.nodeState.has(source);
-      const hasDestination =
-        destination === OUTPUT_BUS ||
-        nodes.has(destination) ||
-        this.nodeState.has(destination);
-      if (!hasSource || !hasDestination) {
-        return;
-      }
-      toConnect.push(key);
-    });
-
-    if (toConnect.length > 0) {
-      this.logger.debug('Connecting connections', { count: toConnect.length });
-      for (const key of toConnect) {
-        const [source, destination] = this.parseConnectionKey(key);
-        await this.audioEngine.connect(source, destination);
-        this.connectionState.add(key);
-      }
-    }
+  private nextTransactionId(attempt: number): string {
+    this.transactionSequence += 1;
+    return `graph-${Date.now().toString(36)}-${this.transactionSequence.toString(
+      36,
+    )}-${attempt}`;
   }
 
   private parseConnectionKey(key: ConnectionKey): [NodeId, NodeId] {
