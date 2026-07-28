@@ -10,7 +10,11 @@ import {
   type DimensionValue,
 } from 'react-native';
 
-import type { Juno106ParameterName, Juno106ParameterMap } from '../../session';
+import {
+  isJuno106FeatureEnabled,
+  type Juno106ParameterName,
+  type Juno106ParameterMap,
+} from '../../session';
 import {
   listBuiltInJuno106Presets,
   type Juno106PresetRecord,
@@ -385,6 +389,7 @@ export const JunoPerformancePanel: React.FC<JunoPerformancePanelProps> = ({
   const [actionError, setActionError] = useState<JunoActionError>();
   const activeNotesRef = useRef(new Set<number>());
   const [activeNotes, setActiveNotes] = useState<Set<number>>(() => new Set());
+  const junoFeatureEnabled = isJuno106FeatureEnabled();
 
   const junoTrack = useMemo(
     () =>
@@ -424,7 +429,7 @@ export const JunoPerformancePanel: React.FC<JunoPerformancePanelProps> = ({
   }, [instrumentControls, nodeId]);
 
   const handleAddJuno = useCallback(async () => {
-    if (addInFlightRef.current) {
+    if (!junoFeatureEnabled || addInFlightRef.current) {
       return;
     }
     addInFlightRef.current = true;
@@ -441,7 +446,7 @@ export const JunoPerformancePanel: React.FC<JunoPerformancePanelProps> = ({
       addInFlightRef.current = false;
       setAdding(false);
     }
-  }, [sessionActions]);
+  }, [junoFeatureEnabled, sessionActions]);
 
   const updateParameter = useCallback(
     async (
@@ -649,6 +654,23 @@ export const JunoPerformancePanel: React.FC<JunoPerformancePanelProps> = ({
 
   if (status !== 'ready') {
     return null;
+  }
+
+  if (!junoFeatureEnabled) {
+    return (
+      <StudioPanel
+        padding={14}
+        style={[styles.panel, styles.emptyState]}
+        testID="juno-performance-panel"
+      >
+        <StudioText variant="sectionTitle" tone="mint" weight="bold">
+          Juno-106
+        </StudioText>
+        <StudioText variant="body" tone="secondary">
+          Juno-106 is disabled for this build.
+        </StudioText>
+      </StudioPanel>
+    );
   }
 
   if (!junoTrack || !instrument) {

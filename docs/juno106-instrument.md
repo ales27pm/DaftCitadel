@@ -131,7 +131,11 @@ Native synthesis requires the local `AudioEngineModule`, so it is unavailable
 in Expo Go and on web. If native initialization or the sample loader fails,
 `SessionAppProvider` falls back to the passive bridge. Set
 `EXPO_PUBLIC_DAFT_CITADEL_USE_NATIVE_BRIDGE=false` to force that fallback in a
-custom client. The Performance screen then shows **NATIVE UNAVAILABLE**, keeps
+custom client. Set `EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106=false` to disable
+Juno-106 creation and patch mutation for a staged rollout build while leaving
+ordinary audio/session workflows available. The Performance screen then shows
+the Juno panel as disabled instead of creating new instrument tracks. When only
+the native bridge is unavailable, the screen shows **NATIVE UNAVAILABLE**, keeps
 patch and preset persistence functional, and disables the keyboard; passive
 transport behavior is not audio-render evidence.
 
@@ -175,6 +179,9 @@ ctest --test-dir audio-engine/build-release --output-on-failure
 `npm run verify` is the broader local gate (Expo Doctor, formatting, lint,
 types, Jest, managed-doc checks, production dependency audit, shell syntax, and
 the native core). `npm run verify:sanitize` runs the same gate with ASan/UBSan.
+GitHub Actions runs the corresponding TypeScript, Jest, and CMake checks through
+`.github/workflows/issue-70-validation.yml` for changes under the Juno/audio
+surface.
 
 Compile the checked-in platform hosts only on machines with the documented SDKs:
 

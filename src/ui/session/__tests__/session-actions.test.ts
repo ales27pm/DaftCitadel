@@ -51,6 +51,14 @@ const createManager = async (tracks: Track[] = []): Promise<SessionManager> => {
 };
 
 describe('createSessionActions', () => {
+  beforeEach(() => {
+    delete process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106;
+  });
+
+  afterEach(() => {
+    delete process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106;
+  });
+
   it('adds a routed track using the first unused deterministic track id', async () => {
     const manager = await createManager([
       createTrack('track-1'),
@@ -135,6 +143,17 @@ describe('createSessionActions', () => {
       preset: { id: 'bright-lead', name: 'Bright Lead', version: 1 },
     });
     expect(manager.getSession()?.tracks.at(-1)).toEqual(addedTrack);
+  });
+
+  it('rejects new Juno session work when the rollout flag is disabled', async () => {
+    process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106 = 'false';
+    const manager = await createManager();
+    const actions = createSessionActions(manager);
+
+    await expect(actions.addJunoTrack()).rejects.toThrow(
+      'Juno-106 instrument is disabled by EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106',
+    );
+    expect(manager.getSession()?.tracks).toHaveLength(0);
   });
 
   it('adds a playable four-bar MIDI starter clip to a Juno track', async () => {

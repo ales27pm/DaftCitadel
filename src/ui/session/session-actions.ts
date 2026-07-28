@@ -3,6 +3,7 @@ import {
   createDefaultTrackRoutingGraph,
   SessionManager,
   SessionStorageError,
+  assertJuno106FeatureEnabled,
   validateJuno106Preset,
   type CreateJunoTrackOptions,
   type Clip,
@@ -409,6 +410,7 @@ export const createSessionActions = (manager: SessionManager): SessionActions =>
     }),
   addJunoTrack: (options = {}) =>
     manager.updateSession((session) => {
+      assertJuno106FeatureEnabled();
       const identity = resolveNextTrackIdentity(session.tracks);
       const track = createDefaultJunoTrack(identity.id, options);
 
@@ -420,6 +422,7 @@ export const createSessionActions = (manager: SessionManager): SessionActions =>
   addJunoMidiClip: (trackId) =>
     manager.updateSession((session) =>
       updateTrack(session, trackId, (track) => {
+        assertJuno106FeatureEnabled();
         if (!hasJunoInstrument(track)) {
           throw new SessionStorageError(`Track ${trackId} has no Juno instrument`);
         }
@@ -440,6 +443,7 @@ export const createSessionActions = (manager: SessionManager): SessionActions =>
 
     return manager.updateSession((session) =>
       updateTrack(session, trackId, (track) => {
+        assertJuno106FeatureEnabled();
         if (!hasJunoInstrument(track)) {
           throw new SessionStorageError(`Track ${trackId} has no Juno instrument`);
         }
@@ -460,6 +464,7 @@ export const createSessionActions = (manager: SessionManager): SessionActions =>
     }
 
     return manager.updateSession((session) => {
+      assertJuno106FeatureEnabled();
       const startMs = resolveGlobalAppendStart(session);
       const beats = Math.max(
         1,
@@ -508,6 +513,7 @@ export const createSessionActions = (manager: SessionManager): SessionActions =>
   addJunoScenePart: async (options) => {
     validateSceneTiming(options.startMs, options.durationMs);
     return manager.updateSession((session) => {
+      assertJuno106FeatureEnabled();
       const identity = resolveNextTrackIdentity(session.tracks);
       const track = createDefaultJunoTrack(identity.id, { name: options.trackName });
       const clip = createAlignedEmptyMidiClip(
@@ -526,6 +532,7 @@ export const createSessionActions = (manager: SessionManager): SessionActions =>
   duplicateJunoMidiScene: async (options) => {
     validateSceneTiming(options.startMs, options.durationMs);
     return manager.updateSession((session) => {
+      assertJuno106FeatureEnabled();
       const targetStartMs = resolveGlobalAppendStart(session);
       let duplicatedCount = 0;
       const tracks = session.tracks.map((track) => {
@@ -607,6 +614,7 @@ export const createSessionActions = (manager: SessionManager): SessionActions =>
     }
     return manager.updateSession((session) =>
       updateTrack(session, trackId, (track) => {
+        assertJuno106FeatureEnabled();
         const graph = track.routing.graph;
         if (!graph) {
           throw new SessionStorageError(`Track ${trackId} has no Juno instrument`);
@@ -643,6 +651,7 @@ export const createSessionActions = (manager: SessionManager): SessionActions =>
     validateJuno106Preset(preset);
     return manager.updateSession((session) =>
       updateTrack(session, trackId, (track) => {
+        assertJuno106FeatureEnabled();
         const graph = track.routing.graph;
         if (!graph) {
           throw new SessionStorageError(`Track ${trackId} has no Juno instrument`);

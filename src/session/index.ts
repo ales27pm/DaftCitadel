@@ -2,6 +2,7 @@ export * from './models';
 export * from './serialization';
 export * from './history';
 export * from './cloud';
+export * from './featureFlags';
 export * from './sessionManager';
 export * from './storage';
 export * from './storage/sqliteAdapter';
