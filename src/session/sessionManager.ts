@@ -128,25 +128,26 @@ export class SessionManager {
       await this.initialize();
       const local = await this.storage.read(sessionId);
       let resolved = local;
+      let expectedRevision: number | null = null;
       const remote = await this.cloud.pull(sessionId);
       if (remote.session && local) {
         const base = local.revision <= remote.session.revision ? local : remote.session;
         resolved = await this.resolveConflict(base, local, remote.session);
         if (resolved.revision !== local.revision) {
-          await this.storage.write(resolved, { expectedRevision: local.revision });
+          expectedRevision = local.revision;
         }
       } else if (remote.session && !local) {
         resolved = remote.session;
-        await this.storage.write(resolved, { expectedRevision: 0 });
+        expectedRevision = 0;
       }
       if (!resolved) {
         throw new SessionStorageError(`Session ${sessionId} not found`);
       }
       const normalized = normalizeSession(resolved);
       validateSession(normalized);
-      this.setCurrentSession(normalized, false);
+      const previousSession = this.currentSession ? deepClone(this.currentSession) : null;
+      await this.commitSessionTransition(normalized, previousSession, expectedRevision);
       this.history.clear();
-      await this.audioEngine.applySessionUpdate(normalized);
       this.setCurrentSession(normalized);
       return deepClone(normalized);
     } finally {
@@ -160,10 +161,9 @@ export class SessionManager {
       const normalized = normalizeSession(session);
       const finalSession = updateSessionTimestamp(normalized);
       validateSession(finalSession);
-      await this.storage.write(finalSession, { expectedRevision: 0 });
-      this.setCurrentSession(finalSession, false);
+      const previousSession = this.currentSession ? deepClone(this.currentSession) : null;
+      await this.commitSessionTransition(finalSession, previousSession, 0);
       this.history.clear();
-      await this.audioEngine.applySessionUpdate(finalSession);
       this.setCurrentSession(finalSession);
       await this.cloud.push(finalSession);
       return deepClone(finalSession);
@@ -191,17 +191,8 @@ export class SessionManager {
       });
       const finalSession = updateSessionTimestamp(normalized);
       validateSession(finalSession);
-      const tx = await this.storage.beginTransaction();
-      try {
-        await tx.write(finalSession, { expectedRevision: previous.revision });
-        await tx.commit();
-      } catch (error) {
-        await tx.rollback().catch(() => undefined);
-        throw error;
-      }
+      await this.commitSessionTransition(finalSession, previous, previous.revision);
       this.history.record(previous);
-      this.setCurrentSession(finalSession, false);
-      await this.audioEngine.applySessionUpdate(finalSession);
       this.setCurrentSession(finalSession);
       await this.pushToCloud(finalSession);
       return deepClone(finalSession);
@@ -216,26 +207,23 @@ export class SessionManager {
       if (!this.currentSession) {
         return null;
       }
-      const previous = this.history.undo(this.currentSession);
+      const current = this.currentSession;
+      const previous = this.history.undo(current);
       if (!previous) {
         return null;
       }
       const normalized = normalizeSession({
         ...previous,
-        revision: this.currentSession.revision + 1,
+        revision: current.revision + 1,
       });
       const finalSession = updateSessionTimestamp(normalized);
       validateSession(finalSession);
-      const tx = await this.storage.beginTransaction();
       try {
-        await tx.write(finalSession, { expectedRevision: this.currentSession.revision });
-        await tx.commit();
+        await this.commitSessionTransition(finalSession, current, current.revision);
       } catch (error) {
-        await tx.rollback().catch(() => undefined);
+        this.history.redo(previous);
         throw error;
       }
-      this.setCurrentSession(finalSession, false);
-      await this.audioEngine.applySessionUpdate(finalSession);
       this.setCurrentSession(finalSession);
       await this.pushToCloud(finalSession);
       return deepClone(finalSession);
@@ -250,26 +238,23 @@ export class SessionManager {
       if (!this.currentSession) {
         return null;
       }
-      const next = this.history.redo(this.currentSession);
+      const current = this.currentSession;
+      const next = this.history.redo(current);
       if (!next) {
         return null;
       }
       const normalized = normalizeSession({
         ...next,
-        revision: this.currentSession.revision + 1,
+        revision: current.revision + 1,
       });
       const finalSession = updateSessionTimestamp(normalized);
       validateSession(finalSession);
-      const tx = await this.storage.beginTransaction();
       try {
-        await tx.write(finalSession, { expectedRevision: this.currentSession.revision });
-        await tx.commit();
+        await this.commitSessionTransition(finalSession, current, current.revision);
       } catch (error) {
-        await tx.rollback().catch(() => undefined);
+        this.history.undo(next);
         throw error;
       }
-      this.setCurrentSession(finalSession, false);
-      await this.audioEngine.applySessionUpdate(finalSession);
       this.setCurrentSession(finalSession);
       await this.pushToCloud(finalSession);
       return deepClone(finalSession);
@@ -306,25 +291,59 @@ export class SessionManager {
       const normalized = normalizeSession(merged);
       const finalSession = updateSessionTimestamp(normalized);
       validateSession(finalSession);
-      const tx = await this.storage.beginTransaction();
+      const previousSession = this.currentSession;
+      if (!previousSession) {
+        return null;
+      }
       try {
-        await tx.write(finalSession, { expectedRevision: this.currentSession.revision });
-        await tx.commit();
+        await this.commitSessionTransition(
+          finalSession,
+          previousSession,
+          previousSession.revision,
+        );
       } catch (error) {
-        await tx.rollback().catch(() => undefined);
         if (error instanceof RevisionConflictError) {
           return null;
         }
         throw error;
       }
-      this.history.record(this.currentSession);
-      this.setCurrentSession(finalSession, false);
-      await this.audioEngine.applySessionUpdate(finalSession);
+      this.history.record(previousSession);
       this.setCurrentSession(finalSession);
       await this.pushToCloud(finalSession);
       return deepClone(finalSession);
     } finally {
       release();
+    }
+  }
+
+  private async commitSessionTransition(
+    finalSession: Session,
+    previousSession: Session | null,
+    expectedRevision: number | null,
+  ): Promise<void> {
+    const tx = expectedRevision === null ? null : await this.storage.beginTransaction();
+    let audioMutationAttempted = false;
+    try {
+      if (tx && expectedRevision !== null) {
+        await tx.write(finalSession, { expectedRevision });
+      }
+      audioMutationAttempted = true;
+      await this.audioEngine.applySessionUpdate(finalSession);
+      await tx?.commit();
+    } catch (error) {
+      await tx?.rollback().catch(() => undefined);
+      if (audioMutationAttempted) {
+        const restoreAudio = previousSession
+          ? this.audioEngine.applySessionUpdate(previousSession)
+          : (this.audioEngine.resetSession?.() ?? Promise.resolve());
+        await restoreAudio.catch((rollbackError) => {
+          console.error('Failed to restore the previous audio graph', {
+            sessionId: previousSession?.id,
+            rollbackError,
+          });
+        });
+      }
+      throw error;
     }
   }
 

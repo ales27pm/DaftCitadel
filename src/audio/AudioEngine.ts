@@ -1,7 +1,16 @@
 import { Buffer } from 'buffer';
 
 import { NativeAudioEngine, isNativeModuleAvailable } from './NativeAudioEngine';
+import type {
+  NativeGraphApplyRequest,
+  NativeGraphApplyResult,
+  NativeGraphDescription,
+} from './NativeAudioEngine';
 import { AutomationLane, publishAutomationLane, ClockSyncService } from './Automation';
+import {
+  parseNativeGraphApplyResult,
+  parseNativeGraphDescription,
+} from './GraphTransactionProtocol';
 import type {
   AudioInstrumentMidiEvent,
   InstrumentParameterChange,
@@ -184,6 +193,18 @@ export class AudioEngine {
     await NativeAudioEngine.initialize(this.sampleRate, this.framesPerBuffer);
   }
 
+  public async describeGraph(): Promise<NativeGraphDescription> {
+    const description = await NativeAudioEngine.describeGraph();
+    return parseNativeGraphDescription(description);
+  }
+
+  public async applyGraph(
+    request: NativeGraphApplyRequest,
+  ): Promise<NativeGraphApplyResult> {
+    const result = await NativeAudioEngine.applyGraph(request);
+    return parseNativeGraphApplyResult(result, request.transactionId);
+  }
+
   public async dispose(): Promise<void> {
     await NativeAudioEngine.shutdown();
   }
@@ -193,11 +214,25 @@ export class AudioEngine {
       return;
     }
 
-    await Promise.all(
-      nodes.map((node) =>
-        NativeAudioEngine.addNode(node.id, node.type, node.options ?? {}),
-      ),
-    );
+    const configuredNodeIds: string[] = [];
+    try {
+      for (const node of nodes) {
+        await NativeAudioEngine.addNode(node.id, node.type, node.options ?? {});
+        configuredNodeIds.push(node.id);
+      }
+    } catch (error) {
+      for (const nodeId of configuredNodeIds.reverse()) {
+        try {
+          await NativeAudioEngine.removeNode(nodeId);
+        } catch (rollbackError) {
+          console.error('Failed to roll back partially configured audio node', {
+            nodeId,
+            rollbackError,
+          });
+        }
+      }
+      throw error;
+    }
   }
 
   public async connect(source: string, destination: string): Promise<void> {

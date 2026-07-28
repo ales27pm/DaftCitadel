@@ -12,7 +12,9 @@ add_library(daft_audio_engine
     src/AudioBuffer.cpp
     src/DSPNode.cpp
     src/Scheduler.cpp
-    src/SceneGraph.cpp
+  src/SceneGraph.cpp
+  src/RenderPlan.cpp
+  src/GraphTransactionHost.cpp
     src/SceneGraphRealtimeBatch.cpp
     src/RealtimeControlPlane.cpp
     src/Automation.cpp
@@ -51,6 +53,9 @@ if(DAFT_AUDIO_ENGINE_ENABLE_SANITIZERS)
 endif()
 
 if(DAFT_AUDIO_ENGINE_BUILD_TESTS)
+    target_compile_definitions(daft_audio_engine
+        PUBLIC DAFT_AUDIO_ENABLE_GRAPH_FAULT_INJECTION=1
+    )
     enable_testing()
     find_package(Threads REQUIRED)
     add_executable(daft_audio_engine_tests
@@ -58,7 +63,9 @@ if(DAFT_AUDIO_ENGINE_BUILD_TESTS)
         tests/SchedulerTests.cpp
         tests/ClipPlayerNodeTests.cpp
         tests/PluginNodeTests.cpp
-        tests/SceneGraphTests.cpp
+    tests/SceneGraphTests.cpp
+    tests/RenderPlanTests.cpp
+    tests/GraphTransactionHostTests.cpp
         tests/JunoCoreTests.cpp
         tests/InstrumentNodeTests.cpp
         tests/RealtimeControlQueueTests.cpp

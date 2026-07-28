@@ -6,6 +6,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 /** Owns iOS audio-device I/O while the C++ AudioEngineBridge remains device-agnostic. */
 @interface DaftAudioDeviceDriver : NSObject
+@property(nonatomic, copy, nullable)
+    void (^audioConfigurationChangeHandler)(NSString* notificationName);
 
 - (BOOL)startWithSampleRate:(double)sampleRate
             framesPerBuffer:(NSUInteger)framesPerBuffer

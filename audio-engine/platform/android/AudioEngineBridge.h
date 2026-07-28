@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio_engine/GraphTransactionHost.h"
 #include <jni.h>
 
 #include <atomic>
@@ -19,6 +20,12 @@ namespace daft::audio::bridge {
 
 class AudioEngineBridge {
  public:
+  static GraphApplyResult initializeGraphTransactions(
+      double sampleRate, std::uint32_t framesPerBuffer);
+  static GraphDescription describeGraph();
+  static GraphApplyResult applyGraph(GraphApplyRequest request);
+  static GraphApplyResult recoverAfterAudioConfigurationChange();
+  static bool invalidateGraphTransactions() noexcept;
   struct RenderDiagnostics {
     std::uint64_t xruns = 0U;
     double lastRenderDurationMicros = 0.0;
@@ -106,13 +113,18 @@ class AudioEngineBridge {
 
   static void requireInitializedLocked();
   static void requireTransportStoppedLocked();
+  static void requireLegacyGraphMutationLocked();
   static void stopRealtimePlaneLocked() noexcept;
   [[nodiscard]] static RealtimeNodeId requireRealtimeNodeLocked(
       const std::string& nodeId);
   [[nodiscard]] static bool enqueueLocked(
       const RealtimeControlCommand& command) noexcept;
 
-  static std::unique_ptr<SceneGraph> graph_;
+  static std::unique_ptr<SceneGraph> legacyGraph_;
+  static std::unique_ptr<GraphTransactionHost> transactionHost_;
+  // Non-owning alias to legacyGraph_ or transactionHost_'s SceneGraph; repoint
+  // it whenever either owner is reset.
+  static SceneGraph* graph_;
   static std::mutex mutex_;
   static RealtimeControlPlane realtimePlane_;
   static std::atomic<std::uint64_t> publicationToken_;

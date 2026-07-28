@@ -78,6 +78,13 @@ describe('SettingsScreen', () => {
     expect(expanded).toContain('% render load');
     expect(expanded).toContain('Screen reader ');
     expect(expanded).not.toContain('Layout breakpoint');
+
+    const hideDetails = renderer.root.findByProps({ label: 'Hide details' });
+    await act(async () => {
+      hideDetails.props.onPress();
+      await Promise.resolve();
+    });
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('Session ID:');
     renderer.unmount();
   });
 
@@ -94,6 +101,24 @@ describe('SettingsScreen', () => {
     });
 
     expect(setPreference).toHaveBeenCalledWith('autoPlayScenes', true);
+
+    useUserPreferences.mockReturnValue({
+      preferences: { autoPlayScenes: true, showDiagnostics: true },
+      setPreference,
+    });
+    await act(async () => {
+      renderer.update(
+        <ThemeProvider>
+          <SettingsScreen />
+        </ThemeProvider>,
+      );
+      await Promise.resolve();
+    });
+    expect(
+      renderer.root.findByProps({
+        accessibilityLabel: 'Auto-play scenes',
+      }).props.value,
+    ).toBe(true);
     renderer.unmount();
   });
 
@@ -119,8 +144,7 @@ describe('SettingsScreen', () => {
     });
 
     const renderer = await renderScreen();
-    expect(JSON.stringify(renderer.toJSON())).toContain('Render load');
-    expect(JSON.stringify(renderer.toJSON())).toContain('Unavailable');
+    expect(JSON.stringify(renderer.toJSON())).toContain('Metrics polling failed');
 
     const showDetails = renderer.root.findByProps({ label: 'Show details' });
     await act(async () => {

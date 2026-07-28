@@ -6,12 +6,12 @@ module.exports = {
       root: __dirname,
       platforms: {
         ios: {
-          podspecPath: path.join(__dirname, 'native/collab/CollabNetworkDiagnostics.podspec'),
+          podspecPath: path.join(__dirname, 'DaftCitadelNative.podspec'),
         },
         android: {
-          sourceDir: path.join(__dirname, 'native/collab/android'),
-          packageImportPath: 'import com.daftcitadel.collab.CollabNetworkDiagnosticsPackage;',
-          packageInstance: 'new CollabNetworkDiagnosticsPackage()',
+          sourceDir: path.join(__dirname, 'modules/daft-citadel-native/android'),
+          packageImportPath: 'import com.daftcitadel.DaftCitadelNativePackage;',
+          packageInstance: 'new DaftCitadelNativePackage()',
         },
       },
     },

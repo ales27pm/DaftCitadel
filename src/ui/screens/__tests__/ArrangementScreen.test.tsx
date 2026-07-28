@@ -1,9 +1,10 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 
+import { InMemorySessionStorageAdapter, SessionManager } from '../../../session';
 import { ThemeProvider } from '../../design-system';
+import { PassiveAudioEngineBridge } from '../../session/environment';
 import { ArrangementScreen } from '../ArrangementScreen';
-import type { SessionManager } from '../../../session';
 
 jest.mock('../../session', () => ({
   useSessionViewModel: jest.fn(),
@@ -13,6 +14,11 @@ jest.mock('../../session', () => ({
 
 const { useSessionViewModel, useTransportControls, useProjectedTransport } =
   jest.requireMock('../../session');
+
+const managerFixture = new SessionManager(
+  new InMemorySessionStorageAdapter(),
+  new PassiveAudioEngineBridge(),
+);
 
 const baseTrack = {
   id: 'track-1',
@@ -122,7 +128,7 @@ describe('ArrangementScreen diagnostics', () => {
       ],
       sessionId: 'session-1',
       sessionName: 'Fixture Session',
-      manager: {} as SessionManager,
+      manager: managerFixture,
       error: undefined,
       transportRuntime: null,
       retryPlugin: jest.fn(async () => true),
@@ -153,7 +159,7 @@ describe('ArrangementScreen diagnostics', () => {
       pluginAlerts: [],
       sessionId: 'session-1',
       sessionName: 'Fixture Session',
-      manager: {} as SessionManager,
+      manager: managerFixture,
       error: undefined,
       transportRuntime: null,
       retryPlugin: jest.fn(async () => true),
@@ -183,7 +189,7 @@ describe('ArrangementScreen diagnostics', () => {
       pluginAlerts: [],
       sessionId: 'session-1',
       sessionName: 'Fixture Session',
-      manager: {} as SessionManager,
+      manager: managerFixture,
       error: undefined,
       transportRuntime: null,
       retryPlugin: jest.fn(async () => true),
@@ -191,6 +197,45 @@ describe('ArrangementScreen diagnostics', () => {
 
     const renderer = await renderScreen();
     expect(renderer.toJSON()).toMatchSnapshot();
+    renderer.unmount();
+  });
+
+  it('disables Play and Rewind and prompts for an instrument with no tracks', async () => {
+    useProjectedTransport.mockReturnValue({
+      projectedBeats: baseTransport.playheadBeats,
+      projectedRatio: baseTransport.playheadRatio,
+      transport: baseTransport,
+    });
+    useSessionViewModel.mockReturnValue({
+      status: 'ready',
+      tracks: [],
+      transport: baseTransport,
+      diagnostics: baseDiagnostics,
+      refresh: jest.fn(() => Promise.resolve()),
+      pluginAlerts: [],
+      sessionId: 'session-1',
+      sessionName: 'Fixture Session',
+      manager: managerFixture,
+      error: undefined,
+      transportRuntime: null,
+      retryPlugin: jest.fn(async () => true),
+    });
+
+    const renderer = await renderScreen();
+    const toolbar = renderer.root.findByProps({ title: 'Arrangement' });
+    const play = toolbar.props.actions.find(
+      (action: { label: string }) => action.label === 'Play',
+    );
+    const rewind = toolbar.props.actions.find(
+      (action: { label: string }) => action.label === 'Rewind',
+    );
+
+    expect(play.disabled).toBe(true);
+    expect(rewind.disabled).toBe(true);
+    expect(JSON.stringify(renderer.toJSON())).toContain('Start with an instrument');
+    expect(JSON.stringify(renderer.toJSON())).toContain(
+      'Add a Juno track from Performance before starting playback.',
+    );
     renderer.unmount();
   });
 });

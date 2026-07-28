@@ -26,8 +26,80 @@ export type NativeRenderDiagnostics = {
   p99RenderDurationMicros?: number;
 };
 
+export type NativeGraphApplyStatus = 'committed' | 'stale' | 'rejected';
+
+export type NativeGraphFailureStage =
+  | 'none'
+  | 'validate'
+  | 'allocate'
+  | 'prepare'
+  | 'connect'
+  | 'commit'
+  | 'lifecycle'
+  | 'route';
+
+export type NativeGraphErrorCode =
+  | 'none'
+  | 'invalid_request'
+  | 'duplicate_node'
+  | 'missing_endpoint'
+  | 'resource_allocation_failed'
+  | 'node_preparation_failed'
+  | 'connection_rejected'
+  | 'commit_rejected'
+  | 'stale_generation'
+  | 'stale_route_epoch'
+  | 'stale_engine_instance'
+  | 'engine_unavailable'
+  | 'engine_invalidated'
+  | 'audio_configuration_changed';
+
+export type NativeGraphDescription = {
+  generation: number;
+  graphHash: string;
+  nodeIds: string[];
+  routeEpoch: number;
+  engineInstance: number;
+};
+
+export type NativeGraphNode = {
+  id: NodeId;
+  type: string;
+  options: Record<string, number | string | boolean>;
+};
+
+export type NativeGraphConnection = {
+  source: NodeId;
+  destination: NodeId;
+};
+
+export type NativeGraphApplyRequest = {
+  transactionId: string;
+  expectedGeneration: number;
+  expectedRouteEpoch: number;
+  expectedEngineInstance: number;
+  nodes: NativeGraphNode[];
+  connections: NativeGraphConnection[];
+};
+
+export type NativeGraphFailure = {
+  stage: NativeGraphFailureStage;
+  code: NativeGraphErrorCode;
+  nodeId: string;
+  detail: string;
+};
+
+export type NativeGraphApplyResult = {
+  status: NativeGraphApplyStatus;
+  transactionId: string;
+  graph: NativeGraphDescription;
+  failure?: NativeGraphFailure;
+};
+
 export interface AudioEngineSpec extends TurboModule {
   initialize(sampleRate: number, framesPerBuffer: number): Promise<void>;
+  describeGraph(): Promise<NativeGraphDescription>;
+  applyGraph(request: NativeGraphApplyRequest): Promise<NativeGraphApplyResult>;
   shutdown(): Promise<void>;
   addNode(
     nodeId: NodeId,
@@ -71,6 +143,8 @@ const moduleName = 'AudioEngineModule';
 
 const REQUIRED_AUDIO_ENGINE_METHODS = [
   'initialize',
+  'describeGraph',
+  'applyGraph',
   'shutdown',
   'addNode',
   'registerClipBuffer',
@@ -135,6 +209,12 @@ const requireNativeAudioEngineModule = (): AudioEngineSpec => {
 export const NativeAudioEngine: AudioEngineSpec = {
   initialize(sampleRate: number, framesPerBuffer: number): Promise<void> {
     return requireNativeAudioEngineModule().initialize(sampleRate, framesPerBuffer);
+  },
+  describeGraph(): Promise<NativeGraphDescription> {
+    return requireNativeAudioEngineModule().describeGraph();
+  },
+  applyGraph(request: NativeGraphApplyRequest): Promise<NativeGraphApplyResult> {
+    return requireNativeAudioEngineModule().applyGraph(request);
   },
   shutdown(): Promise<void> {
     return requireNativeAudioEngineModule().shutdown();

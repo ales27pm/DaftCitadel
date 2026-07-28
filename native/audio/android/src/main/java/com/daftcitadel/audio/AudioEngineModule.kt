@@ -8,15 +8,21 @@ import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.ReadableType
+import com.facebook.react.bridge.WritableMap
 import com.facebook.react.module.annotations.ReactModule
 import com.facebook.react.turbomodule.core.interfaces.TurboModule
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.Locale
+import java.util.TreeMap
+import java.math.BigDecimal
 import kotlin.math.abs
 import kotlin.math.roundToLong
 import android.util.Base64
+import android.util.Log
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import org.json.JSONObject
+import kotlin.math.roundToInt
 
 @ReactModule(name = AudioEngineModule.NAME)
 class AudioEngineModule(private val reactContext: ReactApplicationContext) :
@@ -27,6 +33,203 @@ class AudioEngineModule(private val reactContext: ReactApplicationContext) :
   }
 
   private val maxFramesPerBuffer: Int by lazy { nativeMaxFramesPerBuffer() }
+  private val nativeActive = AtomicBoolean(false)
+  private val recoveryScheduled = AtomicBoolean(false)
+
+  private data class DeviceConfiguration(
+    val sampleRate: Int,
+    val framesPerBuffer: Int
+  )
+
+  @Volatile
+  private var deviceConfiguration: DeviceConfiguration? = null
+
+  @Volatile
+  private var audioConfigurationRecoveryError: Throwable? = null
+
+  private val deviceDriver = AudioTrackDeviceDriver(
+    renderInterleaved = ::nativeRenderInterleaved,
+    onAudioConfigurationChange = ::scheduleAudioConfigurationRecovery
+  )
+
+  private fun scheduleAudioConfigurationRecovery() {
+    if (!nativeActive.get() ||
+      !deviceDriver.isRunning() ||
+      !recoveryScheduled.compareAndSet(false, true)
+    ) {
+      return
+    }
+    reactContext.runOnNativeModulesQueueThread {
+      try {
+        recoverAfterAudioConfigurationChange()
+      } finally {
+        recoveryScheduled.set(false)
+      }
+    }
+  }
+
+  private fun recoverAfterAudioConfigurationChange() {
+    val configuration = deviceConfiguration ?: return
+    val wasDriverRunning = deviceDriver.isRunning()
+    if (!nativeActive.get() || !wasDriverRunning) {
+      return
+    }
+
+    deviceDriver.stop()
+    try {
+      val recovery =
+        decodeGraphApplyResult(nativeRecoverAfterAudioConfigurationChange())
+      if (recovery.getString("status") != "committed") {
+        val detail =
+          recovery.getMap("failure")?.getString("detail")
+            ?: "Native graph recovery was rejected"
+        throw IllegalStateException(detail)
+      }
+      deviceDriver.start(
+        configuration.sampleRate,
+        configuration.framesPerBuffer
+      )
+      check(deviceDriver.isRunning()) {
+        "Audio device did not restart after configuration recovery"
+      }
+      audioConfigurationRecoveryError = null
+    } catch (error: Throwable) {
+      deviceDriver.stop()
+      runCatching { nativeStopTransport() }
+      audioConfigurationRecoveryError = error
+      Log.e(TAG, "Audio configuration recovery failed", error)
+    }
+  }
+
+  private fun requireSafeCounter(request: ReadableMap, key: String): Long {
+    require(request.hasKey(key) && request.getType(key) == ReadableType.Number) {
+      "$key must be numeric"
+    }
+    val value = request.getDouble(key)
+    require(
+      value.isFinite() &&
+        value >= 0.0 &&
+        value <= 9_007_199_254_740_991.0 &&
+        value == value.toLong().toDouble()
+    ) {
+      "$key must be a non-negative safe integer"
+    }
+    return value.toLong()
+  }
+
+  private fun canonicalJsonValue(value: Any?): String = when (value) {
+    null -> "null"
+    is Boolean -> value.toString()
+    is String -> JSONObject.quote(value)
+    is Number -> {
+      val numeric = value.toDouble()
+      require(numeric.isFinite()) {
+        "Node options must contain only finite numbers"
+      }
+      if (numeric == 0.0) {
+        "0"
+      } else {
+        BigDecimal(value.toString()).stripTrailingZeros().toPlainString()
+      }
+    }
+    is List<*> ->
+      value.joinToString(separator = ",", prefix = "[", postfix = "]") {
+        canonicalJsonValue(it)
+      }
+    is Array<*> ->
+      value.joinToString(separator = ",", prefix = "[", postfix = "]") {
+        canonicalJsonValue(it)
+      }
+    is Map<*, *> -> {
+      val entries = value.entries.map { (key, nestedValue) ->
+        require(key is String) {
+          "Node option object keys must be strings"
+        }
+        key to nestedValue
+      }.sortedBy { it.first }
+      entries.joinToString(separator = ",", prefix = "{", postfix = "}") {
+        (key, nestedValue) ->
+        "${JSONObject.quote(key)}:${canonicalJsonValue(nestedValue)}"
+      }
+    }
+    else -> throw IllegalArgumentException(
+      "Node options contain unsupported value type '${value::class.java.simpleName}'"
+    )
+  }
+
+  private fun canonicalOptions(options: Map<String, Any?>): String {
+    val normalized = TreeMap<String, Any?>()
+    options.keys.sorted().forEach { key ->
+      normalized[key.lowercase(Locale.US)] = options[key]
+    }
+    return canonicalJsonValue(normalized)
+  }
+
+  private fun decodeGraphDescription(
+    payload: Array<String>,
+    offset: Int = 0
+  ): Pair<WritableMap, Int> {
+    require(payload.size >= offset + 5) {
+      "Native graph description is truncated"
+    }
+    val generation = payload[offset].toLongOrNull()
+      ?: throw IllegalStateException("Native graph generation is invalid")
+    val graphHash = payload[offset + 1]
+    val routeEpoch = payload[offset + 2].toLongOrNull()
+      ?: throw IllegalStateException("Native graph route epoch is invalid")
+    val engineInstance = payload[offset + 3].toLongOrNull()
+      ?: throw IllegalStateException("Native graph engine instance is invalid")
+    val nodeCount = payload[offset + 4].toIntOrNull()
+      ?: throw IllegalStateException("Native graph node count is invalid")
+    require(generation >= 0L && routeEpoch >= 0L && engineInstance >= 0L) {
+      "Native graph identity must be non-negative"
+    }
+    require(graphHash.isNotEmpty() && nodeCount >= 0) {
+      "Native graph hash and node count are invalid"
+    }
+    val nextOffset = offset + 5 + nodeCount
+    require(payload.size >= nextOffset) {
+      "Native graph node list is truncated"
+    }
+    val nodeIds = Arguments.createArray()
+    for (index in 0 until nodeCount) {
+      nodeIds.pushString(payload[offset + 5 + index])
+    }
+    val description = Arguments.createMap().apply {
+      putDouble("generation", generation.toDouble())
+      putString("graphHash", graphHash)
+      putArray("nodeIds", nodeIds)
+      putDouble("routeEpoch", routeEpoch.toDouble())
+      putDouble("engineInstance", engineInstance.toDouble())
+    }
+    return description to nextOffset
+  }
+
+  private fun decodeGraphApplyResult(payload: Array<String>): WritableMap {
+    require(payload.size >= 2) {
+      "Native graph apply result is truncated"
+    }
+    val status = payload[0]
+    val transactionId = payload[1]
+    val (graph, failureOffset) = decodeGraphDescription(payload, 2)
+    require(payload.size >= failureOffset + 4) {
+      "Native graph failure payload is truncated"
+    }
+    return Arguments.createMap().apply {
+      putString("status", status)
+      putString("transactionId", transactionId)
+      putMap("graph", graph)
+      val stage = payload[failureOffset]
+      if (stage.isNotEmpty() && stage != "none") {
+        putMap("failure", Arguments.createMap().apply {
+          putString("stage", stage)
+          putString("code", payload[failureOffset + 1])
+          putString("nodeId", payload[failureOffset + 2])
+          putString("detail", payload[failureOffset + 3])
+        })
+      }
+    }
+  }
 
   /**
  * The module's name as exposed to React Native.
@@ -70,11 +273,136 @@ override fun getName(): String = NAME
       )
       return
     }
+    val deviceSampleRate = sampleRate.roundToInt()
     try {
+      deviceDriver.stop()
       nativeInitialize(sampleRate, framesInt)
+      deviceConfiguration = DeviceConfiguration(deviceSampleRate, framesInt)
+      audioConfigurationRecoveryError = null
+      nativeActive.set(true)
       promise.resolve(null)
     } catch (error: Exception) {
+      deviceConfiguration = null
+      nativeActive.set(false)
       promise.reject("initialize_failed", error)
+    }
+  }
+
+  @ReactMethod
+  fun describeGraph(promise: Promise) {
+    try {
+      promise.resolve(decodeGraphDescription(nativeDescribeGraph()).first)
+    } catch (error: Exception) {
+      promise.reject("describe_graph_failed", error)
+    }
+  }
+
+  @ReactMethod
+  fun applyGraph(request: ReadableMap, promise: Promise) {
+    try {
+      require(
+        request.hasKey("transactionId") &&
+          request.getType("transactionId") == ReadableType.String
+      ) {
+        "transactionId is required"
+      }
+      val transactionId = request.getString("transactionId")?.trim().orEmpty()
+      require(transactionId.isNotEmpty()) {
+        "transactionId is required"
+      }
+      val expectedGeneration =
+        requireSafeCounter(request, "expectedGeneration")
+      val expectedRouteEpoch =
+        requireSafeCounter(request, "expectedRouteEpoch")
+      val expectedEngineInstance =
+        requireSafeCounter(request, "expectedEngineInstance")
+      require(
+        request.hasKey("nodes") &&
+          request.getType("nodes") == ReadableType.Array
+      ) {
+        "nodes must be an array"
+      }
+      require(
+        request.hasKey("connections") &&
+          request.getType("connections") == ReadableType.Array
+      ) {
+        "connections must be an array"
+      }
+
+      val rawNodes = requireNotNull(request.getArray("nodes"))
+      val nodeIds = ArrayList<String>(rawNodes.size())
+      val nodeTypes = ArrayList<String>(rawNodes.size())
+      val nodeOptions = ArrayList<Map<String, Any?>>(rawNodes.size())
+      val optionFingerprints = ArrayList<String>(rawNodes.size())
+      for (index in 0 until rawNodes.size()) {
+        val node = requireNotNull(rawNodes.getMap(index)) {
+          "Every node must be an object"
+        }
+        require(
+          node.hasKey("id") &&
+            node.getType("id") == ReadableType.String &&
+            node.hasKey("type") &&
+            node.getType("type") == ReadableType.String &&
+            node.hasKey("options") &&
+            node.getType("options") == ReadableType.Map
+        ) {
+          "Each node needs id, type, and object options"
+        }
+        val nodeId = node.getString("id")?.trim().orEmpty()
+        val nodeType =
+          node.getString("type")?.trim()?.lowercase(Locale.US).orEmpty()
+        require(nodeId.isNotEmpty() && nodeType.isNotEmpty()) {
+          "Node id and type cannot be empty"
+        }
+        val options = requireNotNull(node.getMap("options")).toHashMap()
+        nodeIds.add(nodeId)
+        nodeTypes.add(nodeType)
+        nodeOptions.add(options)
+        optionFingerprints.add(canonicalOptions(options))
+      }
+
+      val rawConnections = requireNotNull(request.getArray("connections"))
+      val connectionSources = ArrayList<String>(rawConnections.size())
+      val connectionDestinations = ArrayList<String>(rawConnections.size())
+      for (index in 0 until rawConnections.size()) {
+        val connection = requireNotNull(rawConnections.getMap(index)) {
+          "Every connection must be an object"
+        }
+        require(
+          connection.hasKey("source") &&
+            connection.getType("source") == ReadableType.String &&
+            connection.hasKey("destination") &&
+            connection.getType("destination") == ReadableType.String
+        ) {
+          "Every connection needs source and destination strings"
+        }
+        val source = connection.getString("source")?.trim().orEmpty()
+        val destination =
+          connection.getString("destination")?.trim().orEmpty()
+        require(source.isNotEmpty() && destination.isNotEmpty()) {
+          "Connection endpoints cannot be empty"
+        }
+        connectionSources.add(source)
+        connectionDestinations.add(destination)
+      }
+
+      val payload = nativeApplyGraph(
+        transactionId,
+        expectedGeneration,
+        expectedRouteEpoch,
+        expectedEngineInstance,
+        nodeIds.toTypedArray(),
+        nodeTypes.toTypedArray(),
+        nodeOptions.toTypedArray(),
+        optionFingerprints.toTypedArray(),
+        connectionSources.toTypedArray(),
+        connectionDestinations.toTypedArray()
+      )
+      promise.resolve(decodeGraphApplyResult(payload))
+    } catch (error: IllegalArgumentException) {
+      promise.reject("invalid_arguments", error)
+    } catch (error: Exception) {
+      promise.reject("apply_graph_failed", error)
     }
   }
 
@@ -89,11 +417,32 @@ override fun getName(): String = NAME
   @ReactMethod
   fun shutdown(promise: Promise) {
     try {
-      nativeShutdown()
+      deviceDriver.stop()
+      deviceConfiguration = null
+      audioConfigurationRecoveryError = null
+      recoveryScheduled.set(false)
+      if (nativeActive.getAndSet(false)) {
+        nativeShutdown()
+      }
       promise.resolve(null)
     } catch (error: Exception) {
       promise.reject("shutdown_failed", error)
     }
+  }
+
+  override fun invalidate() {
+    deviceDriver.stop()
+    deviceConfiguration = null
+    audioConfigurationRecoveryError = null
+    recoveryScheduled.set(false)
+    if (nativeActive.getAndSet(false)) {
+      try {
+        nativeShutdown()
+      } catch (_: Exception) {
+        // React Native invalidation cannot report a promise failure.
+      }
+    }
+    super.invalidate()
   }
 
   /**
@@ -349,10 +698,27 @@ override fun getName(): String = NAME
 
   @ReactMethod
   fun startTransport(promise: Promise) {
+    val configuration = deviceConfiguration
+    if (configuration == null) {
+      promise.reject(
+        "transport_start_failed",
+        "Audio device configuration is unavailable"
+      )
+      return
+    }
     try {
       nativeStartTransport()
+      if (!deviceDriver.isRunning()) {
+        deviceDriver.start(configuration.sampleRate, configuration.framesPerBuffer)
+      }
+      check(deviceDriver.isRunning()) {
+        "Audio device failed to start"
+      }
+      audioConfigurationRecoveryError = null
       promise.resolve(null)
     } catch (error: Exception) {
+      deviceDriver.stop()
+      runCatching { nativeStopTransport() }
       promise.reject("transport_start_failed", error)
     }
   }
@@ -361,8 +727,10 @@ override fun getName(): String = NAME
   fun stopTransport(promise: Promise) {
     try {
       nativeStopTransport()
+      deviceDriver.stop()
       promise.resolve(null)
     } catch (error: Exception) {
+      deviceDriver.stop()
       promise.reject("transport_stop_failed", error)
     }
   }
@@ -434,6 +802,11 @@ override fun getName(): String = NAME
    */
   @ReactMethod
   fun getRenderDiagnostics(promise: Promise) {
+    val recoveryError = audioConfigurationRecoveryError
+    if (recoveryError != null) {
+      promise.reject("audio_configuration_recovery_failed", recoveryError)
+      return
+    }
     try {
       val payload = nativeGetDiagnostics()
       val diagnostics = Arguments.createMap().apply {
@@ -492,6 +865,25 @@ override fun getName(): String = NAME
  * @param framesPerBuffer Number of audio frames per buffer (must be a positive integer). 
  */
 private external fun nativeInitialize(sampleRate: Double, framesPerBuffer: Int)
+private external fun nativeRenderInterleaved(
+  output: FloatArray,
+  channelCount: Int,
+  frameCount: Int
+)
+private external fun nativeRecoverAfterAudioConfigurationChange(): Array<String>
+private external fun nativeDescribeGraph(): Array<String>
+private external fun nativeApplyGraph(
+  transactionId: String,
+  expectedGeneration: Long,
+  expectedRouteEpoch: Long,
+  expectedEngineInstance: Long,
+  nodeIds: Array<String>,
+  nodeTypes: Array<String>,
+  nodeOptions: Array<Map<String, Any?>>,
+  optionFingerprints: Array<String>,
+  connectionSources: Array<String>,
+  connectionDestinations: Array<String>
+): Array<String>
   /**
  * Shuts down the native audio engine and releases its resources.
  *
@@ -737,6 +1129,7 @@ private external fun nativeMaxFramesPerBuffer(): Int
 
   companion object {
     const val NAME = "AudioEngineModule"
+    private const val TAG = "DaftAudioEngine"
 
     private val libraryLoaded = AtomicBoolean(false)
 

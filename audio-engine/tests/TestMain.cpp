@@ -9,10 +9,16 @@ void RunJunoCoreTests();
 void RunInstrumentNodeTests();
 void RunRealtimeControlQueueTests();
 void RunRealtimeControlPlaneTests();
+void RunSceneGraphTests();
+void RunRenderPlanTests();
+void RunGraphTransactionHostTests();
 }  // namespace daft::audio::tests
 
 int main() {
   try {
+    daft::audio::tests::RunSceneGraphTests();
+    daft::audio::tests::RunRenderPlanTests();
+    daft::audio::tests::RunGraphTransactionHostTests();
     daft::audio::tests::RunSchedulerTests();
     daft::audio::tests::RunClipPlayerNodeTests();
     daft::audio::tests::RunPluginNodeTests();

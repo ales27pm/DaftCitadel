@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "audio_engine/GraphTransactionHost.h"
 #include "audio_engine/RealtimeControlPlane.h"
 #include "audio_engine/SceneGraph.h"
 
@@ -62,6 +63,17 @@ class AudioEngineBridge {
 
   static EngineGeneration initialize(double sampleRate,
                                      std::uint32_t framesPerBuffer);
+  static GraphApplyResult initializeGraphTransactions(
+      EngineGeneration generation, double sampleRate,
+      std::uint32_t framesPerBuffer);
+  static GraphDescription describeGraph(
+      EngineGeneration generation);
+  static GraphApplyResult applyGraph(EngineGeneration generation,
+                                     GraphApplyRequest request);
+  static GraphApplyResult recoverAfterAudioConfigurationChange(
+      EngineGeneration generation);
+  static bool invalidateGraphTransactions(
+      EngineGeneration generation) noexcept;
   static bool shutdownIfOwner(EngineGeneration generation) noexcept;
   static bool isInitialized(EngineGeneration generation);
   static void render(EngineGeneration generation, float** outputs,
@@ -119,13 +131,16 @@ class AudioEngineBridge {
   static bool ownsGenerationLocked(EngineGeneration generation) noexcept;
   static void requireGenerationLocked(EngineGeneration generation);
   static void requireTransportStoppedLocked();
+  static void requireLegacyGraphMutationLocked();
   static void stopRealtimePlaneLocked() noexcept;
   [[nodiscard]] static RealtimeNodeId requireRealtimeNodeLocked(
       const std::string& nodeId);
   [[nodiscard]] static bool enqueueLocked(
       const RealtimeControlCommand& command) noexcept;
 
-  static std::unique_ptr<SceneGraph> graph_;
+  static std::unique_ptr<SceneGraph> legacyGraph_;
+  static std::unique_ptr<GraphTransactionHost> transactionHost_;
+  static SceneGraph* graph_;
   static std::mutex mutex_;
   static RealtimeControlPlane realtimePlane_;
   static std::atomic<EngineGeneration> generation_;

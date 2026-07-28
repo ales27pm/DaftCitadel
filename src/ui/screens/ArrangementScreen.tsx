@@ -142,7 +142,8 @@ export const ArrangementScreen: React.FC = () => {
         label: 'Play',
         onPress: handlePlay,
         intent: 'primary',
-        disabled: !transportControls.isAvailable || transport?.isPlaying,
+        disabled:
+          tracks.length === 0 || !transportControls.isAvailable || transport?.isPlaying,
       },
       {
         label: 'Stop',
@@ -154,7 +155,7 @@ export const ArrangementScreen: React.FC = () => {
         label: 'Rewind',
         onPress: handleRewind,
         intent: 'secondary',
-        disabled: !transportControls.isAvailable,
+        disabled: tracks.length === 0 || !transportControls.isAvailable,
       },
       {
         label: 'Refresh',
@@ -169,6 +170,7 @@ export const ArrangementScreen: React.FC = () => {
       handleStop,
       transport?.isPlaying,
       transportControls.isAvailable,
+      tracks.length,
     ],
   );
 
@@ -192,7 +194,12 @@ export const ArrangementScreen: React.FC = () => {
     if (!arrangementTrack) {
       return (
         <NeonSurface>
-          <NeonText variant="body">No tracks available in this session.</NeonText>
+          <NeonText variant="title" weight="medium">
+            Start with an instrument
+          </NeonText>
+          <NeonText variant="body" intent="secondary">
+            Add a Juno track from Performance before starting playback.
+          </NeonText>
         </NeonSurface>
       );
     }
