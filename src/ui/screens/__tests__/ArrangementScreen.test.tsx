@@ -1,9 +1,10 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 
+import { InMemorySessionStorageAdapter, SessionManager } from '../../../session';
 import { ThemeProvider } from '../../design-system';
+import { PassiveAudioEngineBridge } from '../../session/environment';
 import { ArrangementScreen } from '../ArrangementScreen';
-import type { SessionManager } from '../../../session';
 
 jest.mock('../../session', () => ({
   useSessionViewModel: jest.fn(),
@@ -13,6 +14,11 @@ jest.mock('../../session', () => ({
 
 const { useSessionViewModel, useTransportControls, useProjectedTransport } =
   jest.requireMock('../../session');
+
+const managerFixture = new SessionManager(
+  new InMemorySessionStorageAdapter(),
+  new PassiveAudioEngineBridge(),
+);
 
 const baseTrack = {
   id: 'track-1',
@@ -122,7 +128,7 @@ describe('ArrangementScreen diagnostics', () => {
       ],
       sessionId: 'session-1',
       sessionName: 'Fixture Session',
-      manager: {} as SessionManager,
+      manager: managerFixture,
       error: undefined,
       transportRuntime: null,
       retryPlugin: jest.fn(async () => true),
@@ -153,7 +159,7 @@ describe('ArrangementScreen diagnostics', () => {
       pluginAlerts: [],
       sessionId: 'session-1',
       sessionName: 'Fixture Session',
-      manager: {} as SessionManager,
+      manager: managerFixture,
       error: undefined,
       transportRuntime: null,
       retryPlugin: jest.fn(async () => true),
@@ -183,7 +189,7 @@ describe('ArrangementScreen diagnostics', () => {
       pluginAlerts: [],
       sessionId: 'session-1',
       sessionName: 'Fixture Session',
-      manager: {} as SessionManager,
+      manager: managerFixture,
       error: undefined,
       transportRuntime: null,
       retryPlugin: jest.fn(async () => true),
@@ -209,7 +215,7 @@ describe('ArrangementScreen diagnostics', () => {
       pluginAlerts: [],
       sessionId: 'session-1',
       sessionName: 'Fixture Session',
-      manager: {} as SessionManager,
+      manager: managerFixture,
       error: undefined,
       transportRuntime: null,
       retryPlugin: jest.fn(async () => true),

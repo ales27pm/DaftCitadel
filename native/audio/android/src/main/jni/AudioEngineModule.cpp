@@ -267,6 +267,35 @@ jobjectArray EncodeGraphApplyResult(
   return ToJavaStringArray(env, payload);
 }
 
+class AudioEngineShutdownGuard final {
+ public:
+  void shutdownNow() {
+    if (!armed_) {
+      return;
+    }
+    armed_ = false;
+    AudioEngineBridge::shutdown();
+  }
+
+  void release() noexcept {
+    armed_ = false;
+  }
+
+  ~AudioEngineShutdownGuard() {
+    if (!armed_) {
+      return;
+    }
+    try {
+      AudioEngineBridge::shutdown();
+    } catch (...) {
+      // Preserve the exception already unwinding through the JNI boundary.
+    }
+  }
+
+ private:
+  bool armed_{true};
+};
+
 }  // namespace
 
 extern "C" {
@@ -283,22 +312,51 @@ JNIEXPORT void JNICALL
 Java_com_daftcitadel_audio_AudioEngineModule_nativeInitialize(JNIEnv* env, jobject /*thiz*/, jdouble sampleRate,
                                                              jint framesPerBuffer) {
   try {
+    if (framesPerBuffer <= 0) {
+      throw std::invalid_argument("framesPerBuffer must be positive");
+    }
+    const auto validatedFrames =
+        static_cast<std::uint64_t>(framesPerBuffer);
+    const auto maxBridgeFrames = static_cast<std::uint64_t>(
+        static_cast<std::uint32_t>(-1));
+    if (validatedFrames > maxBridgeFrames) {
+      throw std::invalid_argument(
+          "framesPerBuffer exceeds the native frame range");
+    }
+    const auto maxScratchSize = static_cast<std::size_t>(-1);
+    if (validatedFrames >
+        static_cast<std::uint64_t>(maxScratchSize)) {
+      throw std::length_error(
+          "framesPerBuffer exceeds addressable memory");
+    }
+    const auto frameCapacity =
+        static_cast<std::size_t>(validatedFrames);
+    if (frameCapacity >
+        maxScratchSize / kOutputChannelCount) {
+      throw std::length_error(
+          "Render scratch size exceeds addressable memory");
+    }
+    const auto bridgeFrameCount =
+        static_cast<std::uint32_t>(validatedFrames);
     std::vector<float> preparedRenderScratch(
-        static_cast<std::size_t>(framesPerBuffer) * kOutputChannelCount);
-    AudioEngineBridge::initialize(env, sampleRate, static_cast<std::uint32_t>(framesPerBuffer));
+        frameCapacity * kOutputChannelCount);
+    AudioEngineBridge::initialize(
+        env, sampleRate, bridgeFrameCount);
+    AudioEngineShutdownGuard shutdownGuard;
     const auto graphInitialization =
         AudioEngineBridge::initializeGraphTransactions(
-            sampleRate, static_cast<std::uint32_t>(framesPerBuffer));
+            sampleRate, bridgeFrameCount);
     if (graphInitialization.status != GraphApplyStatus::Committed) {
       const std::string detail =
           graphInitialization.failure.has_value()
               ? graphInitialization.failure->detail
               : "Native graph transaction initialization failed";
-      AudioEngineBridge::shutdown();
+      shutdownGuard.shutdownNow();
       throw std::runtime_error(detail);
     }
     gRenderScratch = std::move(preparedRenderScratch);
-    gRenderFrameCapacity = static_cast<std::size_t>(framesPerBuffer);
+    gRenderFrameCapacity = frameCapacity;
+    shutdownGuard.release();
   } catch (const std::exception& ex) {
     ThrowJavaException(env, "java/lang/RuntimeException", ex.what());
   }
@@ -335,12 +393,6 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeRenderInterleaved(
   }
   const auto outputLength =
       static_cast<std::size_t>(env->GetArrayLength(output));
-  auto* interleaved =
-      static_cast<jfloat*>(env->GetPrimitiveArrayCritical(output, nullptr));
-  if (interleaved == nullptr) {
-    return;
-  }
-
   const bool valid =
       channelCount > 0 &&
       static_cast<std::size_t>(channelCount) <= kOutputChannelCount &&
@@ -350,8 +402,15 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeRenderInterleaved(
           static_cast<std::size_t>(channelCount) *
               static_cast<std::size_t>(frameCount);
   if (!valid) {
-    std::fill(interleaved, interleaved + outputLength, 0.0F);
-    env->ReleasePrimitiveArrayCritical(output, interleaved, 0);
+    auto* invalidOutput =
+        static_cast<jfloat*>(
+            env->GetPrimitiveArrayCritical(output, nullptr));
+    if (invalidOutput != nullptr) {
+      std::fill(
+          invalidOutput, invalidOutput + outputLength, 0.0F);
+      env->ReleasePrimitiveArrayCritical(
+          output, invalidOutput, 0);
+    }
     return;
   }
 
@@ -363,6 +422,12 @@ Java_com_daftcitadel_audio_AudioEngineModule_nativeRenderInterleaved(
       gRenderScratch.data() + gRenderFrameCapacity,
   };
   AudioEngineBridge::render(planar.data(), channels, frames);
+  auto* interleaved =
+      static_cast<jfloat*>(
+          env->GetPrimitiveArrayCritical(output, nullptr));
+  if (interleaved == nullptr) {
+    return;
+  }
   for (std::size_t frame = 0; frame < frames; ++frame) {
     for (std::size_t channel = 0; channel < channels; ++channel) {
       interleaved[frame * channels + channel] =
