@@ -80,3 +80,9 @@ jobs:
 
       - name: Test native audio core with sanitizers
         run: npm run native:core:test:sanitize
+
+      - name: Test direct native audio core verifier
+        run: npm run native:core:test:direct
+
+      - name: Test direct native audio core verifier with sanitizers
+        run: npm run native:core:test:direct:sanitize

@@ -125,9 +125,11 @@ describe('JunoPerformancePanel', () => {
   const sendInstrumentMidi = jest.fn(async () => undefined);
   const setInstrumentParameter = jest.fn(async () => undefined);
   const allNotesOff = jest.fn(async () => undefined);
+  let originalJuno106FeatureFlag: string | undefined;
 
   beforeEach(() => {
     jest.clearAllMocks();
+    originalJuno106FeatureFlag = process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106;
     delete process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106;
     useSessionActions.mockReturnValue({
       addJunoTrack,
@@ -143,7 +145,11 @@ describe('JunoPerformancePanel', () => {
   });
 
   afterEach(() => {
-    delete process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106;
+    if (originalJuno106FeatureFlag === undefined) {
+      delete process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106;
+    } else {
+      process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106 = originalJuno106FeatureFlag;
+    }
   });
 
   it('hides Juno creation when the rollout flag is disabled', async () => {

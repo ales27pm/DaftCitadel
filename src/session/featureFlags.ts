@@ -3,8 +3,10 @@ import { SessionStorageError } from './storage';
 const ENABLED_VALUES = new Set(['1', 'true', 'on', 'yes', 'enabled']);
 const DISABLED_VALUES = new Set(['', '0', 'false', 'off', 'no', 'disabled']);
 
-export const readPublicFeatureFlag = (name: string, defaultValue: boolean): boolean => {
-  const value = process.env[name];
+export const readPublicFeatureFlag = (
+  value: string | undefined,
+  defaultValue: boolean,
+): boolean => {
   if (typeof value !== 'string') {
     return defaultValue;
   }
@@ -21,7 +23,7 @@ export const readPublicFeatureFlag = (name: string, defaultValue: boolean): bool
 };
 
 export const isJuno106FeatureEnabled = (): boolean =>
-  readPublicFeatureFlag('EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106', true);
+  readPublicFeatureFlag(process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106, true);
 
 export const assertJuno106FeatureEnabled = (): void => {
   if (!isJuno106FeatureEnabled()) {

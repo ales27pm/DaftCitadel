@@ -85,17 +85,17 @@ const realtimeForbiddenPatterns: Array<{ label: string; pattern: RegExp }> = [
   {
     label: 'lock acquisition',
     pattern:
-      /\bstd::(?:lock_guard|unique_lock)\s*<|\bstd::try_to_lock\b|\bpthread_mutex_\w+\s*\(/,
+      /\bstd::(?:lock_guard|unique_lock|scoped_lock|shared_lock)\s*<|\bstd::try_to_lock\b|\bpthread_mutex_\w+\s*\(|@synchronized\s*\(/,
   },
   {
     label: 'exception handling',
     pattern:
-      /@catch\s*\(|@throw\b|\bcatch\s*\(|\bthrow(?:\s+|;)|\bThrowJavaException\s*\(/,
+      /@catch\s*\(|@throw\b|@try\b|\bcatch\s*\(|\bthrow(?:\s+|;)|\bThrowJavaException\s*\(/,
   },
   {
     label: 'logging',
     pattern:
-      /\bos_log(?:_[a-z_]+)?\s*\(|\b__android_log_(?:print|write|assert)\s*\(|\bNSLog\s*\(|\bLog\.(?:v|d|i|w|e|wtf)\s*\(/,
+      /\bos_log(?:_[a-z_]+)?\s*\(|\b__android_log_(?:print|write|assert)\s*\(|\b(?:ALOG[VDIWEF]|NSLog)\s*\(|\bLog\.(?:v|d|i|w|e|wtf)\s*\(/,
   },
   {
     label: 'allocation',
@@ -258,7 +258,7 @@ describe('instrument native bridge contract', () => {
         'comment probe',
         `
           // catch (...) { Log.e("comment only"); throw std::runtime_error("comment"); }
-          /* std::vector<float> scratch; os_log("comment only"); new ScratchBuffer(); */
+          /* std::vector<float> scratch; @try { ALOGE("comment"); } */
           auto catchment = 0;
           auto throwaway = catchment;
           auto LogState = throwaway;

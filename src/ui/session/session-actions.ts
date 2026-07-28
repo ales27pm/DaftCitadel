@@ -360,6 +360,10 @@ const replaceMidiClipNotes = (
   notes: ReadonlyArray<MidiNoteEvent>,
 ): Session =>
   updateTrack(session, trackId, (track) => {
+    assertJuno106FeatureEnabled();
+    if (!hasJunoInstrument(track)) {
+      throw new SessionStorageError(`Track ${trackId} has no Juno instrument`);
+    }
     const clipIndex = track.clips.findIndex((clip) => clip.id === clipId);
     if (clipIndex < 0) {
       throw new SessionStorageError(`Clip ${clipId} not found on track ${trackId}`);

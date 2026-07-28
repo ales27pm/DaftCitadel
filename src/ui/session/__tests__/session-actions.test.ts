@@ -9,7 +9,7 @@ import {
   type Session,
   type Track,
 } from '../../../session';
-import { createSessionActions } from '../session-actions';
+import { createSessionActions, type SessionActions } from '../session-actions';
 
 const createTrack = (id: string): Track => ({
   id,
@@ -51,12 +51,19 @@ const createManager = async (tracks: Track[] = []): Promise<SessionManager> => {
 };
 
 describe('createSessionActions', () => {
+  let originalJuno106FeatureFlag: string | undefined;
+
   beforeEach(() => {
+    originalJuno106FeatureFlag = process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106;
     delete process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106;
   });
 
   afterEach(() => {
-    delete process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106;
+    if (originalJuno106FeatureFlag === undefined) {
+      delete process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106;
+    } else {
+      process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106 = originalJuno106FeatureFlag;
+    }
   });
 
   it('adds a routed track using the first unused deterministic track id', async () => {
@@ -178,6 +185,84 @@ describe('createSessionActions', () => {
       ]),
     );
   });
+
+  it.each([
+    {
+      name: 'clip creation',
+      prepare: async (actions: SessionActions) => {
+        await actions.addJunoTrack();
+      },
+      mutate: (actions: SessionActions) => actions.addJunoMidiClip('track-1'),
+    },
+    {
+      name: 'scene creation',
+      mutate: (actions: SessionActions) => actions.createJunoMidiScene(),
+    },
+    {
+      name: 'scene part creation',
+      mutate: (actions: SessionActions) =>
+        actions.addJunoScenePart({ startMs: 0, durationMs: 2000 }),
+    },
+    {
+      name: 'parameter edit',
+      prepare: async (actions: SessionActions) => {
+        await actions.addJunoTrack();
+      },
+      mutate: (actions: SessionActions) =>
+        actions.setJunoParameter('track-1', 'cutoffHz', 3200),
+    },
+    {
+      name: 'preset edit',
+      prepare: async (actions: SessionActions) => {
+        await actions.addJunoTrack();
+      },
+      mutate: (actions: SessionActions) =>
+        actions.applyJunoPreset('track-1', listBuiltInJuno106Presets()[0]),
+    },
+    {
+      name: 'generic MIDI note edit',
+      prepare: async (actions: SessionActions) => {
+        await actions.addJunoTrack();
+        await actions.addEmptyJunoMidiClip('track-1');
+      },
+      mutate: (actions: SessionActions) =>
+        actions.setMidiClipNotes('track-1', 'track-1:clip:midi-1', [
+          {
+            id: 'note-1',
+            pitch: 60,
+            startBeat: 0,
+            durationBeats: 1,
+            velocity: 96,
+          },
+        ]),
+    },
+    {
+      name: 'generic MIDI note clear',
+      prepare: async (actions: SessionActions) => {
+        await actions.addJunoTrack();
+        await actions.addEmptyJunoMidiClip('track-1');
+      },
+      mutate: (actions: SessionActions) =>
+        actions.clearMidiClip('track-1', 'track-1:clip:midi-1'),
+    },
+  ])(
+    'rejects disabled Juno rollout $name without changing the session',
+    async ({ prepare, mutate }) => {
+      const manager = await createManager();
+      const actions = createSessionActions(manager);
+      await prepare?.(actions);
+      const before = manager.getSession();
+
+      process.env.EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106 = 'false';
+      const update = mutate(actions);
+
+      await expect(update).rejects.toBeInstanceOf(SessionStorageError);
+      await expect(update).rejects.toThrow(
+        'Juno-106 instrument is disabled by EXPO_PUBLIC_DAFT_CITADEL_ENABLE_JUNO106',
+      );
+      expect(manager.getSession()).toEqual(before);
+    },
+  );
 
   it('adds a playable four-bar MIDI starter clip to a Juno track', async () => {
     const manager = await createManager();
