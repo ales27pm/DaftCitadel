@@ -1,4 +1,5 @@
 #include "audio_engine/GraphTransactionHost.h"
+#include "audio_engine/instruments/juno/Juno106Node.h"
 
 #include <cstdint>
 #include <memory>
@@ -229,6 +230,73 @@ void RunGraphTransactionHostTests() {
   RequireTransaction(
       retryPublicationCount == 3,
       "Retry host did not publish initialization and both commit attempts");
+
+  GraphTransactionHost junoHost(
+      48000.0, 256,
+      [](SceneGraph*, std::uint64_t) { return true; },
+      {});
+  const auto junoInitial = junoHost.initialize(106);
+  RequireTransaction(junoInitial.status == GraphApplyStatus::Committed,
+                     "Juno graph host initialization failed");
+
+  GraphApplyRequest junoRequest;
+  junoRequest.transactionId = "production-juno-graph";
+  junoRequest.expectedGeneration = junoInitial.graph.generation;
+  junoRequest.expectedRouteEpoch = junoInitial.graph.routeEpoch;
+  junoRequest.expectedEngineInstance = junoInitial.graph.engineInstance;
+
+  PreparedGraphNode trackInput;
+  trackInput.id = "track-1:input:midi";
+  trackInput.type = "gain";
+  trackInput.optionsFingerprint =
+      R"({"channelCount":2,"gain":1,"ioId":"input:midi","label":"Track Input"})";
+  trackInput.node = std::make_unique<GainNode>();
+  junoRequest.nodes.push_back(std::move(trackInput));
+
+  auto junoNode = std::make_unique<juno::Juno106Node>(
+      juno::Juno106Node::kDefaultMaximumFramesPerBlock, 8);
+  junoNode->setParameter("pulsewidth", 0.5);
+  junoNode->setParameter("sublevel", 0.35);
+  junoNode->setParameter("cutoffhz", 2400.0);
+  junoNode->setParameter("resonance", 0.15);
+  junoNode->setParameter("attackseconds", 0.01);
+  junoNode->setParameter("releaseseconds", 0.45);
+  junoNode->setParameter("chorusmode", 1.0);
+  junoNode->setParameter("outputgain", 0.2);
+  junoNode->setParameter("lforatehz", 0.8);
+  junoNode->setParameter("lfodepth", 0.0);
+  PreparedGraphNode instrument;
+  instrument.id = "track-1:instrument:juno106";
+  instrument.type = "juno106";
+  instrument.optionsFingerprint =
+      R"({"attackSeconds":0.01,"chorusMode":1,"cutoffHz":2400,"label":"Juno-106","lfoDepth":0,"lfoRateHz":0.8,"outputGain":0.2,"polyphony":8,"pulseWidth":0.5,"releaseSeconds":0.45,"resonance":0.15,"subLevel":0.35})";
+  instrument.node = std::move(junoNode);
+  junoRequest.nodes.push_back(std::move(instrument));
+
+  PreparedGraphNode trackOutput;
+  trackOutput.id = "track-1:output:main";
+  trackOutput.type = "gain";
+  trackOutput.optionsFingerprint =
+      R"({"channelCount":2,"gain":1,"ioId":"output:main","label":"Track Output"})";
+  trackOutput.node = std::make_unique<GainNode>();
+  junoRequest.nodes.push_back(std::move(trackOutput));
+
+  junoRequest.connections.push_back(
+      {"track-1:instrument:juno106", "track-1:output:main"});
+  junoRequest.connections.push_back(
+      {"track-1:output:main", "__output__"});
+
+  const auto junoResult = junoHost.applyGraph(std::move(junoRequest));
+  RequireTransaction(junoResult.status == GraphApplyStatus::Committed,
+                     "Production Juno graph request was not committed");
+  RequireTransaction(
+      junoResult.graph.nodeIds ==
+          std::vector<std::string>({
+              "track-1:input:midi",
+              "track-1:instrument:juno106",
+              "track-1:output:main",
+          }),
+      "Production Juno graph did not retain the complete node identity");
 }
 
 }  // namespace daft::audio::tests

@@ -1,6 +1,7 @@
 import React from 'react';
+import * as ReactNative from 'react-native';
 import TestRenderer, { act } from 'react-test-renderer';
-import { Pressable } from 'react-native';
+import { AccessibilityInfo, Pressable, Text } from 'react-native';
 
 import { JUNO106_DEFAULT_PARAMETERS } from '../../../session';
 import { ThemeProvider } from '../../design-system';
@@ -68,6 +69,55 @@ const findPressable = (
   return pressable;
 };
 
+const findSlider = (
+  renderer: TestRenderer.ReactTestRenderer,
+  testID: string,
+): TestRenderer.ReactTestInstance => {
+  const slider = renderer.root
+    .findAll((candidate) => candidate.props.testID === testID)
+    .find((candidate) => typeof candidate.props.onSlidingComplete === 'function');
+  if (!slider) {
+    throw new Error(`Slider ${testID} not found`);
+  }
+  return slider;
+};
+
+const flattenText = (value: unknown): string => {
+  if (typeof value === 'string' || typeof value === 'number') {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(flattenText).join('');
+  }
+  return '';
+};
+
+const flattenStyle = (value: unknown): Record<string, unknown> => {
+  if (Array.isArray(value)) {
+    return Object.assign({}, ...value.map(flattenStyle));
+  }
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+};
+
+const renderedText = (renderer: TestRenderer.ReactTestRenderer): string =>
+  renderer.root
+    .findAllByType(Text)
+    .map((candidate) => flattenText(candidate.props.children))
+    .join(' ');
+
+const findAccessibleText = (
+  renderer: TestRenderer.ReactTestRenderer,
+  testID: string,
+): TestRenderer.ReactTestInstance => {
+  const text = renderer.root
+    .findAllByType(Text)
+    .find((candidate) => candidate.props.testID === testID);
+  if (!text) {
+    throw new Error(`Accessible text ${testID} not found`);
+  }
+  return text;
+};
+
 describe('JunoPerformancePanel', () => {
   const addJunoTrack = jest.fn(async () => undefined);
   const setJunoParameter = jest.fn(async () => undefined);
@@ -107,14 +157,14 @@ describe('JunoPerformancePanel', () => {
 
   it('persists parameter edits and forwards them to live controls', async () => {
     const renderer = await renderPanel([createJunoTrack()]);
-    const serialized = JSON.stringify(renderer.toJSON());
+    const visibleText = renderedText(renderer);
 
-    expect(serialized).toContain('DCO');
-    expect(serialized).toContain('LFO');
-    expect(serialized).toContain('VCF');
-    expect(serialized).toContain('ENV');
-    expect(serialized).toContain('CHORUS');
-    expect(serialized).toContain('OUTPUT');
+    expect(visibleText).toContain('DCO');
+    expect(visibleText).toContain('LFO');
+    expect(visibleText).toContain('VCF');
+    expect(visibleText).toContain('ENV');
+    expect(visibleText).toContain('OUTPUT');
+    expect(visibleText).toContain('Advanced controls & diagnostics');
 
     const increaseCutoff = findPressable(renderer, 'juno-cutoffHz-increase');
     await act(async () => {
@@ -123,7 +173,13 @@ describe('JunoPerformancePanel', () => {
       await Promise.resolve();
     });
 
-    expect(setJunoParameter).toHaveBeenCalledWith('juno-track', 'cutoffHz', 1250);
+    expect(setJunoParameter).toHaveBeenCalledWith('juno-track', 'cutoffHz', 2650);
+
+    await act(async () => {
+      findPressable(renderer, 'juno-advanced-toggle').props.onPress();
+      await Promise.resolve();
+    });
+    expect(renderedText(renderer)).toContain('CHORUS');
 
     const chorusTwo = findPressable(renderer, 'juno-chorus-2');
     await act(async () => {
@@ -141,6 +197,35 @@ describe('JunoPerformancePanel', () => {
     });
     expect(setJunoParameter).toHaveBeenCalledWith('juno-track', 'lfoDepth', 0.05);
     expect(setInstrumentParameter).not.toHaveBeenCalled();
+    renderer.unmount();
+  });
+
+  it('previews continuous parameters and commits them when the slider is released', async () => {
+    const renderer = await renderPanel([createJunoTrack()]);
+    const cutoffSlider = findSlider(renderer, 'juno-cutoffHz-slider');
+
+    expect(cutoffSlider.props.accessibilityValue).toEqual({
+      min: 0,
+      max: 100,
+      now: 20,
+      text: '2400 Hz',
+    });
+
+    await act(async () => {
+      cutoffSlider.props.onValueChange(4375);
+      await Promise.resolve();
+    });
+
+    expect(renderedText(renderer)).toContain('4375 Hz');
+    expect(setJunoParameter).not.toHaveBeenCalled();
+
+    await act(async () => {
+      cutoffSlider.props.onSlidingComplete(4375);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(setJunoParameter).toHaveBeenCalledWith('juno-track', 'cutoffHz', 4375);
     renderer.unmount();
   });
 
@@ -194,6 +279,104 @@ describe('JunoPerformancePanel', () => {
     expect(allNotesOff).toHaveBeenCalledWith('juno-node');
   });
 
+  it('gives every key an expanded 44-point target and an assistive activation path', async () => {
+    const renderer = await renderPanel([createJunoTrack()]);
+    const whiteKey = findPressable(renderer, 'juno-key-60');
+    const blackKey = findPressable(renderer, 'juno-key-61');
+    const whiteKeyStyle = flattenStyle(whiteKey.props.style({ pressed: false }));
+    const blackKeyStyle = flattenStyle(blackKey.props.style({ pressed: false }));
+
+    expect(Number(whiteKeyStyle.minWidth)).toBeGreaterThanOrEqual(44);
+    expect(blackKey.props.hitSlop).toEqual({
+      bottom: 0,
+      left: 8,
+      right: 8,
+      top: 0,
+    });
+    expect(
+      Number(blackKeyStyle.width) +
+        blackKey.props.hitSlop.left +
+        blackKey.props.hitSlop.right,
+    ).toBeGreaterThanOrEqual(44);
+    expect(whiteKey.props.onAccessibilityTap).toEqual(expect.any(Function));
+    expect(blackKey.props.onAccessibilityTap).toEqual(expect.any(Function));
+
+    await act(async () => {
+      whiteKey.props.onAccessibilityTap();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(sendInstrumentMidi).toHaveBeenNthCalledWith(1, 'juno-node', {
+      type: 0,
+      channel: 0,
+      data1: 60,
+      data2: 100,
+    });
+    expect(sendInstrumentMidi).toHaveBeenNthCalledWith(2, 'juno-node', {
+      type: 1,
+      channel: 0,
+      data1: 60,
+      data2: 0,
+    });
+    renderer.unmount();
+  });
+
+  it('surfaces the real keyboard failure beside the keyboard controls', async () => {
+    sendInstrumentMidi.mockRejectedValueOnce(new Error('Native MIDI queue is offline'));
+    const renderer = await renderPanel([createJunoTrack()]);
+
+    await act(async () => {
+      findPressable(renderer, 'juno-key-60').props.onPressIn();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const alert = renderer.root.findByProps({ testID: 'juno-action-error' });
+    const announcement = findAccessibleText(renderer, 'juno-action-error-announcement');
+    expect(alert.parent?.props.testID).toBe('juno-keyboard-section');
+    expect(alert.props.accessibilityLabel).toBeUndefined();
+    expect(alert.props.accessibilityRole).toBeUndefined();
+    expect(alert.props.role).toBeUndefined();
+    expect(alert.props.accessible).not.toBe(true);
+    expect(announcement.props.accessible).toBe(true);
+    expect(announcement.props.accessibilityRole).toBe('text');
+    expect(announcement.props.accessibilityLiveRegion).toBe('assertive');
+    expect(announcement.props.accessibilityLabel).toBe(
+      'Juno action failed. Native MIDI queue is offline',
+    );
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      'Juno action failed. Native MIDI queue is offline',
+      {
+        queue: true,
+      },
+    );
+    expect(renderedText(renderer)).toContain('Native MIDI queue is offline');
+    renderer.unmount();
+  });
+
+  it('uses two parameter columns on a compact phone with large text', async () => {
+    const dimensions = jest.spyOn(ReactNative, 'useWindowDimensions').mockReturnValue({
+      fontScale: 2,
+      height: 740,
+      scale: 3,
+      width: 350,
+    });
+
+    try {
+      const renderer = await renderPanel([createJunoTrack()]);
+      const pulseControl = renderer.root.findByProps({
+        testID: 'juno-control-pulseWidth',
+      });
+
+      expect(flattenStyle(pulseControl.props.style).flexBasis).toBe('47%');
+      renderer.unmount();
+    } finally {
+      dimensions.mockRestore();
+    }
+  });
+
   it('targets live notes and patch edits at the explicitly selected Juno part', async () => {
     const first = createJunoTrack();
     const second: TrackViewModel = {
@@ -223,7 +406,7 @@ describe('JunoPerformancePanel', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(setJunoParameter).toHaveBeenCalledWith('juno-track-2', 'cutoffHz', 1250);
+    expect(setJunoParameter).toHaveBeenCalledWith('juno-track-2', 'cutoffHz', 2650);
     renderer.unmount();
   });
 
@@ -236,7 +419,9 @@ describe('JunoPerformancePanel', () => {
     });
     const renderer = await renderPanel([createJunoTrack()]);
 
-    expect(JSON.stringify(renderer.toJSON())).toContain('Live Juno controls unavailable');
+    expect(renderedText(renderer)).toContain(
+      'Patch edits save normally; live keys require the native audio bridge.',
+    );
     expect(findPressable(renderer, 'juno-key-60').props.disabled).toBe(true);
 
     const increaseCutoff = findPressable(renderer, 'juno-cutoffHz-increase');
@@ -246,7 +431,7 @@ describe('JunoPerformancePanel', () => {
       await Promise.resolve();
     });
 
-    expect(setJunoParameter).toHaveBeenCalledWith('juno-track', 'cutoffHz', 1250);
+    expect(setJunoParameter).toHaveBeenCalledWith('juno-track', 'cutoffHz', 2650);
     expect(setInstrumentParameter).not.toHaveBeenCalled();
     renderer.unmount();
   });

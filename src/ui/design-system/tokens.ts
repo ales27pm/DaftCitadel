@@ -20,6 +20,32 @@ export type ColorTokens = {
   statusCritical: string;
 };
 
+export const STUDIO_ACCENT_PALETTES = ['mint', 'cyan', 'magenta', 'amber'] as const;
+export type StudioAccentPalette = (typeof STUDIO_ACCENT_PALETTES)[number];
+
+export const STUDIO_SURFACES = ['carbon', 'grid', 'spectral'] as const;
+export type StudioSurface = (typeof STUDIO_SURFACES)[number];
+
+export const INTERFACE_DENSITIES = ['comfortable', 'compact'] as const;
+export type InterfaceDensity = (typeof INTERFACE_DENSITIES)[number];
+
+export const GLOW_INTENSITIES = ['calm', 'balanced', 'vivid'] as const;
+export type GlowIntensity = (typeof GLOW_INTENSITIES)[number];
+
+export interface StudioAppearance {
+  accentPalette: StudioAccentPalette;
+  surface: StudioSurface;
+  density: InterfaceDensity;
+  glow: GlowIntensity;
+}
+
+export const DEFAULT_STUDIO_APPEARANCE: Readonly<StudioAppearance> = {
+  accentPalette: 'mint',
+  surface: 'carbon',
+  density: 'comfortable',
+  glow: 'balanced',
+};
+
 export interface SpacingScale {
   none: 0;
   xs: number;
@@ -46,6 +72,21 @@ export interface ElevationScale {
 export interface OpacityScale {
   disabled: number;
   overlay: number;
+}
+
+export interface EffectsScale {
+  glowOpacity: number;
+  glowRadius: number;
+  surfaceTextureOpacity: number;
+}
+
+export interface MotionScale {
+  fast: number;
+  standard: number;
+  ambient: number;
+  ambientOpacityFloor: number;
+  ambientScaleDelta: number;
+  ambientTravel: number;
 }
 
 export interface TypographyScale {
@@ -75,11 +116,14 @@ export interface TypographyScale {
 }
 
 export interface ThemeTokens {
+  appearance: StudioAppearance;
   colors: ColorTokens;
   spacing: SpacingScale;
   radii: RadiusScale;
   elevation: ElevationScale;
   opacity: OpacityScale;
+  effects: EffectsScale;
+  motion: MotionScale;
   typography: TypographyScale;
   scheme: ColorSchemeName;
 }
@@ -88,24 +132,25 @@ export interface ThemeTokens {
 // The light scheme is a slightly brighter dark theme until a true light mode ships.
 export const lightTokens: ThemeTokens = {
   scheme: 'light',
+  appearance: { ...DEFAULT_STUDIO_APPEARANCE },
   colors: {
-    background: '#08090F',
-    surface: '#0E1120',
-    surfaceElevated: '#151B31',
-    surfaceVariant: '#11162A',
-    textPrimary: '#F5F6FF',
-    textSecondary: '#CED4FF',
-    textTertiary: '#8C94C6',
-    border: 'rgba(80, 227, 194, 0.42)',
-    accentPrimary: '#50E3C2',
-    accentPrimaryInk: '#03100C',
-    accentSecondary: '#FB3EFF',
-    accentTertiary: '#25C1FF',
-    waveform: '#25C1FF',
-    midiNote: '#FB3EFF',
-    statusSuccess: '#3BEA7B',
-    statusWarning: '#FFC857',
-    statusCritical: '#FF6B6B',
+    background: '#080B12',
+    surface: '#0D121C',
+    surfaceElevated: '#141B28',
+    surfaceVariant: '#111722',
+    textPrimary: '#F7F8FB',
+    textSecondary: '#BBC3D2',
+    textTertiary: '#7E899B',
+    border: 'rgba(158, 173, 196, 0.24)',
+    accentPrimary: '#5CE5B5',
+    accentPrimaryInk: '#03110C',
+    accentSecondary: '#E75DC7',
+    accentTertiary: '#58C6E8',
+    waveform: '#58C6E8',
+    midiNote: '#E75DC7',
+    statusSuccess: '#55D992',
+    statusWarning: '#F3C66B',
+    statusCritical: '#F0787E',
   },
   spacing: {
     none: 0,
@@ -131,8 +176,21 @@ export const lightTokens: ThemeTokens = {
     disabled: 0.38,
     overlay: 0.64,
   },
+  effects: {
+    glowOpacity: 0.055,
+    glowRadius: 14,
+    surfaceTextureOpacity: 0.1,
+  },
+  motion: {
+    fast: 160,
+    standard: 260,
+    ambient: 5200,
+    ambientOpacityFloor: 0.68,
+    ambientScaleDelta: 0.03,
+    ambientTravel: 4,
+  },
   typography: {
-    fontFamily: 'Inter',
+    fontFamily: 'System',
     weights: {
       regular: '400',
       medium: '600',
@@ -162,29 +220,183 @@ export const darkTokens: ThemeTokens = {
   ...lightTokens,
   scheme: 'dark',
   colors: {
-    background: '#03050A',
-    surface: '#060A14',
-    surfaceElevated: '#0D1427',
-    surfaceVariant: '#0A1021',
-    textPrimary: '#FFFFFF',
-    textSecondary: '#C8CCFF',
-    textTertiary: '#8991C3',
-    border: 'rgba(92, 255, 202, 0.46)',
-    accentPrimary: '#5CFFCA',
-    accentPrimaryInk: '#02110C',
-    accentSecondary: '#FF63FF',
-    accentTertiary: '#4DD6FF',
-    waveform: '#4DD6FF',
-    midiNote: '#FF63FF',
-    statusSuccess: '#4BFF92',
-    statusWarning: '#FFD46F',
-    statusCritical: '#FF7E7E',
+    background: '#04070D',
+    surface: '#090E17',
+    surfaceElevated: '#111824',
+    surfaceVariant: '#0D141F',
+    textPrimary: '#F8F9FC',
+    textSecondary: '#B8C1D0',
+    textTertiary: '#788496',
+    border: 'rgba(158, 173, 196, 0.22)',
+    accentPrimary: '#5CE5B5',
+    accentPrimaryInk: '#03110C',
+    accentSecondary: '#E75DC7',
+    accentTertiary: '#58C6E8',
+    waveform: '#58C6E8',
+    midiNote: '#E75DC7',
+    statusSuccess: '#55D992',
+    statusWarning: '#F3C66B',
+    statusCritical: '#F0787E',
   },
 };
 
 export const TOKENS_BY_SCHEME: Record<'light' | 'dark', ThemeTokens> = {
   light: lightTokens,
   dark: darkTokens,
+};
+
+const ACCENT_COLORS: Record<
+  StudioAccentPalette,
+  Pick<
+    ColorTokens,
+    | 'accentPrimary'
+    | 'accentPrimaryInk'
+    | 'accentSecondary'
+    | 'accentTertiary'
+    | 'waveform'
+    | 'midiNote'
+  >
+> = {
+  mint: {
+    accentPrimary: '#5CE5B5',
+    accentPrimaryInk: '#03110C',
+    accentSecondary: '#E75DC7',
+    accentTertiary: '#58C6E8',
+    waveform: '#58C6E8',
+    midiNote: '#E75DC7',
+  },
+  cyan: {
+    accentPrimary: '#58C6E8',
+    accentPrimaryInk: '#041116',
+    accentSecondary: '#E75DC7',
+    accentTertiary: '#5CE5B5',
+    waveform: '#72D8F3',
+    midiNote: '#E75DC7',
+  },
+  magenta: {
+    accentPrimary: '#E75DC7',
+    accentPrimaryInk: '#190514',
+    accentSecondary: '#5CE5B5',
+    accentTertiary: '#58C6E8',
+    waveform: '#58C6E8',
+    midiNote: '#F17AD5',
+  },
+  amber: {
+    accentPrimary: '#F3C66B',
+    accentPrimaryInk: '#1A1003',
+    accentSecondary: '#E75DC7',
+    accentTertiary: '#5CE5B5',
+    waveform: '#58C6E8',
+    midiNote: '#E75DC7',
+  },
+};
+
+const GLOW_EFFECTS: Record<
+  GlowIntensity,
+  Pick<EffectsScale, 'glowOpacity' | 'glowRadius'>
+> = {
+  calm: {
+    glowOpacity: 0,
+    glowRadius: 0,
+  },
+  balanced: {
+    glowOpacity: 0.055,
+    glowRadius: 14,
+  },
+  vivid: {
+    glowOpacity: 0.13,
+    glowRadius: 22,
+  },
+};
+
+const AMBIENT_MOTION: Record<
+  GlowIntensity,
+  Pick<
+    MotionScale,
+    'ambient' | 'ambientOpacityFloor' | 'ambientScaleDelta' | 'ambientTravel'
+  >
+> = {
+  calm: {
+    ambient: 6800,
+    ambientOpacityFloor: 0.82,
+    ambientScaleDelta: 0.01,
+    ambientTravel: 1.5,
+  },
+  balanced: {
+    ambient: 5200,
+    ambientOpacityFloor: 0.68,
+    ambientScaleDelta: 0.03,
+    ambientTravel: 4,
+  },
+  vivid: {
+    ambient: 3800,
+    ambientOpacityFloor: 0.58,
+    ambientScaleDelta: 0.045,
+    ambientTravel: 6,
+  },
+};
+
+const SURFACE_OPACITY: Record<StudioSurface, number> = {
+  carbon: 0.1,
+  grid: 0.075,
+  spectral: 0.14,
+};
+
+const resolveAppearance = (appearance?: Partial<StudioAppearance>): StudioAppearance => ({
+  accentPalette: appearance?.accentPalette ?? DEFAULT_STUDIO_APPEARANCE.accentPalette,
+  density: appearance?.density ?? DEFAULT_STUDIO_APPEARANCE.density,
+  glow: appearance?.glow ?? DEFAULT_STUDIO_APPEARANCE.glow,
+  surface: appearance?.surface ?? DEFAULT_STUDIO_APPEARANCE.surface,
+});
+
+const scaleSpacing = (spacing: SpacingScale, density: InterfaceDensity): SpacingScale => {
+  if (density === 'comfortable') {
+    return spacing;
+  }
+  return {
+    none: 0,
+    xs: Math.max(3, Math.round(spacing.xs * 0.8)),
+    sm: Math.max(6, Math.round(spacing.sm * 0.8)),
+    md: Math.max(9, Math.round(spacing.md * 0.8)),
+    lg: Math.max(16, Math.round(spacing.lg * 0.8)),
+    xl: Math.max(22, Math.round(spacing.xl * 0.8)),
+    xxl: Math.max(32, Math.round(spacing.xxl * 0.8)),
+  };
+};
+
+export const createThemeTokens = (
+  scheme: 'light' | 'dark',
+  appearance?: Partial<StudioAppearance>,
+): ThemeTokens => {
+  const base = TOKENS_BY_SCHEME[scheme];
+  const resolvedAppearance = resolveAppearance(appearance);
+  const glow = GLOW_EFFECTS[resolvedAppearance.glow];
+  const ambientMotion = AMBIENT_MOTION[resolvedAppearance.glow];
+  const glowSurfaceMultiplier =
+    resolvedAppearance.glow === 'calm'
+      ? 0.72
+      : resolvedAppearance.glow === 'vivid'
+        ? 1.22
+        : 1;
+
+  return {
+    ...base,
+    appearance: resolvedAppearance,
+    colors: {
+      ...base.colors,
+      ...ACCENT_COLORS[resolvedAppearance.accentPalette],
+    },
+    spacing: scaleSpacing(base.spacing, resolvedAppearance.density),
+    effects: {
+      ...glow,
+      surfaceTextureOpacity:
+        SURFACE_OPACITY[resolvedAppearance.surface] * glowSurfaceMultiplier,
+    },
+    motion: {
+      ...base.motion,
+      ...ambientMotion,
+    },
+  };
 };
 
 export type ThemeIntent =

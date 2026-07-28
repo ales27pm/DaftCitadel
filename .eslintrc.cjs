@@ -26,8 +26,17 @@ module.exports = {
     'import/no-default-export': 'warn',
     '@typescript-eslint/explicit-function-return-type': 'off',
     '@typescript-eslint/no-misused-promises': 'error',
-    'react/prop-types': 'off'
+    'react/prop-types': 'off',
   },
+  overrides: [
+    {
+      files: ['scripts/**/*.js'],
+      rules: {
+        '@typescript-eslint/no-var-requires': 'off',
+        'no-bitwise': 'off',
+      },
+    },
+  ],
   settings: {
     react: {
       version: 'detect',

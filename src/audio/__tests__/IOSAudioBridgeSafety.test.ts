@@ -51,6 +51,8 @@ describe('native audio bridge crash containment', () => {
       'locateTransport',
       'setTransportLoop',
       'getTransportState',
+      'describeGraph',
+      'applyGraph',
       'addNode',
       'registerClipBuffer',
       'unregisterClipBuffer',
@@ -86,15 +88,31 @@ describe('native audio bridge crash containment', () => {
     );
 
     expect(helper.indexOf('try {')).toBeLessThan(helper.indexOf('@try {'));
-    expect(helper.indexOf('@catch (NSException* exception)')).toBeLessThan(
+    expect(helper.indexOf('@catch (id exception)')).toBeLessThan(
       helper.indexOf('catch (const std::exception& ex)'),
     );
+    expect(helper.match(/@catch \(id exception\)/g)).toHaveLength(2);
     expect(helper).toContain('RCTPromiseResolveBlock captureResolve');
     expect(helper).toContain('RCTPromiseRejectBlock captureReject');
     expect(helper).toContain('state != OutcomeState::pending');
     expect(helper.indexOf('resolve(resolvedValue)')).toBeGreaterThan(
       helper.indexOf('catch (...)'),
     );
+    expect(helper).toContain('failed with an unknown native exception');
+  });
+
+  it('converts ordinary string node options without exception-driven numeric parsing', () => {
+    const convertOptions = methodBody(
+      moduleSource,
+      'NodeOptions ConvertOptions(',
+      'NSString* NSStringFromStdString(',
+    );
+
+    expect(convertOptions).toContain('daft::audio::bridge::detail::storeStringOption(');
+    expect(convertOptions).toContain('if (trimmed.empty())');
+    expect(convertOptions).toContain('continue;');
+    expect(convertOptions).not.toContain('std::stod');
+    expect(convertOptions).not.toContain('try {');
   });
 
   it('defers lifecycle and transport Promise callbacks to the shared settlement boundary', () => {
@@ -142,7 +160,9 @@ describe('native audio bridge crash containment', () => {
       '@end',
     );
 
-    expect(moduleSource).toContain('_engineGeneration = AudioEngineBridge::initialize');
+    expect(moduleSource).toMatch(
+      /const auto generation =\s+AudioEngineBridge::initialize/,
+    );
     expect(invalidate).toContain('ShutdownBridgeIfOwner');
     expect(dealloc).toContain('[self invalidate]');
     expect(moduleSource).not.toContain('AudioEngineBridge::shutdown();');
@@ -156,6 +176,8 @@ describe('native audio bridge crash containment', () => {
       'locateTransport',
       'setTransportLoop',
       'getTransportState',
+      'describeGraph',
+      'applyGraph',
       'addNode',
       'removeNode',
       'connect',
@@ -170,7 +192,7 @@ describe('native audio bridge crash containment', () => {
       'getDiagnostics',
     ].forEach((operation) => {
       expect(bridgeHeader).toMatch(
-        new RegExp(`\\b${operation}\\(EngineGeneration generation`),
+        new RegExp(`\\b${operation}\\(\\s*EngineGeneration generation`),
       );
     });
     expect(bridgeSource).toContain('requireGenerationLocked(generation)');

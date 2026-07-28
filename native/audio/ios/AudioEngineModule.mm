@@ -78,20 +78,8 @@ NodeOptions ConvertOptions(NSDictionary* options) {
       if (trimmed.empty()) {
         continue;
       }
-      converted.setString(normalizedKey, trimmed);
-      const std::string lowered = ToLowerCopy(trimmed);
-      if (lowered == "true" || lowered == "yes" || lowered == "on") {
-        converted.setNumeric(normalizedKey, 1.0);
-      } else if (lowered == "false" || lowered == "no" || lowered == "off") {
-        converted.setNumeric(normalizedKey, 0.0);
-      } else {
-        try {
-          const double parsed = std::stod(trimmed);
-          converted.setNumeric(normalizedKey, parsed);
-        } catch (const std::exception&) {
-          // keep as string only
-        }
-      }
+      daft::audio::bridge::detail::storeStringOption(converted, normalizedKey,
+                                                     trimmed);
     }
   }
   return converted;
@@ -211,9 +199,14 @@ void RejectPromise(RCTPromiseRejectBlock reject, NSString* code, const std::stri
 }
 
 void RejectObjectiveCException(RCTPromiseRejectBlock reject, NSString* code,
-                               NSString* operation, NSException* exception) {
-  NSString* reason = exception.reason ?: @"No exception reason supplied";
-  NSString* exceptionName = exception.name ?: @"NSException";
+                               NSString* operation, id exception) {
+  const BOOL isNativeException = [exception isKindOfClass:[NSException class]];
+  NSException* nativeException =
+      isNativeException ? (NSException*)exception : nil;
+  NSString* reason =
+      nativeException.reason ?: [exception description] ?: @"No exception reason supplied";
+  NSString* exceptionName =
+      nativeException.name ?: NSStringFromClass([exception class]) ?: @"Objective-C exception";
   NSString* message = [NSString stringWithFormat:@"%@ failed: %@", operation, reason];
   NSError* error = [NSError errorWithDomain:@"dev.daftcitadel.audio-bridge"
                                        code:1
@@ -228,10 +221,16 @@ void RejectObjectiveCException(RCTPromiseRejectBlock reject, NSString* code,
   reject(code, message, error);
 }
 
-void LogObjectiveCException(NSString* operation, NSException* exception) {
+void LogObjectiveCException(NSString* operation, id exception) {
+  const BOOL isNativeException = [exception isKindOfClass:[NSException class]];
+  NSException* nativeException =
+      isNativeException ? (NSException*)exception : nil;
   os_log_error(ModuleLogger(), "%{public}@ raised %{public}@: %{public}@",
-               operation, exception.name ?: @"NSException",
-               exception.reason ?: @"No exception reason supplied");
+               operation,
+               nativeException.name ?: NSStringFromClass([exception class]) ?:
+                   @"Objective-C exception",
+               nativeException.reason ?: [exception description] ?:
+                   @"No exception reason supplied");
 }
 
 void PerformPromiseOperation(RCTPromiseRejectBlock reject, NSString* code,
@@ -267,14 +266,16 @@ void PerformPromiseOperation(RCTPromiseRejectBlock reject, NSString* code,
   try {
     @try {
       body(captureResolve, captureReject);
-    } @catch (NSException* exception) {
+    } @catch (id exception) {
       RejectObjectiveCException(captureReject, code, operation, exception);
     }
   } catch (const std::exception& ex) {
     os_log_error(ModuleLogger(), "%{public}@ failed: %{public}s", operation, ex.what());
     RejectPromise(captureReject, code, ex.what());
   } catch (...) {
-    NSString* message = [NSString stringWithFormat:@"%@ failed", operation];
+    NSString* message =
+        [NSString stringWithFormat:@"%@ failed with an unknown native exception",
+                                   operation];
     os_log_error(ModuleLogger(), "%{public}@ failed with an unknown C++ exception", operation);
     captureReject(code, message, nil);
   }
@@ -290,7 +291,7 @@ void PerformPromiseOperation(RCTPromiseRejectBlock reject, NSString* code,
     } else {
       reject(rejectedCode, rejectedMessage, rejectedError);
     }
-  } @catch (NSException* exception) {
+  } @catch (id exception) {
     LogObjectiveCException([operation stringByAppendingString:@" promise settlement"], exception);
   }
 }

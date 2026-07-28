@@ -30,18 +30,12 @@ describe('instrument native bridge contract', () => {
   const sceneGraph = readRepositoryFile('audio-engine/src/SceneGraph.cpp');
   const controlPlane = readRepositoryFile('audio-engine/src/RealtimeControlPlane.cpp');
 
-  const operations = [
-    'sendMidiEvent',
-    'sendMidiEvents',
-    'setInstrumentParameter',
-    'sendInstrumentParameters',
-    'allNotesOff',
-  ];
+  const operations = ['sendInstrumentMidi', 'allNotesOff'];
 
   it('exports matching promise APIs on iOS and Android', () => {
     operations.forEach((operation) => {
       expect(iosModule).toContain(`RCT_EXPORT_METHOD(${operation}:`);
-      expect(androidModule).toMatch(new RegExp(`fun\s+${operation}\(`));
+      expect(androidModule).toMatch(new RegExp(`fun\\s+${operation}\\(`));
     });
   });
 
@@ -55,9 +49,10 @@ describe('instrument native bridge contract', () => {
     expect(iosBridge).toContain('realtimePlane_.enqueueBatch(');
     expect(androidBridge).toContain('realtimePlane_.enqueueBatch(');
     expect(controlPlane).toContain('commandQueue_.tryPop(command)');
-    expect(androidJni).toContain('AudioEngineBridge::scheduleInstrumentEvents');
-    expect(androidJni).toContain('nativeSendMidiEvents');
-    expect(androidJni).toContain('nativeSendInstrumentParameters');
+    expect(androidJni).toContain('AudioEngineBridge::scheduleInstrumentEventFromNow');
+    expect(androidJni).toContain('nativeSendInstrumentMidi');
+    expect(androidJni).toContain('AudioEngineBridge::allNotesOff');
+    expect(androidJni).toContain('nativeAllNotesOff');
   });
 
   it('exposes native transport looping on both mobile bridges', () => {

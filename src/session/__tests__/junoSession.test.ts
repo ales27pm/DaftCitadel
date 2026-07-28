@@ -98,7 +98,7 @@ describe('Juno session model', () => {
     };
     const restored = deserializeSession(payload);
 
-    expect(envelope.schemaVersion).toBe(1);
+    expect(envelope.schemaVersion).toBe(2);
     expect(envelope.session.tracks[0].clips[0]).not.toHaveProperty('audioFile');
     expect(restored).toEqual(session);
     expect(findInstrument(restored.tracks[0])).toMatchObject({
@@ -154,6 +154,34 @@ describe('Juno session model', () => {
     expect(() => validateSession(createSessionWithTrack(track))).toThrow(
       'MIDI pulsesPerQuarter must be a positive integer',
     );
+  });
+
+  it('rejects invalid MIDI and instrument values in schema-v2 payloads', () => {
+    const invalidMidiTrack = createDefaultJunoTrack('juno-track');
+    const invalidMidiClip = createMidiClip();
+    invalidMidiClip.midi!.notes[0].pitch = 60.5;
+    invalidMidiTrack.clips = [invalidMidiClip];
+
+    expect(() =>
+      deserializeSession(
+        JSON.stringify({
+          schemaVersion: 2,
+          session: createSessionWithTrack(invalidMidiTrack),
+        }),
+      ),
+    ).toThrow('Invalid MIDI pitch');
+
+    const invalidInstrumentTrack = createDefaultJunoTrack('juno-track');
+    findInstrument(invalidInstrumentTrack).parameters.lfoRateHz = 0;
+
+    expect(() =>
+      deserializeSession(
+        JSON.stringify({
+          schemaVersion: 2,
+          session: createSessionWithTrack(invalidInstrumentTrack),
+        }),
+      ),
+    ).toThrow('parameter lfoRateHz must be between 0.05 and 20 Hz');
   });
 
   it('rejects invalid persisted instrument parameters and preset versions', () => {

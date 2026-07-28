@@ -1,6 +1,8 @@
-import React, { PropsWithChildren, useEffect, useState } from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import React, { PropsWithChildren, useCallback, useEffect, useState } from 'react';
+import { Platform, View } from 'react-native';
 
+import { isNativeModuleAvailable } from '../../audio';
+import { ScreenState, useTheme } from '../design-system';
 import { SessionViewModelProvider } from './SessionViewModelProvider';
 import {
   NativeAudioUnavailableError,
@@ -14,8 +16,10 @@ import {
 const APP_ENVIRONMENT_CONTEXT = 'app session environment';
 
 export const SessionAppProvider: React.FC<PropsWithChildren> = ({ children }) => {
+  const theme = useTheme();
   const [environment, setEnvironment] = useState<SessionEnvironment | null>(null);
   const [error, setError] = useState<Error | null>(null);
+  const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
 
   useSessionEnvironmentLifecycle(environment, {
     context: APP_ENVIRONMENT_CONTEXT,
@@ -23,9 +27,14 @@ export const SessionAppProvider: React.FC<PropsWithChildren> = ({ children }) =>
 
   useEffect(() => {
     let cancelled = false;
-    const shouldUseProduction = !__DEV__;
+    const bridgePreference = resolveNativeBridgePreference();
+    const forcePassiveDevelopmentPreview = __DEV__ && bridgePreference === false;
+    const shouldUseProduction =
+      !forcePassiveDevelopmentPreview &&
+      (!__DEV__ || (Platform.OS !== 'web' && isNativeModuleAvailable()));
 
     const bootstrap = async () => {
+      setError(null);
       try {
         const created = await bootstrapEnvironment(shouldUseProduction);
         if (cancelled) {
@@ -46,19 +55,58 @@ export const SessionAppProvider: React.FC<PropsWithChildren> = ({ children }) =>
     return () => {
       cancelled = true;
     };
+  }, [bootstrapAttempt]);
+
+  const retryBootstrap = useCallback(() => {
+    setEnvironment(null);
+    setError(null);
+    setBootstrapAttempt((attempt) => attempt + 1);
   }, []);
 
   if (error) {
     return (
-      <View style={styles.bootstrapErrorContainer}>
-        <Text style={styles.bootstrapErrorTitle}>Session unavailable</Text>
-        <Text style={styles.bootstrapErrorBody}>{error.message}</Text>
+      <View
+        style={{
+          alignItems: 'center',
+          backgroundColor: theme.colors.background,
+          flex: 1,
+          justifyContent: 'center',
+          padding: theme.spacing.lg,
+        }}
+      >
+        <View style={{ maxWidth: 520, width: '100%' }}>
+          <ScreenState
+            actionLabel="Try again"
+            kind="error"
+            message={error.message}
+            onAction={retryBootstrap}
+            title="Session unavailable"
+          />
+        </View>
       </View>
     );
   }
 
   if (!environment) {
-    return null;
+    return (
+      <View
+        style={{
+          alignItems: 'center',
+          backgroundColor: theme.colors.background,
+          flex: 1,
+          justifyContent: 'center',
+          padding: theme.spacing.lg,
+        }}
+      >
+        <View style={{ maxWidth: 520, width: '100%' }}>
+          <ScreenState
+            kind="loading"
+            message="Starting the audio session and restoring your workspace."
+            title="Preparing Daft Citadel"
+          />
+        </View>
+      </View>
+    );
   }
 
   return (
@@ -78,7 +126,7 @@ const bootstrapEnvironment = async (
   shouldUseProduction: boolean,
 ): Promise<SessionEnvironment> => {
   const isWebBridgeDisabled =
-    Platform.OS === 'web' && resolveWebNativeBridgePreference() === false;
+    Platform.OS === 'web' && resolveNativeBridgePreference() === false;
   if (isWebBridgeDisabled) {
     if (__DEV__) {
       console.info('Forcing passive session environment due web preview setting.');
@@ -111,7 +159,7 @@ const bootstrapEnvironment = async (
   }
 };
 
-const resolveWebNativeBridgePreference = (): boolean | undefined => {
+const resolveNativeBridgePreference = (): boolean | undefined => {
   if (typeof process === 'undefined' || typeof process.env === 'undefined') {
     return undefined;
   }
@@ -139,24 +187,3 @@ const resolveWebNativeBridgePreference = (): boolean | undefined => {
   }
   return undefined;
 };
-
-const styles = StyleSheet.create({
-  bootstrapErrorContainer: {
-    alignItems: 'center',
-    flex: 1,
-    justifyContent: 'center',
-    padding: 24,
-  },
-  bootstrapErrorTitle: {
-    color: '#111111',
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  bootstrapErrorBody: {
-    color: '#444444',
-    fontSize: 14,
-    textAlign: 'center',
-  },
-});

@@ -7,6 +7,7 @@ void RunClipPlayerNodeTests();
 void RunPluginNodeTests();
 void RunJunoCoreTests();
 void RunInstrumentNodeTests();
+void RunNodeFactoryTests();
 void RunRealtimeControlQueueTests();
 void RunRealtimeControlPlaneTests();
 void RunSceneGraphTests();
@@ -24,6 +25,7 @@ int main() {
     daft::audio::tests::RunPluginNodeTests();
     daft::audio::tests::RunJunoCoreTests();
     daft::audio::tests::RunInstrumentNodeTests();
+    daft::audio::tests::RunNodeFactoryTests();
     daft::audio::tests::RunRealtimeControlQueueTests();
     daft::audio::tests::RunRealtimeControlPlaneTests();
   } catch (const std::exception& ex) {

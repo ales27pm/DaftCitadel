@@ -119,7 +119,7 @@ describe('createSessionActions', () => {
       clips: [],
       muted: false,
       solo: false,
-      volume: 0,
+      volume: -6,
       pan: 0,
     });
     expect(instrument).toMatchObject({

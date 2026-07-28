@@ -1,8 +1,19 @@
 import React from 'react';
+import { AccessibilityInfo, Text, View } from 'react-native';
 import TestRenderer, { act } from 'react-test-renderer';
 
 import { ThemeProvider } from '../../design-system';
 import { PerformanceScreen } from '../PerformanceScreen';
+
+jest.mock('@expo/vector-icons/MaterialCommunityIcons', () => 'MaterialCommunityIcons');
+
+jest.mock('expo-symbols', () => ({
+  SymbolView: 'SymbolView',
+}));
+
+jest.mock('react-native-safe-area-context', () => ({
+  SafeAreaView: 'SafeAreaView',
+}));
 
 jest.mock('../../session', () => ({
   useInstrumentControls: jest.fn(),
@@ -30,6 +41,10 @@ const {
 const { useUserPreferences } = jest.requireMock('../../settings');
 const { useAdaptiveLayout } = jest.requireMock('../../layout');
 
+(
+  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
+
 const play = jest.fn(async () => undefined);
 const stop = jest.fn(async () => undefined);
 const locateStart = jest.fn(async () => undefined);
@@ -50,6 +65,7 @@ const setTrackSolo = jest.fn(async () => undefined);
 const setTrackVolume = jest.fn(async () => undefined);
 const setJunoParameter = jest.fn(async () => undefined);
 const applyJunoPreset = jest.fn(async () => undefined);
+const scrollTo = jest.fn();
 
 const instrumentParameters = {
   pulseWidth: 0.5,
@@ -111,6 +127,10 @@ const renderScreen = async () => {
       <ThemeProvider>
         <PerformanceScreen />
       </ThemeProvider>,
+      {
+        createNodeMock: (element) =>
+          element.type === 'ScrollView' ? { scrollTo } : null,
+      },
     );
     await Promise.resolve();
   });
@@ -118,6 +138,27 @@ const renderScreen = async () => {
     throw new Error('Renderer not initialized');
   }
   return renderer;
+};
+
+const renderedText = (renderer: TestRenderer.ReactTestRenderer): string =>
+  renderer.root
+    .findAllByType(Text)
+    .flatMap((node) =>
+      node.children.filter((child): child is string => typeof child === 'string'),
+    )
+    .join(' ');
+
+const findAccessibleText = (
+  renderer: TestRenderer.ReactTestRenderer,
+  testID: string,
+): TestRenderer.ReactTestInstance => {
+  const text = renderer.root
+    .findAllByType(Text)
+    .find((candidate) => candidate.props.testID === testID);
+  if (!text) {
+    throw new Error(`Accessible text ${testID} not found`);
+  }
+  return text;
 };
 
 describe('PerformanceScreen Juno looper', () => {
@@ -222,6 +263,168 @@ describe('PerformanceScreen Juno looper', () => {
     duplicateJunoMidiScene.mockResolvedValue({ tracks: [] });
   });
 
+  it('switches explicitly between the scene launcher and instrument workspace', async () => {
+    const renderer = await renderScreen();
+    const scenesTab = renderer.root.findByProps({ accessibilityLabel: 'Scenes' });
+    const instrumentTab = renderer.root.findByProps({
+      accessibilityLabel: 'Instrument',
+    });
+
+    expect(scenesTab.props.accessibilityRole).toBe('tab');
+    expect(scenesTab.props.accessibilityState).toEqual({ selected: true });
+    expect(
+      renderer.root.findByProps({ testID: 'performance-scenes-panel' }).props.role,
+    ).toBe('tabpanel');
+    expect(renderer.root.findAllByProps({ testID: 'juno-scene-pad-grid' })).toHaveLength(
+      1,
+    );
+
+    await act(async () => {
+      instrumentTab.props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(
+      renderer.root.findByProps({ accessibilityLabel: 'Instrument' }).props
+        .accessibilityState,
+    ).toEqual({ selected: true });
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Instrument' })).toBe(
+      instrumentTab,
+    );
+    expect(renderer.root.findByProps({ accessibilityLabel: 'Scenes' })).toBe(scenesTab);
+    expect(scrollTo).toHaveBeenCalledWith({ animated: false, y: 0 });
+    expect(
+      renderer.root.findByProps({ testID: 'performance-instrument-panel' }).props.role,
+    ).toBe('tabpanel');
+    expect(renderer.root.findAllByProps({ testID: 'juno-scene-pad-grid' })).toHaveLength(
+      0,
+    );
+    expect(renderedText(renderer)).toContain('Juno-106');
+    renderer.unmount();
+  }, 15_000);
+
+  it('renders the performance signal art as a decorative header', async () => {
+    const renderer = await renderScreen();
+    const header = renderer.root.findByProps({
+      testID: 'performance-signal-header',
+    });
+
+    expect(header.props.accessible).toBe(false);
+    expect(header.props.contentFit).toBe('cover');
+    renderer.unmount();
+  });
+
+  it('honors the diagnostics visibility preference', async () => {
+    const visibleRenderer = await renderScreen();
+    const visibleDiagnostics = visibleRenderer.root.findAll(
+      (node) => node.type === View && node.props.testID === 'performance-diagnostics',
+    );
+    expect(visibleDiagnostics).toHaveLength(1);
+    expect(visibleDiagnostics[0]?.props.role).toBe('status');
+    visibleRenderer.unmount();
+
+    useUserPreferences.mockReturnValue({
+      preferences: { autoPlayScenes: true, showDiagnostics: false },
+    });
+    const hiddenRenderer = await renderScreen();
+    expect(
+      hiddenRenderer.root.findAllByProps({ testID: 'performance-diagnostics' }),
+    ).toHaveLength(0);
+    hiddenRenderer.unmount();
+  }, 15_000);
+
+  it('announces loading separately and withholds interactive workspaces', async () => {
+    useSessionViewModel.mockReturnValue({
+      ...useSessionViewModel(),
+      status: 'loading',
+    });
+    const renderer = await renderScreen();
+
+    const loading = renderer.root.findByProps({
+      testID: 'performance-session-loading',
+    });
+    expect(loading.props.role).toBe('status');
+    expect(loading.props.accessibilityLiveRegion).toBe('polite');
+    expect(
+      renderer.root.findAllByProps({ testID: 'performance-mode-switch' }),
+    ).toHaveLength(0);
+    renderer.unmount();
+  });
+
+  it('surfaces refresh failures as an accessible alert and permits another attempt', async () => {
+    refresh.mockRejectedValueOnce(new Error('Session refresh timed out'));
+    const renderer = await renderScreen();
+
+    await act(async () => {
+      renderer.root.findByProps({ accessibilityLabel: 'Refresh' }).props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const alert = renderer.root.findByProps({ testID: 'performance-action-error' });
+    const announcement = findAccessibleText(
+      renderer,
+      'performance-action-error-announcement',
+    );
+    expect(alert.props.role).toBeUndefined();
+    expect(alert.props.accessibilityLabel).toBeUndefined();
+    expect(alert.props.accessible).not.toBe(true);
+    expect(announcement.props.accessible).toBe(true);
+    expect(announcement.props.accessibilityRole).toBe('text');
+    expect(announcement.props.accessibilityLiveRegion).toBe('assertive');
+    expect(announcement.props.accessibilityLabel).toBe(
+      'Performance action failed. Session refresh timed out',
+    );
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      'Performance action failed. Session refresh timed out',
+      {
+        queue: true,
+      },
+    );
+    expect(renderedText(renderer)).toContain('Session refresh timed out');
+
+    await act(async () => {
+      renderer.root.findByProps({ accessibilityLabel: 'Refresh' }).props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(refresh).toHaveBeenCalledTimes(2);
+    renderer.unmount();
+  });
+
+  it('announces diagnostics failures without grouping the status panel', async () => {
+    useSessionViewModel.mockReturnValue({
+      ...useSessionViewModel(),
+      diagnostics: {
+        error: new Error('Render telemetry timed out'),
+        renderLoad: 0,
+        status: 'error',
+        xruns: 0,
+      },
+    });
+    const renderer = await renderScreen();
+    const diagnostics = renderer.root.findByProps({
+      testID: 'performance-diagnostics',
+    });
+    const announcement = findAccessibleText(
+      renderer,
+      'performance-diagnostics-error-announcement',
+    );
+
+    expect(diagnostics.props.role).toBeUndefined();
+    expect(diagnostics.props.accessibilityLabel).toBeUndefined();
+    expect(diagnostics.props.accessible).not.toBe(true);
+    expect(announcement.props.accessibilityLabel).toBe(
+      'Audio engine diagnostics failed. Render telemetry timed out',
+    );
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      'Audio engine diagnostics failed. Render telemetry timed out',
+      { queue: true },
+    );
+    renderer.unmount();
+  });
+
   it('renders a complete 4x4 scene grid and launches a native loop', async () => {
     const renderer = await renderScreen();
     expect(renderer.root.findAllByProps({ testID: 'juno-scene-pad' })).toHaveLength(1);
@@ -231,7 +434,7 @@ describe('PerformanceScreen Juno looper', () => {
 
     await act(async () => {
       renderer.root
-        .findByProps({ accessibilityLabel: 'Scene 1, 1 part' })
+        .findByProps({ accessibilityLabel: 'Scene 1, 1 part, loop' })
         .props.onPress();
       await Promise.resolve();
       await Promise.resolve();
@@ -244,6 +447,125 @@ describe('PerformanceScreen Juno looper', () => {
     renderer.unmount();
   });
 
+  it('announces scene playback and mute state directly in each pad label', async () => {
+    useTransportControls.mockReturnValue({
+      ...useTransportControls(),
+      isPlaying: true,
+    });
+    const playingRenderer = await renderScreen();
+    expect(
+      playingRenderer.root.findByProps({
+        accessibilityLabel: 'Scene 1, 1 part, playing',
+      }),
+    ).toBeTruthy();
+    playingRenderer.unmount();
+
+    useSessionViewModel.mockReturnValue({
+      ...useSessionViewModel(),
+      tracks: [{ ...junoTrack, muted: true }],
+    });
+    const mutedRenderer = await renderScreen();
+    expect(
+      mutedRenderer.root.findByProps({
+        accessibilityLabel: 'Scene 1, 1 part, muted',
+      }),
+    ).toBeTruthy();
+    mutedRenderer.unmount();
+  });
+
+  it('announces a scene while its native launch is starting', async () => {
+    let resolveLoopConfiguration: (() => void) | undefined;
+    setLoopBeats.mockImplementationOnce(
+      () =>
+        new Promise<undefined>((resolve) => {
+          resolveLoopConfiguration = () => resolve(undefined);
+        }),
+    );
+    const renderer = await renderScreen();
+
+    await act(async () => {
+      renderer.root
+        .findByProps({ accessibilityLabel: 'Scene 1, 1 part, loop' })
+        .props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(
+      renderer.root.findByProps({
+        accessibilityLabel: 'Scene 1, 1 part, starting',
+      }),
+    ).toBeTruthy();
+
+    await act(async () => {
+      resolveLoopConfiguration?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    renderer.unmount();
+  });
+
+  it('surfaces the native launch error beside the scene grid with its real message', async () => {
+    setLoopBeats.mockRejectedValueOnce(new Error('Native loop graph rejected the scene'));
+    const renderer = await renderScreen();
+
+    await act(async () => {
+      renderer.root
+        .findByProps({ accessibilityLabel: 'Scene 1, 1 part, loop' })
+        .props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const alert = renderer.root.findByProps({ testID: 'looper-grid-action-error' });
+    const announcement = findAccessibleText(
+      renderer,
+      'looper-grid-action-error-announcement',
+    );
+    expect(alert.props.accessibilityLabel).toBeUndefined();
+    expect(alert.props.accessibilityRole).toBeUndefined();
+    expect(alert.props.role).toBeUndefined();
+    expect(alert.props.accessible).not.toBe(true);
+    expect(announcement.props.accessibilityLabel).toBe(
+      'Looper action failed. Native loop graph rejected the scene',
+    );
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      'Looper action failed. Native loop graph rejected the scene',
+      { queue: true },
+    );
+    expect(renderedText(renderer)).toContain('Native loop graph rejected the scene');
+    renderer.unmount();
+  });
+
+  it('surfaces selected-part failures beside the selected scene controls', async () => {
+    setTrackMuted.mockRejectedValueOnce(new Error('Mixer route is locked'));
+    const renderer = await renderScreen();
+
+    await act(async () => {
+      renderer.root.findByProps({ testID: 'loop-mute' }).props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const alert = renderer.root.findByProps({
+      testID: 'looper-selection-action-error',
+    });
+    const announcement = findAccessibleText(
+      renderer,
+      'looper-selection-action-error-announcement',
+    );
+    expect(alert.props.accessibilityLabel).toBeUndefined();
+    expect(alert.props.accessibilityRole).toBeUndefined();
+    expect(alert.props.role).toBeUndefined();
+    expect(alert.props.accessible).not.toBe(true);
+    expect(announcement.props.accessibilityLabel).toBe(
+      'Looper action failed. Mixer route is locked',
+    );
+    expect(renderedText(renderer)).toContain('Mixer route is locked');
+    renderer.unmount();
+  });
+
   it('selects without playback when auto-play is off and keeps an explicit launch', async () => {
     useUserPreferences.mockReturnValue({
       preferences: { autoPlayScenes: false, showDiagnostics: true },
@@ -252,7 +574,7 @@ describe('PerformanceScreen Juno looper', () => {
 
     await act(async () => {
       renderer.root
-        .findByProps({ accessibilityLabel: 'Scene 1, 1 part' })
+        .findByProps({ accessibilityLabel: 'Scene 1, 1 part, loop' })
         .props.onPress();
       await Promise.resolve();
     });
@@ -273,6 +595,11 @@ describe('PerformanceScreen Juno looper', () => {
       tracks: [],
     });
     const renderer = await renderScreen();
+    const emptyIllustration = renderer.root.findByProps({
+      testID: 'juno-scene-launcher-empty-illustration',
+    });
+    expect(emptyIllustration.props.accessible).toBe(false);
+    expect(emptyIllustration.props.contentFit).toBe('contain');
 
     await act(async () => {
       renderer.root.findByProps({ accessibilityLabel: 'Add scene 1' }).props.onPress();
@@ -286,6 +613,17 @@ describe('PerformanceScreen Juno looper', () => {
       name: 'Scene 1 · Part 1',
       trackName: 'Juno Part 1',
     });
+    renderer.unmount();
+  });
+
+  it('does not show scene-launcher empty art when a persisted scene exists', async () => {
+    const renderer = await renderScreen();
+
+    expect(
+      renderer.root.findAllByProps({
+        testID: 'juno-scene-launcher-empty-illustration',
+      }),
+    ).toHaveLength(0);
     renderer.unmount();
   });
 
@@ -421,6 +759,11 @@ describe('PerformanceScreen Juno looper', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
+    expect(
+      renderer.root.findByProps({
+        accessibilityLabel: 'Scene 1, 1 part, recording',
+      }),
+    ).toBeTruthy();
     const c4 = renderer.root.findByProps({ accessibilityLabel: 'Play Juno C4' });
     await act(async () => {
       c4.props.onPressIn();
@@ -481,6 +824,11 @@ describe('PerformanceScreen Juno looper', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
+    expect(
+      renderer.root.findByProps({
+        accessibilityLabel: 'Scene 1, 1 part, overdub',
+      }),
+    ).toBeTruthy();
     const c4 = renderer.root.findByProps({ accessibilityLabel: 'Play Juno C4' });
     await act(async () => {
       c4.props.onPressIn();
@@ -524,7 +872,16 @@ describe('PerformanceScreen Juno looper', () => {
       isLoopAvailable: false,
     });
     const renderer = await renderScreen();
-    expect(JSON.stringify(renderer.toJSON())).toContain('Dev build required');
+    expect(renderedText(renderer)).toContain('Dev build required');
+    const scenePad = renderer.root.findByProps({ testID: 'juno-scene-pad' });
+    expect(scenePad.props.disabled).toBe(true);
+    expect(scenePad.props.accessibilityState.disabled).toBe(true);
+    expect(scenePad.props.accessibilityHint).toBe(
+      'Unavailable while Auto-play scenes requires native loop transport',
+    );
+    expect(
+      renderer.root.findByProps({ accessibilityLabel: 'Add scene 2' }).props.disabled,
+    ).toBe(false);
     expect(renderer.root.findByProps({ testID: 'record-loop' }).props.disabled).toBe(
       true,
     );
@@ -539,7 +896,7 @@ describe('PerformanceScreen Juno looper', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(JSON.stringify(renderer.toJSON())).toContain('Audio output is unavailable');
+    expect(renderedText(renderer)).toContain('Audio output is unavailable');
     renderer.unmount();
 
     useSessionViewModel.mockReturnValue({
@@ -548,8 +905,29 @@ describe('PerformanceScreen Juno looper', () => {
       error: new Error('Session database is unavailable'),
     });
     const failedRenderer = await renderScreen();
+    const sessionAlert = failedRenderer.root.findByProps({
+      testID: 'performance-session-error',
+    });
+    const sessionAnnouncement = findAccessibleText(
+      failedRenderer,
+      'performance-session-error-announcement',
+    );
+    expect(sessionAlert.props.role).toBeUndefined();
+    expect(sessionAlert.props.accessibilityLabel).toBeUndefined();
+    expect(sessionAlert.props.accessibilityRole).toBeUndefined();
+    expect(sessionAlert.props.accessible).not.toBe(true);
+    expect(sessionAnnouncement.props.accessibilityLabel).toBe(
+      'Performance unavailable. Session database is unavailable',
+    );
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(
+      'Performance unavailable. Session database is unavailable',
+      { queue: true },
+    );
+    expect(renderedText(failedRenderer)).toContain('Session database is unavailable');
+    const retry = failedRenderer.root.findByProps({ accessibilityLabel: 'Retry' });
+    expect(retry.props.accessibilityRole).toBe('button');
     await act(async () => {
-      failedRenderer.root.findByProps({ accessibilityLabel: 'Retry' }).props.onPress();
+      retry.props.onPress();
       await Promise.resolve();
     });
     expect(refresh).toHaveBeenCalledTimes(1);

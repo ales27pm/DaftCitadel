@@ -1,5 +1,6 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppNavigator } from './src/ui/navigation';
@@ -22,13 +23,29 @@ class AppErrorBoundary extends React.Component<
     console.error('Uncaught app render error', error);
   }
 
+  private retry = (): void => {
+    this.setState({ error: undefined });
+  };
+
   render(): React.ReactNode {
     const { error } = this.state;
     if (error) {
       return (
         <View style={styles.errorContainer}>
           <Text style={styles.errorTitle}>Daft Citadel could not start.</Text>
-          <Text style={styles.errorMessage}>{error.message}</Text>
+          <Text selectable style={styles.errorMessage}>
+            {error.message}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={this.retry}
+            style={({ pressed }) => [
+              styles.retryButton,
+              pressed && styles.retryButtonPressed,
+            ]}
+          >
+            <Text style={styles.retryLabel}>Try again</Text>
+          </Pressable>
         </View>
       );
     }
@@ -40,6 +57,7 @@ export default function App(): React.JSX.Element {
   return (
     <GestureHandlerRootView style={styles.root}>
       <SafeAreaProvider>
+        <StatusBar style="light" />
         <AppErrorBoundary>
           <AppNavigator />
         </AppErrorBoundary>
@@ -54,20 +72,39 @@ const styles = StyleSheet.create({
   },
   errorContainer: {
     alignItems: 'center',
+    backgroundColor: '#04070D',
     flex: 1,
+    gap: 12,
     justifyContent: 'center',
     padding: 24,
   },
   errorTitle: {
-    color: '#111111',
-    fontSize: 18,
+    color: '#F8F9FC',
+    fontSize: 22,
     fontWeight: '700',
-    marginBottom: 8,
     textAlign: 'center',
   },
   errorMessage: {
-    color: '#444444',
-    fontSize: 14,
+    color: '#B8C1D0',
+    fontSize: 16,
+    lineHeight: 22,
     textAlign: 'center',
+  },
+  retryButton: {
+    alignItems: 'center',
+    backgroundColor: '#5CE5B5',
+    borderRadius: 12,
+    justifyContent: 'center',
+    minHeight: 44,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+  },
+  retryButtonPressed: {
+    opacity: 0.82,
+  },
+  retryLabel: {
+    color: '#03110C',
+    fontSize: 15,
+    fontWeight: '700',
   },
 });

@@ -1,5 +1,8 @@
-import React, { PropsWithChildren, ReactNode, useMemo } from 'react';
+import React, { PropsWithChildren, ReactNode, useEffect, useMemo } from 'react';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
+import { SymbolView, type SFSymbol } from 'expo-symbols';
 import {
+  AccessibilityInfo,
   AccessibilityProps,
   ActivityIndicator,
   Platform,
@@ -42,26 +45,42 @@ export type StudioIconName =
   | 'diagnostics'
   | 'chevronDown'
   | 'chevronUp'
+  | 'chevronRight'
+  | 'refresh'
+  | 'instrument'
+  | 'scenes'
+  | 'warning'
+  | 'success'
+  | 'error'
   | 'mute'
   | 'solo';
 
-const ICON_GLYPHS: Record<StudioIconName, string> = {
-  arrangement: '≋',
-  mixer: '☷',
-  performance: '▦',
-  settings: '⚙',
-  play: '▶',
-  stop: '■',
-  rewind: '↤',
-  plus: '+',
-  engine: '◉',
-  waveform: '≋',
-  midi: '♫',
-  diagnostics: '∿',
-  chevronDown: '⌄',
-  chevronUp: '⌃',
-  mute: 'M',
-  solo: 'S',
+type MaterialIconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
+
+const ICONS: Record<StudioIconName, { sf: SFSymbol; material: MaterialIconName }> = {
+  arrangement: { sf: 'list.bullet.rectangle', material: 'view-list-outline' },
+  mixer: { sf: 'slider.horizontal.3', material: 'tune-vertical' },
+  performance: { sf: 'pianokeys', material: 'piano' },
+  settings: { sf: 'gearshape', material: 'cog-outline' },
+  play: { sf: 'play.fill', material: 'play' },
+  stop: { sf: 'stop.fill', material: 'stop' },
+  rewind: { sf: 'backward.end.fill', material: 'skip-backward' },
+  plus: { sf: 'plus', material: 'plus' },
+  engine: { sf: 'waveform.path.ecg', material: 'waveform' },
+  waveform: { sf: 'waveform', material: 'waveform' },
+  midi: { sf: 'music.note', material: 'music-note' },
+  diagnostics: { sf: 'gauge', material: 'gauge' },
+  chevronDown: { sf: 'chevron.down', material: 'chevron-down' },
+  chevronUp: { sf: 'chevron.up', material: 'chevron-up' },
+  chevronRight: { sf: 'chevron.right', material: 'chevron-right' },
+  refresh: { sf: 'arrow.clockwise', material: 'refresh' },
+  instrument: { sf: 'pianokeys', material: 'piano' },
+  scenes: { sf: 'square.grid.2x2', material: 'view-grid-outline' },
+  warning: { sf: 'exclamationmark.triangle', material: 'alert-outline' },
+  success: { sf: 'checkmark.circle.fill', material: 'check-circle-outline' },
+  error: { sf: 'xmark.circle.fill', material: 'close-circle-outline' },
+  mute: { sf: 'speaker.slash.fill', material: 'volume-mute' },
+  solo: { sf: 'headphones', material: 'headphones' },
 };
 
 const toneColor = (
@@ -91,6 +110,16 @@ const toneColor = (
   }
 };
 
+const colorWithOpacity = (color: string, opacity: number): string => {
+  if (!/^#[\da-f]{6}$/i.test(color)) {
+    return color;
+  }
+  const alpha = Math.round(Math.min(1, Math.max(0, opacity)) * 255)
+    .toString(16)
+    .padStart(2, '0');
+  return `${color}${alpha}`;
+};
+
 export interface StudioIconProps {
   name: StudioIconName;
   color?: string;
@@ -99,21 +128,30 @@ export interface StudioIconProps {
 
 export const StudioIcon: React.FC<StudioIconProps> = ({ name, color, size = 18 }) => {
   const theme = useTheme();
+  const tintColor = color ?? theme.colors.textSecondary;
+  const icon = ICONS[name];
   return (
-    <Text
+    <SymbolView
       accessible={false}
+      fallback={
+        <MaterialCommunityIcons
+          accessibilityElementsHidden
+          color={tintColor}
+          importantForAccessibility="no"
+          name={icon.material}
+          size={size}
+        />
+      }
+      name={icon.sf}
+      resizeMode="scaleAspectFit"
+      size={size}
       style={{
-        color: color ?? theme.colors.textSecondary,
-        fontFamily: Platform.OS === 'ios' ? 'System' : undefined,
-        fontSize: size,
-        fontWeight: '700',
-        lineHeight: Math.ceil(size * 1.15),
-        textAlign: 'center',
-        minWidth: size + 2,
+        height: size,
+        width: size,
       }}
-    >
-      {ICON_GLYPHS[name]}
-    </Text>
+      tintColor={tintColor}
+      weight="semibold"
+    />
   );
 };
 
@@ -127,29 +165,29 @@ export interface StudioTextProps extends TextProps {
 }
 
 const FONT_SIZES: Record<StudioTextVariant, number> = {
-  caption: 11,
+  caption: 12,
   label: 14,
   body: 16,
   bodyLarge: 18,
-  sectionTitle: 18,
-  screenTitle: 20,
+  sectionTitle: 20,
+  screenTitle: 34,
   metric: 40,
 };
 
 const LINE_HEIGHTS: Record<StudioTextVariant, number> = {
-  caption: 15,
+  caption: 16,
   label: 18,
   body: 22,
   bodyLarge: 24,
-  sectionTitle: 24,
-  screenTitle: 26,
+  sectionTitle: 26,
+  screenTitle: 40,
   metric: 44,
 };
 
 const FONT_WEIGHTS: Record<NonNullable<StudioTextProps['weight']>, TextProps['style']> = {
-  regular: { fontFamily: 'Inter_400Regular' },
-  medium: { fontFamily: 'Inter_600SemiBold' },
-  bold: { fontFamily: 'Inter_700Bold' },
+  regular: { fontWeight: '400' },
+  medium: { fontWeight: '600' },
+  bold: { fontWeight: '700' },
 };
 
 export const StudioText: React.FC<PropsWithChildren<StudioTextProps>> = ({
@@ -164,13 +202,13 @@ export const StudioText: React.FC<PropsWithChildren<StudioTextProps>> = ({
   const isNumeric = variant === 'metric' || variant === 'caption';
   return (
     <Text
-      accessibilityRole="text"
       style={[
         {
           color: toneColor(theme.colors, tone),
           fontSize: FONT_SIZES[variant],
           lineHeight: LINE_HEIGHTS[variant],
-          letterSpacing: variant === 'screenTitle' ? 2 : variant === 'caption' ? 0.5 : 0,
+          letterSpacing:
+            variant === 'screenTitle' ? -0.6 : variant === 'caption' ? 0.2 : 0,
           fontVariant: isNumeric ? (['tabular-nums'] as const) : undefined,
         },
         FONT_WEIGHTS[weight],
@@ -183,8 +221,45 @@ export const StudioText: React.FC<PropsWithChildren<StudioTextProps>> = ({
   );
 };
 
+export type StudioAlertTextProps = Omit<
+  StudioTextProps,
+  | 'accessibilityLabel'
+  | 'accessibilityLiveRegion'
+  | 'accessibilityRole'
+  | 'accessible'
+  | 'role'
+> & {
+  announcement: string;
+};
+
+export const StudioAlertText: React.FC<PropsWithChildren<StudioAlertTextProps>> = ({
+  announcement,
+  children,
+  ...rest
+}) => {
+  useEffect(() => {
+    if (Platform.OS === 'ios' && announcement) {
+      AccessibilityInfo.announceForAccessibilityWithOptions(announcement, {
+        queue: true,
+      });
+    }
+  }, [announcement]);
+
+  return (
+    <StudioText
+      {...rest}
+      accessible
+      accessibilityLabel={announcement}
+      accessibilityLiveRegion="assertive"
+      accessibilityRole={Platform.OS === 'ios' ? 'text' : 'alert'}
+    >
+      {children ?? announcement}
+    </StudioText>
+  );
+};
+
 export interface StudioPanelProps extends ViewProps, AccessibilityProps {
-  variant?: 'default' | 'raised' | 'subtle';
+  variant?: 'default' | 'raised' | 'subtle' | 'critical';
   padding?: number;
 }
 
@@ -199,19 +274,40 @@ export const StudioPanel: React.FC<PropsWithChildren<StudioPanelProps>> = ({
   const backgroundColor =
     variant === 'raised'
       ? theme.colors.surfaceElevated
-      : variant === 'subtle'
+      : variant === 'subtle' || variant === 'critical'
         ? theme.colors.surfaceVariant
         : theme.colors.surface;
+  const borderColor =
+    variant === 'critical' ? theme.colors.statusCritical : theme.colors.border;
+  const glowOpacity =
+    variant === 'critical'
+      ? 0
+      : variant === 'raised'
+        ? theme.effects.glowOpacity
+        : theme.effects.glowOpacity * 0.45;
+  const glowRadius =
+    variant === 'raised' ? theme.effects.glowRadius : theme.effects.glowRadius * 0.65;
   return (
     <View
       style={[
         {
           backgroundColor,
-          borderColor: theme.colors.border,
+          borderColor,
           borderCurve: 'continuous',
-          borderRadius: theme.radii.lg,
+          borderRadius: theme.radii.sm,
           borderWidth: 1,
-          padding: padding ?? 16,
+          boxShadow:
+            glowOpacity > 0
+              ? [
+                  {
+                    blurRadius: glowRadius,
+                    color: colorWithOpacity(theme.colors.accentPrimary, glowOpacity),
+                    offsetX: 0,
+                    offsetY: 0,
+                  },
+                ]
+              : undefined,
+          padding: padding ?? theme.spacing.md,
         },
         style,
       ]}
@@ -228,6 +324,7 @@ export interface StudioButtonProps extends Omit<PressableProps, 'children'> {
   icon?: StudioIconName;
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
   compact?: boolean;
+  iconOnly?: boolean;
   loading?: boolean;
   style?: StyleProp<ViewStyle>;
 }
@@ -238,9 +335,11 @@ export const StudioButton: React.FC<StudioButtonProps> = ({
   icon,
   variant = 'secondary',
   compact = false,
+  iconOnly = false,
   loading = false,
   disabled = false,
   style,
+  accessibilityState,
   ...rest
 }) => {
   const theme = useTheme();
@@ -278,7 +377,11 @@ export const StudioButton: React.FC<StudioButtonProps> = ({
     <Pressable
       accessibilityLabel={rest.accessibilityLabel ?? label}
       accessibilityRole="button"
-      accessibilityState={{ disabled: isDisabled }}
+      accessibilityState={{
+        ...accessibilityState,
+        busy: loading || accessibilityState?.busy,
+        disabled: isDisabled,
+      }}
       disabled={isDisabled}
       onPress={onPress}
       style={({ pressed }) => [
@@ -288,14 +391,15 @@ export const StudioButton: React.FC<StudioButtonProps> = ({
           backgroundColor: palette.background,
           borderColor: palette.border,
           borderCurve: 'continuous',
-          borderRadius: theme.radii.md,
+          borderRadius: theme.radii.sm,
           borderWidth: 1,
           flexDirection: 'row',
           gap: 8,
           justifyContent: 'center',
           minHeight: 44,
+          minWidth: iconOnly ? 44 : undefined,
           opacity: isDisabled ? 0.5 : pressed ? 0.82 : 1,
-          paddingHorizontal: compact ? 12 : 16,
+          paddingHorizontal: iconOnly ? 0 : compact ? 12 : 16,
           paddingVertical: 9,
         },
         style,
@@ -307,14 +411,16 @@ export const StudioButton: React.FC<StudioButtonProps> = ({
       ) : (
         icon && <StudioIcon color={palette.foreground} name={icon} size={16} />
       )}
-      <StudioText
-        selectable={false}
-        variant="label"
-        weight="bold"
-        style={{ color: palette.foreground }}
-      >
-        {label}
-      </StudioText>
+      {!iconOnly ? (
+        <StudioText
+          selectable={false}
+          variant="label"
+          weight="bold"
+          style={{ color: palette.foreground }}
+        >
+          {label}
+        </StudioText>
+      ) : null}
     </Pressable>
   );
 };
@@ -339,6 +445,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
     style={{
       alignItems: compact ? 'center' : 'flex-start',
       flexDirection: compact ? 'row' : 'column',
+      flexWrap: compact ? 'wrap' : 'nowrap',
       gap: compact ? 16 : 4,
       justifyContent: 'space-between',
       minWidth: 0,
@@ -354,13 +461,12 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({
         selectable
         variant="screenTitle"
         weight="bold"
-        numberOfLines={compact ? 1 : undefined}
-        style={compact ? { fontSize: 24, lineHeight: 30 } : undefined}
+        style={compact ? { fontSize: 28, lineHeight: 34 } : undefined}
       >
         {title}
       </StudioText>
       {detail ? (
-        <StudioText selectable variant="caption" tone="secondary" numberOfLines={1}>
+        <StudioText selectable variant="caption" tone="secondary">
           {detail}
         </StudioText>
       ) : null}
@@ -408,9 +514,9 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
 
 export interface TransportBarProps {
   sessionName?: string;
-  bpm: number;
-  timeSignature: string;
-  positionBeats: number;
+  bpm?: number;
+  timeSignature?: string;
+  positionBeats?: number;
   isPlaying: boolean;
   isAvailable: boolean;
   onPlay: () => void;
@@ -431,15 +537,100 @@ export const TransportBar: React.FC<TransportBarProps> = ({
   onRewind,
   compact = false,
 }) => {
-  const safePositionBeats = Number.isFinite(positionBeats)
-    ? Math.max(0, positionBeats)
-    : 0;
-  const { denominator, numerator } = parseTimeSignature(timeSignature);
+  const theme = useTheme();
+  const safePositionBeats =
+    typeof positionBeats === 'number' && Number.isFinite(positionBeats)
+      ? Math.max(0, positionBeats)
+      : 0;
+  const { denominator, numerator } = parseTimeSignature(timeSignature ?? '4/4');
   const signatureBeats = safePositionBeats * (denominator / 4);
   const bar = Math.floor((signatureBeats + Number.EPSILON) / numerator) + 1;
   const beat = Math.floor((signatureBeats + Number.EPSILON) % numerator) + 1;
   const tick = Math.floor((signatureBeats % 1) * 100);
   const position = `${bar}.${beat}.${tick.toString().padStart(2, '0')}`;
+
+  if (compact) {
+    return (
+      <StudioPanel
+        accessibilityLabel="Transport controls"
+        padding={8}
+        variant="subtle"
+        style={{
+          alignItems: 'center',
+          flexDirection: 'row',
+          gap: 8,
+          justifyContent: 'space-between',
+        }}
+      >
+        <View
+          style={{
+            alignItems: 'center',
+            flexDirection: 'row',
+            flexShrink: 1,
+            gap: 10,
+            minWidth: 0,
+          }}
+        >
+          <StudioIcon
+            color={
+              isAvailable
+                ? isPlaying
+                  ? theme.colors.accentPrimary
+                  : theme.colors.statusSuccess
+                : theme.colors.statusWarning
+            }
+            name="engine"
+            size={16}
+          />
+          <View>
+            <StudioText variant="caption" tone="muted">
+              TEMPO
+            </StudioText>
+            <StudioText selectable variant="label" weight="bold">
+              {Number.isFinite(bpm) ? `${Math.round(bpm ?? 0)} BPM` : '—'}
+            </StudioText>
+          </View>
+          <View>
+            <StudioText variant="caption" tone="muted">
+              METER
+            </StudioText>
+            <StudioText selectable variant="label" weight="bold">
+              {timeSignature ?? '—'}
+            </StudioText>
+          </View>
+        </View>
+        <View style={{ alignItems: 'center', flexDirection: 'row', gap: 6 }}>
+          <StudioButton
+            compact
+            iconOnly
+            accessibilityHint={`Returns the playhead to the start from ${position}`}
+            icon="rewind"
+            label="Rewind"
+            disabled={!isAvailable}
+            onPress={onRewind}
+            variant="ghost"
+          />
+          <StudioButton
+            compact
+            icon="play"
+            label={isPlaying ? 'Playing' : 'Play'}
+            variant="primary"
+            disabled={!isAvailable || isPlaying}
+            onPress={onPlay}
+          />
+          <StudioButton
+            compact
+            iconOnly
+            icon="stop"
+            label="Stop"
+            disabled={!isAvailable || !isPlaying}
+            onPress={onStop}
+          />
+        </View>
+      </StudioPanel>
+    );
+  }
+
   return (
     <StudioPanel
       padding={compact ? 10 : 12}
@@ -481,7 +672,7 @@ export const TransportBar: React.FC<TransportBarProps> = ({
             TEMPO
           </StudioText>
           <StudioText selectable variant="label" weight="bold">
-            {Math.round(bpm)} BPM
+            {Number.isFinite(bpm) ? `${Math.round(bpm ?? 0)} BPM` : '—'}
           </StudioText>
         </View>
         {!compact ? (
@@ -490,7 +681,7 @@ export const TransportBar: React.FC<TransportBarProps> = ({
               METER
             </StudioText>
             <StudioText selectable variant="label" weight="bold">
-              {timeSignature}
+              {timeSignature ?? '—'}
             </StudioText>
           </View>
         ) : null}

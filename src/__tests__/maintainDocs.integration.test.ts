@@ -55,7 +55,7 @@ async function bootstrapSandbox(
 async function runMaintainDocs(
   sandboxRoot: string,
   args: string[] = [],
-  envExtra: NodeJS.ProcessEnv = {},
+  envExtra: NodeJS.ProcessEnv = { NODE_ENV: 'test' },
 ): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [maintainDocsScript, ...args], {
@@ -171,6 +171,7 @@ describe('maintain:docs automation', () => {
 
     const applyResult = await runMaintainDocs(sandboxRoot, ['--no-prettier'], {
       MAINTAIN_DOCS_PYTHON: '/nonexistent/python',
+      NODE_ENV: 'test',
       PATH: '/tmp/invalid-path-does-not-exist',
     });
 

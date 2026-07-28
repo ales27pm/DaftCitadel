@@ -1,4 +1,4 @@
-import { TextStyle } from 'react-native';
+import { Platform, TextStyle } from 'react-native';
 
 import { ThemeTokens, ThemeIntent, mapIntentToColor } from './tokens';
 
@@ -17,7 +17,7 @@ export const createTextStyle = (
     intent === 'primary' ? theme.colors.textPrimary : mapIntentToColor(theme, intent);
 
   return {
-    fontFamily: typography.fontFamily,
+    fontFamily: Platform.OS === 'ios' ? typography.fontFamily : undefined,
     fontSize,
     fontWeight: weightValue as TextStyle['fontWeight'],
     lineHeight: fontSize * typography.lineHeights.standard,

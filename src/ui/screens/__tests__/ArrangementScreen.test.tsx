@@ -4,12 +4,18 @@ import TestRenderer, { act } from 'react-test-renderer';
 import { InMemorySessionStorageAdapter, SessionManager } from '../../../session';
 import { ThemeProvider } from '../../design-system';
 import { PassiveAudioEngineBridge } from '../../session/environment';
-import { ArrangementScreen } from '../ArrangementScreen';
+import { ArrangementScreen, resolveArrangementWaveformWidth } from '../ArrangementScreen';
+
+const mockNavigate = jest.fn();
 
 jest.mock('../../session', () => ({
   useSessionViewModel: jest.fn(),
   useTransportControls: jest.fn(),
   useProjectedTransport: jest.fn(),
+}));
+
+jest.mock('@react-navigation/native', () => ({
+  useNavigation: () => ({ navigate: mockNavigate }),
 }));
 
 const { useSessionViewModel, useTransportControls, useProjectedTransport } =
@@ -55,6 +61,19 @@ const baseDiagnostics = {
   clipBufferBytes: 0,
 };
 
+const collectRenderedText = (value: unknown): string => {
+  if (typeof value === 'string' || typeof value === 'number') {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(collectRenderedText).join(' ');
+  }
+  if (value && typeof value === 'object' && 'children' in value) {
+    return collectRenderedText((value as { children?: unknown }).children);
+  }
+  return '';
+};
+
 beforeEach(() => {
   jest.resetAllMocks();
   useTransportControls.mockReturnValue({
@@ -76,6 +95,12 @@ beforeEach(() => {
 });
 
 describe('ArrangementScreen diagnostics', () => {
+  it('keeps the waveform inside phone content and surface padding', () => {
+    expect(resolveArrangementWaveformWidth(320, 16)).toBe(256);
+    expect(resolveArrangementWaveformWidth(393, 16)).toBe(329);
+    expect(resolveArrangementWaveformWidth(1024, 32)).toBe(640);
+  });
+
   const renderScreen = async () => {
     let renderer: TestRenderer.ReactTestRenderer | undefined;
     await act(async () => {
@@ -135,7 +160,15 @@ describe('ArrangementScreen diagnostics', () => {
     });
 
     const renderer = await renderScreen();
-    expect(renderer.toJSON()).toMatchSnapshot();
+    const renderedText = collectRenderedText(renderer.toJSON());
+    expect(renderedText).toContain('Waveform overview');
+    expect(renderedText).toContain('MIDI piano roll');
+    expect(renderedText).toContain('0 XRuns · 25% render load');
+    expect(renderedText).toContain('Plugin crash · Fixture Plugin');
+    expect(renderedText).toContain('Test crash');
+    expect(
+      renderer.root.findByProps({ accessibilityLabel: 'Transport controls' }),
+    ).toBeTruthy();
     renderer.unmount();
   });
 
@@ -166,7 +199,9 @@ describe('ArrangementScreen diagnostics', () => {
     });
 
     const renderer = await renderScreen();
-    expect(renderer.toJSON()).toMatchSnapshot();
+    expect(collectRenderedText(renderer.toJSON())).toContain(
+      'Diagnostics error · Diagnostics failed',
+    );
     renderer.unmount();
   });
 
@@ -196,11 +231,13 @@ describe('ArrangementScreen diagnostics', () => {
     });
 
     const renderer = await renderScreen();
-    expect(renderer.toJSON()).toMatchSnapshot();
+    expect(collectRenderedText(renderer.toJSON())).toContain(
+      'Audio diagnostics unavailable',
+    );
     renderer.unmount();
   });
 
-  it('disables Play and Rewind and prompts for an instrument with no tracks', async () => {
+  it('prompts for an instrument and links to Performance with no tracks', async () => {
     useProjectedTransport.mockReturnValue({
       projectedBeats: baseTransport.playheadBeats,
       projectedRatio: baseTransport.playheadRatio,
@@ -222,20 +259,22 @@ describe('ArrangementScreen diagnostics', () => {
     });
 
     const renderer = await renderScreen();
-    const toolbar = renderer.root.findByProps({ title: 'Arrangement' });
-    const play = toolbar.props.actions.find(
-      (action: { label: string }) => action.label === 'Play',
+    const renderedText = collectRenderedText(renderer.toJSON());
+    expect(renderedText).toContain('Start with an instrument');
+    expect(renderedText).toContain(
+      'Add a Juno-106 instrument, then return here to arrange clips and MIDI.',
     );
-    const rewind = toolbar.props.actions.find(
-      (action: { label: string }) => action.label === 'Rewind',
-    );
+    expect(
+      renderer.root.findAllByProps({ accessibilityLabel: 'Transport controls' }),
+    ).toHaveLength(0);
 
-    expect(play.disabled).toBe(true);
-    expect(rewind.disabled).toBe(true);
-    expect(JSON.stringify(renderer.toJSON())).toContain('Start with an instrument');
-    expect(JSON.stringify(renderer.toJSON())).toContain(
-      'Add a Juno track from Performance before starting playback.',
-    );
+    const openPerformance = renderer.root.findByProps({
+      accessibilityLabel: 'Open Performance',
+    });
+    await act(async () => {
+      openPerformance.props.onPress();
+    });
+    expect(mockNavigate).toHaveBeenCalledWith('Performance');
     renderer.unmount();
   });
 });

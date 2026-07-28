@@ -83,7 +83,7 @@ async function bootstrapWorkingCopy(
 async function runManageAgents(
   sandboxRoot: string,
   args: string[] = [],
-  envExtra: NodeJS.ProcessEnv = {},
+  envExtra: NodeJS.ProcessEnv = { NODE_ENV: 'test' },
 ): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [manageAgentsScript, ...args], {
@@ -137,6 +137,13 @@ describe('manage:agents automation', () => {
     const roadmapPath = path.join(sandboxRoot, 'docs', 'ROADMAP.md');
     const roadmap = await fs.readFile(roadmapPath, 'utf8');
     expect(roadmap).toContain('<!-- managed-by: agents_sync.py v1 -->');
+
+    const generatedAgents = await fs.readFile(
+      path.join(sandboxRoot, 'docs', 'AGENTS.md'),
+      'utf8',
+    );
+    expect(generatedAgents).toMatch(/\n$/u);
+    expect(generatedAgents).not.toMatch(/\n\n$/u);
 
     const checkResult = await runManageAgents(sandboxRoot, ['--check']);
     expect(checkResult.code).toBe(0);

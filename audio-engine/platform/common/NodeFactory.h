@@ -73,6 +73,8 @@ inline std::string normalize(std::string value) {
 
 bool parseBoolean(const NodeOptions& options, const std::string& key, bool defaultValue = false);
 std::optional<std::string> stringFromOptions(const NodeOptions& options, const std::string& key);
+void storeStringOption(NodeOptions& options, const std::string& key,
+                       const std::string& value);
 
 template <typename T>
 inline void applyParameters(T& node, const NodeOptions& options, const std::initializer_list<std::string>& excluded = {}) {

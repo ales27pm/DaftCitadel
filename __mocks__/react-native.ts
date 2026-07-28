@@ -3,6 +3,7 @@ const noop = async () => {};
 export const View = 'View';
 export const ScrollView = 'ScrollView';
 export const SafeAreaView = 'SafeAreaView';
+export const ActivityIndicator = 'ActivityIndicator';
 export const Text = 'Text';
 export const Pressable = 'Pressable';
 export const TouchableOpacity = 'TouchableOpacity';
@@ -12,6 +13,43 @@ export const Switch = 'Switch';
 
 export const StyleSheet = {
   create: <T extends Record<string, unknown>>(styles: T): T => styles,
+  absoluteFillObject: {
+    bottom: 0,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+  },
+};
+
+class MockAnimatedValue {
+  constructor(private value: number) {}
+
+  interpolate = jest.fn(() => this.value);
+
+  setValue(value: number): void {
+    this.value = value;
+  }
+
+  stopAnimation(): void {}
+}
+
+const createAnimation = () => ({
+  start: jest.fn((callback?: () => void) => callback?.()),
+  stop: jest.fn(),
+});
+
+export const Animated = {
+  Value: MockAnimatedValue,
+  View: 'AnimatedView',
+  loop: jest.fn(createAnimation),
+  sequence: jest.fn(createAnimation),
+  timing: jest.fn(createAnimation),
+};
+
+export const Easing = {
+  inOut: <Value>(value: Value): Value => value,
+  sin: (value: number): number => value,
 };
 
 export const useColorScheme = (): 'light' | 'dark' => 'dark';
@@ -53,6 +91,8 @@ const createSubscription = (
 export const AccessibilityInfo = {
   isReduceMotionEnabled: async () => reduceMotionEnabled,
   isScreenReaderEnabled: async () => screenReaderEnabled,
+  announceForAccessibility: jest.fn(),
+  announceForAccessibilityWithOptions: jest.fn(),
   addEventListener: (
     event: 'reduceMotionChanged' | 'screenReaderChanged',
     listener: AccessibilityListener,
